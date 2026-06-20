@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package music.auth.v1;
+
+// Username/password + SECRET_KEY auth, mirroring the REST routes under
+// /auth/*. Keep gRPC and REST at feature parity per AGENTS.md.
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+}
+
+enum PermissionLevel {
+  PERMISSION_LEVEL_UNSPECIFIED = 0;
+  PERMISSION_LEVEL_USER = 1;
+  PERMISSION_LEVEL_MANAGER = 2;
+  PERMISSION_LEVEL_ADMIN = 3;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+message LoginResponse {
+  string token = 1;            // opaque bearer token
+  string user_id = 2;          // UUID as string
+  PermissionLevel level = 3;
+  string expires_at = 4;       // RFC3339
+}
+
+message LogoutRequest {}
+message LogoutResponse {}
+
+message WhoAmIRequest {}
+message WhoAmIResponse {
+  // "secret_key" or "user"
+  string kind = 1;
+  string user_id = 2;          // empty for secret_key
+  string username = 3;         // empty for secret_key
+  PermissionLevel level = 4;
+}
+
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+  PermissionLevel level = 3;
+}
+message RegisterResponse {
+  string user_id = 1;
+}

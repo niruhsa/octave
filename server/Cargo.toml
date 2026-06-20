@@ -1,0 +1,72 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+
+# gRPC (primary transport)
+tonic = "0.12"
+prost = "0.13"
+tonic-health = "0.12"
+
+# REST (fallback transport)
+axum = { version = "0.7", features = ["multipart"] }
+tower = "0.5"
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Errors
+thiserror = "1"
+
+# Config / env
+dotenvy = "0.15"
+
+# Persistence (Phase 1)
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+    "json",
+    "uuid",
+    "time",
+] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde"] }
+
+# Auth (Phase 2)
+argon2 = "0.5"
+rand = "0.8"
+subtle = "2"
+
+# Library scan (Phase 3): codec/duration/tag probe
+lofty = "0.21"
+walkdir = "2"
+
+# Streaming (Phase 4): byte-range responses, async file IO
+tokio-util = { version = "0.7", features = ["io"] }
+httpdate = "1"
+
+# Uploads & Ingest (Phase 6): folder watcher.
+# Default features → FSEvents on macOS, inotify on Linux. Do **not** enable
+# `macos_kqueue` — kqueue can't reliably watch newly-moved subdirectories,
+# so `mv Lang/Artist/Album/ $INGEST_PATH/` would silently miss events.
+notify = "6"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+
+[build-dependencies]
+tonic-build = "0.12"

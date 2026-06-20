@@ -1,0 +1,406 @@
+//! gRPC LibraryService implementation.
+
+use std::path::PathBuf;
+
+use tonic::{Request, Response, Status};
+use uuid::Uuid;
+
+use crate::auth::Identity;
+use crate::db::models::{self as m, NewTrack};
+use crate::error::AppError;
+use crate::grpc::auth_svc::map_err;
+use crate::grpc::interceptor::AuthInterceptor;
+use crate::grpc::proto::library as pb;
+use crate::services::{LibraryService, ScanService};
+
+#[derive(Clone)]
+pub struct LibraryServer {
+    pub library: LibraryService,
+    pub scan: ScanService,
+    pub interceptor: AuthInterceptor,
+}
+
+impl LibraryServer {
+    pub fn into_service(self) -> pb::library_service_server::LibraryServiceServer<Self> {
+        pb::library_service_server::LibraryServiceServer::new(self)
+    }
+
+    async fn caller<T>(&self, req: &Request<T>) -> Result<Identity, Status> {
+        self.interceptor.resolve(req).await
+    }
+}
+
+fn parse_uuid(s: &str, what: &str) -> Result<Uuid, Status> {
+    Uuid::parse_str(s).map_err(|_| Status::invalid_argument(format!("invalid {what} uuid")))
+}
+
+fn nonempty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn nz_i32(v: i32) -> Option<i32> { if v == 0 { None } else { Some(v) } }
+fn nz_i64(v: i64) -> Option<i64> { if v == 0 { None } else { Some(v) } }
+
+fn page_of(p: Option<pb::Pagination>) -> (Option<i64>, Option<i64>) {
+    match p {
+        Some(p) => (Some(p.limit), Some(p.offset)),
+        None => (None, None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Model <-> proto conversions
+// ---------------------------------------------------------------------------
+
+fn artist_to_pb(a: m::Artist) -> pb::Artist {
+    pb::Artist {
+        id: a.id.to_string(),
+        name: a.name,
+        sort_name: a.sort_name.unwrap_or_default(),
+        created_at: a.created_at.to_string(),
+        updated_at: a.updated_at.to_string(),
+    }
+}
+fn album_to_pb(a: m::Album) -> pb::Album {
+    pb::Album {
+        id: a.id.to_string(),
+        artist_id: a.artist_id.to_string(),
+        title: a.title,
+        release_year: a.release_year.unwrap_or(0),
+        cover_path: a.cover_path.unwrap_or_default(),
+        created_at: a.created_at.to_string(),
+        updated_at: a.updated_at.to_string(),
+    }
+}
+fn track_to_pb(t: m::Track) -> pb::Track {
+    pb::Track {
+        id: t.id.to_string(),
+        album_id: t.album_id.to_string(),
+        artist_id: t.artist_id.to_string(),
+        title: t.title,
+        track_no: t.track_no.unwrap_or(0),
+        disc_no: t.disc_no.unwrap_or(0),
+        duration_ms: t.duration_ms,
+        codec: t.codec,
+        bitrate_kbps: t.bitrate_kbps.unwrap_or(0),
+        file_path: t.file_path,
+        file_size: t.file_size.unwrap_or(0),
+        metadata_json: t.metadata_json,
+        created_at: t.created_at.to_string(),
+        updated_at: t.updated_at.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RPC impl
+// ---------------------------------------------------------------------------
+
+#[tonic::async_trait]
+impl pb::library_service_server::LibraryService for LibraryServer {
+    // ---- Artists ----
+    async fn create_artist(
+        &self,
+        req: Request<pb::CreateArtistRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let sort = nonempty(body.sort_name);
+        let artist = self
+            .library
+            .create_artist(&caller, &body.name, sort.as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(artist_to_pb(artist)))
+    }
+    async fn get_artist(
+        &self,
+        req: Request<pb::GetArtistRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "artist")?;
+        let a = self.library.get_artist(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(artist_to_pb(a)))
+    }
+    async fn update_artist(
+        &self,
+        req: Request<pb::UpdateArtistRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let id = parse_uuid(&body.id, "artist")?;
+        let sort = nonempty(body.sort_name);
+        let a = self
+            .library
+            .update_artist(&caller, id, &body.name, sort.as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(artist_to_pb(a)))
+    }
+    async fn delete_artist(
+        &self,
+        req: Request<pb::DeleteArtistRequest>,
+    ) -> Result<Response<pb::DeleteResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "artist")?;
+        let deleted = self.library.delete_artist(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(pb::DeleteResponse { deleted }))
+    }
+    async fn list_artists(
+        &self,
+        req: Request<pb::ListArtistsRequest>,
+    ) -> Result<Response<pb::ListArtistsResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let (limit, offset) = page_of(req.into_inner().page);
+        let (rows, total) = self
+            .library
+            .list_artists(&caller, limit, offset)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ListArtistsResponse {
+            artists: rows.into_iter().map(artist_to_pb).collect(),
+            total,
+        }))
+    }
+    async fn search_artists(
+        &self,
+        req: Request<pb::SearchRequest>,
+    ) -> Result<Response<pb::ListArtistsResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let (limit, offset) = page_of(body.page);
+        let rows = self
+            .library
+            .search_artists(&caller, &body.query, limit, offset)
+            .await
+            .map_err(map_err)?;
+        let total = rows.len() as i64;
+        Ok(Response::new(pb::ListArtistsResponse {
+            artists: rows.into_iter().map(artist_to_pb).collect(),
+            total,
+        }))
+    }
+
+    // ---- Albums ----
+    async fn create_album(
+        &self,
+        req: Request<pb::CreateAlbumRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let artist_id = parse_uuid(&body.artist_id, "artist")?;
+        let cover = nonempty(body.cover_path);
+        let album = self
+            .library
+            .create_album(
+                &caller,
+                artist_id,
+                &body.title,
+                nz_i32(body.release_year),
+                cover.as_deref(),
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(album_to_pb(album)))
+    }
+    async fn get_album(
+        &self,
+        req: Request<pb::GetAlbumRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "album")?;
+        let a = self.library.get_album(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(album_to_pb(a)))
+    }
+    async fn update_album(
+        &self,
+        req: Request<pb::UpdateAlbumRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let id = parse_uuid(&body.id, "album")?;
+        let cover = nonempty(body.cover_path);
+        let a = self
+            .library
+            .update_album(
+                &caller,
+                id,
+                &body.title,
+                nz_i32(body.release_year),
+                cover.as_deref(),
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(album_to_pb(a)))
+    }
+    async fn delete_album(
+        &self,
+        req: Request<pb::DeleteAlbumRequest>,
+    ) -> Result<Response<pb::DeleteResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "album")?;
+        let deleted = self.library.delete_album(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(pb::DeleteResponse { deleted }))
+    }
+    async fn list_albums_by_artist(
+        &self,
+        req: Request<pb::ListAlbumsByArtistRequest>,
+    ) -> Result<Response<pb::ListAlbumsResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let artist_id = parse_uuid(&req.into_inner().artist_id, "artist")?;
+        let rows = self
+            .library
+            .list_albums_by_artist(&caller, artist_id)
+            .await
+            .map_err(map_err)?;
+        let total = rows.len() as i64;
+        Ok(Response::new(pb::ListAlbumsResponse {
+            albums: rows.into_iter().map(album_to_pb).collect(),
+            total,
+        }))
+    }
+    async fn search_albums(
+        &self,
+        req: Request<pb::SearchRequest>,
+    ) -> Result<Response<pb::ListAlbumsResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let (limit, offset) = page_of(body.page);
+        let rows = self
+            .library
+            .search_albums(&caller, &body.query, limit, offset)
+            .await
+            .map_err(map_err)?;
+        let total = rows.len() as i64;
+        Ok(Response::new(pb::ListAlbumsResponse {
+            albums: rows.into_iter().map(album_to_pb).collect(),
+            total,
+        }))
+    }
+
+    // ---- Tracks ----
+    async fn create_track(
+        &self,
+        req: Request<pb::CreateTrackRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let album_id = parse_uuid(&b.album_id, "album")?;
+        let artist_id = parse_uuid(&b.artist_id, "artist")?;
+        let metadata_json = if b.metadata_json.is_empty() {
+            "{}".to_string()
+        } else {
+            b.metadata_json
+        };
+        let new = NewTrack {
+            album_id,
+            artist_id,
+            title: b.title,
+            track_no: nz_i32(b.track_no),
+            disc_no: nz_i32(b.disc_no),
+            duration_ms: b.duration_ms,
+            codec: b.codec,
+            bitrate_kbps: nz_i32(b.bitrate_kbps),
+            file_path: b.file_path,
+            file_size: nz_i64(b.file_size),
+            metadata_json,
+        };
+        let t = self.library.create_track(&caller, new).await.map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn get_track(
+        &self,
+        req: Request<pb::GetTrackRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "track")?;
+        let t = self.library.get_track(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn update_track(
+        &self,
+        req: Request<pb::UpdateTrackRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.id, "track")?;
+        let meta = if b.metadata_json.is_empty() {
+            "{}".to_string()
+        } else {
+            b.metadata_json
+        };
+        let t = self
+            .library
+            .update_track(&caller, id, &b.title, nz_i32(b.track_no), nz_i32(b.disc_no), &meta)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn delete_track(
+        &self,
+        req: Request<pb::DeleteTrackRequest>,
+    ) -> Result<Response<pb::DeleteResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "track")?;
+        let deleted = self.library.delete_track(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(pb::DeleteResponse { deleted }))
+    }
+    async fn list_tracks_by_album(
+        &self,
+        req: Request<pb::ListTracksByAlbumRequest>,
+    ) -> Result<Response<pb::ListTracksResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let album_id = parse_uuid(&req.into_inner().album_id, "album")?;
+        let rows = self
+            .library
+            .list_tracks_by_album(&caller, album_id)
+            .await
+            .map_err(map_err)?;
+        let total = rows.len() as i64;
+        Ok(Response::new(pb::ListTracksResponse {
+            tracks: rows.into_iter().map(track_to_pb).collect(),
+            total,
+        }))
+    }
+    async fn search_tracks(
+        &self,
+        req: Request<pb::SearchRequest>,
+    ) -> Result<Response<pb::ListTracksResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let (limit, offset) = page_of(body.page);
+        let rows = self
+            .library
+            .search_tracks(&caller, &body.query, limit, offset)
+            .await
+            .map_err(map_err)?;
+        let total = rows.len() as i64;
+        Ok(Response::new(pb::ListTracksResponse {
+            tracks: rows.into_iter().map(track_to_pb).collect(),
+            total,
+        }))
+    }
+
+    // ---- Scan ----
+    async fn scan_library(
+        &self,
+        req: Request<pb::ScanRequest>,
+    ) -> Result<Response<pb::ScanResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let root = req.into_inner().root_path;
+        let root_arg = if root.is_empty() { None } else { Some(PathBuf::from(root)) };
+        let report = self
+            .scan
+            .scan(&caller, root_arg.as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ScanResponse {
+            tracks_added: report.tracks_added as i64,
+            tracks_skipped: report.tracks_skipped as i64,
+            errors: report.errors as i64,
+        }))
+    }
+}
+
+// Keep `AppError` import alive even if some helpers below get pruned.
+#[allow(dead_code)]
+fn _force(_: AppError) {}

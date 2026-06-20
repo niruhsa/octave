@@ -1,0 +1,7 @@
+/target
+.env*
+tmp
+
+### AI Coding ###
+PLAN.md
+IMPLEMENTATION.md
