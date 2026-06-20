@@ -1,0 +1,151 @@
+//! Merged view types — what the frontend renders. Combines the server's
+//! catalog row with the local "is this downloaded?" flag.
+//!
+//! These are deliberately distinct from `transport::Artist` etc. so the UI
+//! never has to ask "where did this come from?" — every list item already
+//! carries its offline-availability bit, regardless of source.
+//!
+//! Offline-only items still produce a row; their `downloaded` is `true`
+//! by definition (they wouldn't be in the cache otherwise).
+//!
+//! `local_cover_path` / `local_file_path` are populated **only** for
+//! downloaded items — the server's `cover_path` / `file_path` stay
+//! server-relative and aren't directly usable by the frontend renderer.
+
+use serde::{Deserialize, Serialize};
+
+use crate::cache::model as cache_model;
+use crate::transport::{Album, Artist, Track};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergedArtist {
+    pub id: String,
+    pub name: String,
+    pub sort_name: Option<String>,
+    /// Has at least one track by this artist been downloaded locally? The
+    /// service decides how to determine that — see `service.rs`. For
+    /// offline-source results it's always `true`.
+    pub downloaded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergedAlbum {
+    pub id: String,
+    pub artist_id: String,
+    pub title: String,
+    pub release_year: Option<i64>,
+    /// Server-side cover (might be `None`).
+    pub cover_path: Option<String>,
+    /// Local on-disk cover (from `album_art` table) when present.
+    pub local_cover_path: Option<String>,
+    pub downloaded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergedTrack {
+    pub id: String,
+    pub album_id: String,
+    pub artist_id: String,
+    pub title: String,
+    pub track_no: Option<i64>,
+    pub disc_no: Option<i64>,
+    pub duration_ms: i64,
+    pub codec: String,
+    pub bitrate_kbps: Option<i64>,
+    /// Server's path (used for streaming). Always present.
+    pub file_path: String,
+    pub file_size: Option<i64>,
+    /// Local file when downloaded; `None` for stream-only items.
+    pub local_file_path: Option<String>,
+    pub downloaded: bool,
+}
+
+// --- builders from server / cache rows ------------------------------------
+
+impl MergedArtist {
+    pub fn from_server(a: Artist, downloaded: bool) -> Self {
+        Self {
+            id: a.id,
+            name: a.name,
+            sort_name: a.sort_name,
+            downloaded,
+        }
+    }
+
+    pub fn from_cache(a: cache_model::Artist) -> Self {
+        Self {
+            id: a.id,
+            name: a.name,
+            sort_name: a.sort_name,
+            downloaded: true,
+        }
+    }
+}
+
+impl MergedAlbum {
+    pub fn from_server(a: Album, local_cover_path: Option<String>, downloaded: bool) -> Self {
+        Self {
+            id: a.id,
+            artist_id: a.artist_id,
+            title: a.title,
+            release_year: a.release_year,
+            cover_path: a.cover_path,
+            local_cover_path,
+            downloaded,
+        }
+    }
+
+    pub fn from_cache(a: cache_model::Album, art: Option<cache_model::AlbumArt>) -> Self {
+        Self {
+            id: a.id,
+            artist_id: a.artist_id,
+            title: a.title,
+            release_year: a.release_year,
+            cover_path: None,
+            local_cover_path: art.map(|x| x.local_cover_path),
+            downloaded: true,
+        }
+    }
+}
+
+impl MergedTrack {
+    pub fn from_server(t: Track, local_file_path: Option<String>) -> Self {
+        let downloaded = local_file_path.is_some();
+        Self {
+            id: t.id,
+            album_id: t.album_id,
+            artist_id: t.artist_id,
+            title: t.title,
+            track_no: t.track_no,
+            disc_no: t.disc_no,
+            duration_ms: t.duration_ms,
+            codec: t.codec,
+            bitrate_kbps: t.bitrate_kbps,
+            file_path: t.file_path,
+            file_size: t.file_size,
+            local_file_path,
+            downloaded,
+        }
+    }
+
+    pub fn from_cache(t: cache_model::Track) -> Self {
+        // Offline path: the server's `file_path` isn't known to us. Re-use
+        // the local path so the UI has *something* to display in fields
+        // that expect a non-empty server path. The downloaded flag is true.
+        Self {
+            id: t.id,
+            album_id: t.album_id,
+            artist_id: t.artist_id,
+            title: t.title,
+            track_no: t.track_no,
+            disc_no: t.disc_no,
+            duration_ms: t.duration_ms,
+            codec: t.codec,
+            bitrate_kbps: t.bitrate_kbps,
+            file_path: t.local_file_path.clone(),
+            file_size: t.file_size,
+            local_file_path: Some(t.local_file_path),
+            downloaded: true,
+        }
+    }
+}
