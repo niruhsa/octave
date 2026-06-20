@@ -31,6 +31,12 @@ service LibraryService {
 
   // Library scan: index files on disk into the DB.
   rpc ScanLibrary(ScanRequest) returns (ScanResponse);
+
+  // Metadata & Artwork (Phase 7)
+  // Opt-in metadata edit (Manager+). Optionally writes back to file tags.
+  rpc EditTrackMetadata(EditTrackMetadataRequest) returns (Track);
+  // Fetch + cache album artwork from an external source (Manager+).
+  rpc FetchAlbumArtwork(FetchAlbumArtworkRequest) returns (FetchAlbumArtworkResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -168,4 +174,24 @@ message ScanResponse {
   int64 tracks_added = 1;
   int64 tracks_skipped = 2;
   int64 errors = 3;
+}
+
+// ---- Metadata & Artwork ----
+
+// Field-presence semantics: optional scalars distinguish "unset" (leave
+// unchanged) from an explicit value.
+message EditTrackMetadataRequest {
+  string id = 1;
+  optional string title = 2;
+  optional int32 track_no = 3;
+  optional int32 disc_no = 4;
+  optional string metadata_json = 5;
+  // Year is written back to the file tag only (not a track DB column).
+  optional int32 year = 6;
+}
+
+message FetchAlbumArtworkRequest { string album_id = 1; }
+message FetchAlbumArtworkResponse {
+  bool found = 1;
+  string cover_path = 2;       // empty when found == false
 }

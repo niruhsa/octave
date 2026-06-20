@@ -135,6 +135,70 @@ export const librarySearchTracks = (query: string, page: Page = {}) =>
   invoke<LibraryView<MergedTrack>>("library_search_tracks", { query, ...page });
 
 // ---------------------------------------------------------------------------
+// playback (Phase 4)
+//
+// `player_media_url` returns the platform-correct URL for the webview's
+// `<audio>` element. The `media://` protocol (registered in Rust) serves a
+// cached local file (range-aware) or proxies the server stream with auth
+// injected — so the frontend never branches on online/offline.
+// ---------------------------------------------------------------------------
+
+export const playerMediaUrl = (trackId: string) =>
+  invoke<string>("player_media_url", { trackId });
+
+// ---------------------------------------------------------------------------
+// sync engine (Phase 5)
+//
+// `syncNow` runs push (replay offline-edit outbox) → pull/reconcile cached
+// entities → prune missing files, and returns a `SyncReport`. Offline
+// playlist edits are recorded via `syncEnqueueOp` and replayed on reconnect.
+// ---------------------------------------------------------------------------
+
+export type SyncReport = {
+  ops_pushed: number;
+  ops_conflicted: number;
+  ops_deferred: number;
+  entities_updated: number;
+  entities_pruned: number;
+  files_missing: number;
+  conflicts: string[];
+};
+
+/**
+ * One queued offline edit. The `kind` discriminant matches the Rust
+ * `PendingOpKind` (serde `tag = "kind"`, snake_case). Locally-created
+ * playlists use a `local:`-prefixed placeholder id until their create op
+ * replays and the engine learns the server id.
+ */
+export type PendingOp =
+  | { kind: "playlist_create"; local_id: string; name: string }
+  | { kind: "playlist_rename"; playlist_id: string; name: string }
+  | { kind: "playlist_delete"; playlist_id: string }
+  | {
+      kind: "playlist_add_track";
+      playlist_id: string;
+      track_id: string;
+      position: number;
+    }
+  | { kind: "playlist_remove_track"; playlist_id: string; position: number }
+  | {
+      kind: "playlist_reorder_track";
+      playlist_id: string;
+      from_position: number;
+      to_position: number;
+    };
+
+/** Full reconcile cycle. Requires a configured server + credential. */
+export const syncNow = () => invoke<SyncReport>("sync_now");
+
+/** Count of queued offline edits awaiting sync. */
+export const syncPendingCount = () => invoke<number>("sync_pending_count");
+
+/** Append a typed op to the offline-edit outbox. Returns the new op id. */
+export const syncEnqueueOp = (op: PendingOp) =>
+  invoke<number>("sync_enqueue_op", { op });
+
+// ---------------------------------------------------------------------------
 // offline cache (Phase 1) — types mirror `cache::model` 1:1
 // ---------------------------------------------------------------------------
 

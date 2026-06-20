@@ -64,6 +64,20 @@ httpdate = "1"
 # so `mv Lang/Artist/Album/ $INGEST_PATH/` would silently miss events.
 notify = "6"
 
+# Metadata & Artwork (Phase 7): fetch album art from Cover Art Archive.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
+
+# Archive uploads (Phase 6): zip + tarball extraction. ISO/CD are stubbed.
+# zip default features pull in deflate/bzip2/lzma/zstd/xz decoders.
+zip = "2"
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.5"
+xz2 = "0.1"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"

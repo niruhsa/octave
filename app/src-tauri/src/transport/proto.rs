@@ -13,3 +13,8 @@ pub mod auth {
 pub mod library {
     tonic::include_proto!("music.library.v1");
 }
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod playlist {
+    tonic::include_proto!("music.playlist.v1");
+}

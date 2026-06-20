@@ -9,7 +9,10 @@
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
-use super::{Album, Artist, Credential, PermissionTier, ServerConfig, Track};
+use super::{
+    Album, Artist, Credential, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks,
+    ServerConfig, Track,
+};
 use crate::error::{AppError, AppResult};
 
 pub struct RestClient {
@@ -241,6 +244,110 @@ impl RestClient {
         let body: Vec<TrackJson> = check_status(resp).await?.json().await.map_err(rest_err("search_tracks decode"))?;
         Ok(body.into_iter().map(Track::from).collect())
     }
+
+    // ----- Get-by-id (sync reconcile) ------------------------------------
+    //
+    // 404 → `Ok(None)` so the sync engine treats a missing server row as
+    // "prune locally".
+
+    pub async fn get_artist(&self, cred: &Credential, id: &str) -> AppResult<Option<Artist>> {
+        let url = format!("{}/artists/{id}", self.base);
+        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_artist"))?;
+        match opt_status(resp).await? {
+            Some(r) => Ok(Some(r.json::<ArtistJson>().await.map_err(rest_err("get_artist decode"))?.into())),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_album(&self, cred: &Credential, id: &str) -> AppResult<Option<Album>> {
+        let url = format!("{}/albums/{id}", self.base);
+        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_album"))?;
+        match opt_status(resp).await? {
+            Some(r) => Ok(Some(r.json::<AlbumJson>().await.map_err(rest_err("get_album decode"))?.into())),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_track(&self, cred: &Credential, id: &str) -> AppResult<Option<Track>> {
+        let url = format!("{}/tracks/{id}", self.base);
+        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_track"))?;
+        match opt_status(resp).await? {
+            Some(r) => Ok(Some(r.json::<TrackJson>().await.map_err(rest_err("get_track decode"))?.into())),
+            None => Ok(None),
+        }
+    }
+
+    // ----- Playlists (sync pull + push) ----------------------------------
+
+    pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
+        let url = format!("{}/playlists", self.base);
+        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("list_my_playlists"))?;
+        #[derive(Deserialize)]
+        struct Resp { playlists: Vec<PlaylistJson> }
+        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_my_playlists decode"))?;
+        Ok(body.playlists.into_iter().map(Playlist::from).collect())
+    }
+
+    pub async fn get_playlist(&self, cred: &Credential, id: &str) -> AppResult<Option<PlaylistWithTracks>> {
+        let url = format!("{}/playlists/{id}", self.base);
+        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_playlist"))?;
+        #[derive(Deserialize)]
+        struct Resp { playlist: PlaylistJson, tracks: Vec<PlaylistTrackJson> }
+        match opt_status(resp).await? {
+            Some(r) => {
+                let v: Resp = r.json().await.map_err(rest_err("get_playlist decode"))?;
+                Ok(Some(PlaylistWithTracks {
+                    playlist: v.playlist.into(),
+                    tracks: v.tracks.into_iter().map(PlaylistTrack::from).collect(),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn create_playlist(&self, cred: &Credential, name: &str) -> AppResult<Playlist> {
+        let url = format!("{}/playlists", self.base);
+        let resp = self.http.post(url).header("authorization", auth_header(cred)).json(&serde_json::json!({ "name": name })).send().await.map_err(rest_err("create_playlist"))?;
+        let p: PlaylistJson = check_status(resp).await?.json().await.map_err(rest_err("create_playlist decode"))?;
+        Ok(p.into())
+    }
+
+    pub async fn rename_playlist(&self, cred: &Credential, id: &str, name: &str) -> AppResult<Playlist> {
+        let url = format!("{}/playlists/{id}", self.base);
+        let resp = self.http.put(url).header("authorization", auth_header(cred)).json(&serde_json::json!({ "name": name })).send().await.map_err(rest_err("rename_playlist"))?;
+        let p: PlaylistJson = check_status(resp).await?.json().await.map_err(rest_err("rename_playlist decode"))?;
+        Ok(p.into())
+    }
+
+    pub async fn delete_playlist(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let url = format!("{}/playlists/{id}", self.base);
+        let resp = self.http.delete(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("delete_playlist"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn add_playlist_track(&self, cred: &Credential, playlist_id: &str, track_id: &str, position: i32) -> AppResult<()> {
+        let url = format!("{}/playlists/{playlist_id}/tracks", self.base);
+        // position 0 = append (server treats None/0 the same).
+        let body = serde_json::json!({ "track_id": track_id, "position": position });
+        let resp = self.http.post(url).header("authorization", auth_header(cred)).json(&body).send().await.map_err(rest_err("add_playlist_track"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn remove_playlist_track(&self, cred: &Credential, playlist_id: &str, position: i32) -> AppResult<()> {
+        let url = format!("{}/playlists/{playlist_id}/tracks/{position}", self.base);
+        let resp = self.http.delete(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("remove_playlist_track"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn reorder_playlist_track(&self, cred: &Credential, playlist_id: &str, from_position: i32, to_position: i32) -> AppResult<()> {
+        let url = format!("{}/playlists/{playlist_id}/tracks/{from_position}", self.base);
+        let resp = self.http.put(url).header("authorization", auth_header(cred)).json(&serde_json::json!({ "to": to_position })).send().await.map_err(rest_err("reorder_playlist_track"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
 }
 
 // REST DTOs (match server/src/rest/library.rs exactly).
@@ -311,6 +418,30 @@ impl From<TrackJson> for Track {
     }
 }
 
+#[derive(Deserialize)]
+struct PlaylistJson {
+    id: String,
+    owner_id: String,
+    name: String,
+}
+impl From<PlaylistJson> for Playlist {
+    fn from(p: PlaylistJson) -> Self {
+        Self { id: p.id, owner_id: p.owner_id, name: p.name }
+    }
+}
+
+#[derive(Deserialize)]
+struct PlaylistTrackJson {
+    playlist_id: String,
+    track_id: String,
+    position: i32,
+}
+impl From<PlaylistTrackJson> for PlaylistTrack {
+    fn from(t: PlaylistTrackJson) -> Self {
+        Self { playlist_id: t.playlist_id, track_id: t.track_id, position: t.position as i64 }
+    }
+}
+
 pub struct RestLoginOutcome {
     pub token: String,
     pub user_id: String,
@@ -342,6 +473,14 @@ fn parse_tier(s: &str) -> PermissionTier {
 
 fn rest_err(ctx: &'static str) -> impl Fn(reqwest::Error) -> AppError {
     move |e| AppError::Transport(format!("{ctx}: {e}"))
+}
+
+/// Like `check_status` but maps 404 to `Ok(None)` for get-by-id calls.
+async fn opt_status(resp: reqwest::Response) -> AppResult<Option<reqwest::Response>> {
+    if resp.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    check_status(resp).await.map(Some)
 }
 
 /// Convert a non-2xx response into a structured error. The body may carry

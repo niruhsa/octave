@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package music.upload.v1;
+
+// Upload service: push new music to the server (single audio file or an
+// archive). Mirrors the REST `POST /upload` endpoint; Manager+ only.
+//
+// Uploads are **client-streaming**: the first message carries metadata
+// (filename), subsequent messages carry file chunks. The server stages the
+// bytes to a temp file under the ingest area, then runs the same
+// copy-only organise+index pipeline as REST and the folder watcher.
+service UploadService {
+  // Stream a file up in chunks; server replies once after ingest completes.
+  rpc Upload(stream UploadRequest) returns (UploadResponse);
+}
+
+message UploadRequest {
+  oneof payload {
+    UploadInfo info = 1;   // must be the FIRST message
+    bytes chunk = 2;       // subsequent messages: raw file bytes
+  }
+}
+
+message UploadInfo {
+  // Original filename incl. extension (e.g. "album.tar.gz", "track.flac").
+  // Used to detect archive formats and to choose the staged file extension.
+  string filename = 1;
+}
+
+message UploadResponse {
+  // True when the upload was an archive (zip/tarball); then the *_count
+  // fields are populated and single_track_id is empty.
+  bool is_archive = 1;
+
+  // Single-file upload result.
+  string single_track_id = 2;  // empty for archives
+  string path = 3;             // organised destination (single-file only)
+
+  // Archive upload result.
+  string archive_kind = 4;     // e.g. "Zip", "TarGz" (empty for single file)
+  int64 ingested = 5;
+  int64 already_indexed = 6;
+  int64 non_audio_skipped = 7;
+  int64 errors = 8;
+  repeated string track_ids = 9;
+}

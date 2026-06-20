@@ -21,6 +21,18 @@ impl AuthInterceptor {
     pub async fn resolve<T>(&self, request: &Request<T>) -> std::result::Result<Identity, Status> {
         let cred = extract_credential(request.metadata())
             .ok_or_else(|| Status::unauthenticated("missing Authorization metadata"))?;
+        self.resolve_credential(cred).await
+    }
+
+    /// Resolve an already-extracted credential into an [`Identity`].
+    ///
+    /// Useful for client-streaming handlers where the request must be
+    /// consumed (and is not `Sync`), so the credential is pulled out before
+    /// the stream is taken.
+    pub async fn resolve_credential(
+        &self,
+        cred: Credential,
+    ) -> std::result::Result<Identity, Status> {
         self.auth.resolve(cred).await.map_err(|e| match e {
             AppError::Unauthenticated(m) => Status::unauthenticated(m),
             AppError::PermissionDenied(m) => Status::permission_denied(m),

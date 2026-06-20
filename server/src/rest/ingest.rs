@@ -17,6 +17,7 @@ use crate::auth::Identity;
 use crate::db::models::PermissionLevel;
 use crate::error::AppError;
 use crate::rest::ApiError;
+use crate::services::archive::ArchiveKind;
 use crate::services::tag;
 
 /// Max upload size: 500 MiB.  Applied via [`DefaultBodyLimit`].
@@ -39,11 +40,30 @@ pub struct UploadResponse {
     pub path: String,
 }
 
+/// Response for an archive upload (zip/tarball) — multiple tracks ingested.
+#[derive(Serialize)]
+pub struct ArchiveUploadResponse {
+    pub kind: String,
+    pub ingested: u64,
+    pub already_indexed: u64,
+    pub non_audio_skipped: u64,
+    pub errors: u64,
+    pub track_ids: Vec<String>,
+}
+
+/// Either a single-file or an archive upload result.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum UploadResult {
+    Single(UploadResponse),
+    Archive(ArchiveUploadResponse),
+}
+
 async fn upload(
     State(state): State<crate::rest::RestState>,
     Extension(caller): Extension<Identity>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<UploadResponse>), ApiError> {
+) -> Result<(StatusCode, Json<UploadResult>), ApiError> {
     caller.require(PermissionLevel::Manager).map_err(ApiError::from)?;
 
     let ingest = state
@@ -117,6 +137,30 @@ async fn upload(
         );
     }
 
+    // Archive uploads (zip/tarball/disc-image) take the multi-file path;
+    // everything else is treated as a single audio file.
+    if let Some(kind) = ArchiveKind::detect(Path::new(&filename)) {
+        let outcome = ingest.organize_archive(&caller, &source_path, kind).await;
+        let _ = tokio::fs::remove_file(&source_path).await;
+        let res = outcome?;
+        debug!(
+            ingested = res.ingested,
+            errors = res.errors,
+            "upload: archive complete"
+        );
+        return Ok((
+            StatusCode::CREATED,
+            Json(UploadResult::Archive(ArchiveUploadResponse {
+                kind: format!("{kind:?}"),
+                ingested: res.ingested,
+                already_indexed: res.already_indexed,
+                non_audio_skipped: res.non_audio_skipped,
+                errors: res.errors,
+                track_ids: res.track_ids.iter().map(|id| id.to_string()).collect(),
+            })),
+        ));
+    }
+
     let result = match ingest.organize_and_index(&caller, &source_path).await {
         Ok(r) => {
             let _ = tokio::fs::remove_file(&source_path).await;
@@ -132,10 +176,10 @@ async fn upload(
 
     Ok((
         StatusCode::CREATED,
-        Json(UploadResponse {
+        Json(UploadResult::Single(UploadResponse {
             track_id: result.track_id.to_string(),
             path: result.dest.to_string_lossy().into_owned(),
-        }),
+        })),
     ))
 }
 

@@ -7,8 +7,10 @@ import Library from "./routes/Library";
 import Artist from "./routes/Artist";
 import Album from "./routes/Album";
 import Search from "./routes/Search";
+import PlayerBar from "./components/PlayerBar";
 import { authSession } from "./ipc";
 import { useAppStore } from "./store";
+import { useSyncScheduler } from "./sync/useSync";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,6 +24,9 @@ const queryClient = new QueryClient({
 
 function RootLayout() {
   const setSession = useAppStore((s) => s.setSession);
+
+  // Phase 5: schedule reconcile on online-regain / focus.
+  useSyncScheduler();
 
   // On boot, ask Rust for any cached session so the UI starts with the
   // right tier without a network round-trip. Errors are non-fatal — they
@@ -41,8 +46,9 @@ function RootLayout() {
   }, [setSession]);
 
   return (
-    <main className="min-h-full p-6">
+    <main className="min-h-full p-6 pb-28">
       <Outlet />
+      <PlayerBar />
     </main>
   );
 }

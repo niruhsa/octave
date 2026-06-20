@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
-use super::{Album, Artist, Credential, PermissionTier, ServerConfig, Track};
+use super::{
+    Album, Artist, Credential, PermissionTier, Playlist, PlaylistWithTracks, ServerConfig, Track,
+};
 use crate::error::{AppError, AppResult};
 
 /// Aggregate client. Cheap to clone-by-`Arc` once placed in Tauri state.
@@ -209,6 +211,162 @@ impl ServerClient {
             }
         }
         self.rest.search_tracks(cred, query, limit, offset).await
+    }
+
+    // ----- Get-by-id (sync reconcile) ------------------------------------
+
+    pub async fn get_artist(&self, cred: &Credential, id: &str) -> AppResult<Option<Artist>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_artist(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_artist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_artist(cred, id).await
+    }
+
+    pub async fn get_album(&self, cred: &Credential, id: &str) -> AppResult<Option<Album>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_album(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_album", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_album(cred, id).await
+    }
+
+    pub async fn get_track(&self, cred: &Credential, id: &str) -> AppResult<Option<Track>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_track(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_track", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_track(cred, id).await
+    }
+
+    // ----- Playlists (sync pull + push) ----------------------------------
+
+    pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_my_playlists(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_my_playlists", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_my_playlists(cred).await
+    }
+
+    pub async fn get_playlist(
+        &self,
+        cred: &Credential,
+        id: &str,
+    ) -> AppResult<Option<PlaylistWithTracks>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_playlist(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_playlist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_playlist(cred, id).await
+    }
+
+    pub async fn create_playlist(&self, cred: &Credential, name: &str) -> AppResult<Playlist> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.create_playlist(cred, name).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("create_playlist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.create_playlist(cred, name).await
+    }
+
+    pub async fn rename_playlist(
+        &self,
+        cred: &Credential,
+        id: &str,
+        name: &str,
+    ) -> AppResult<Playlist> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.rename_playlist(cred, id, name).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("rename_playlist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.rename_playlist(cred, id, name).await
+    }
+
+    pub async fn delete_playlist(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_playlist(cred, id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("delete_playlist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.delete_playlist(cred, id).await
+    }
+
+    pub async fn add_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        track_id: &str,
+        position: i32,
+    ) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.add_playlist_track(cred, playlist_id, track_id, position).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("add_playlist_track", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.add_playlist_track(cred, playlist_id, track_id, position).await
+    }
+
+    pub async fn remove_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        position: i32,
+    ) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.remove_playlist_track(cred, playlist_id, position).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("remove_playlist_track", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.remove_playlist_track(cred, playlist_id, position).await
+    }
+
+    pub async fn reorder_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        from_position: i32,
+        to_position: i32,
+    ) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .reorder_playlist_track(cred, playlist_id, from_position, to_position)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("reorder_playlist_track", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest
+            .reorder_playlist_track(cred, playlist_id, from_position, to_position)
+            .await
     }
 
     /// Open a gRPC channel for one logical operation. Returns `None` (not

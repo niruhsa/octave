@@ -27,7 +27,10 @@ use crate::auth::Identity;
 use crate::auth::service::{AuthService, Credential};
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
-use crate::services::{IngestService, LibraryService, PlaylistService, ScanService, StreamingService};
+use crate::services::{
+    ArtworkService, IngestService, LibraryService, MetadataService, PlaylistService, ScanService,
+    StreamingService,
+};
 
 /// Shared state injected into every handler.
 #[derive(Clone)]
@@ -38,6 +41,8 @@ pub struct RestState {
     pub streaming: StreamingService,
     pub playlists: PlaylistService,
     pub ingest: Option<IngestService>,
+    pub metadata: MetadataService,
+    pub artwork: Option<ArtworkService>,
 }
 
 /// Run the REST server until shutdown.

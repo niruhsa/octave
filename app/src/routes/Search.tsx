@@ -6,9 +6,11 @@ import {
   librarySearchArtists,
   librarySearchTracks,
 } from "../ipc";
+import type { MergedTrack } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
 import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
+import { usePlayerStore } from "../player/store";
 
 const PAGE_SIZE = 25;
 
@@ -19,6 +21,7 @@ const PAGE_SIZE = 25;
 export default function Search() {
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
+  const playTrack = usePlayerStore((s) => s.playTrack);
 
   const artists = useQuery({
     queryKey: ["search", "artists", submitted],
@@ -138,13 +141,21 @@ export default function Search() {
             ) : (
               <ul className="divide-y divide-neutral-800 rounded border border-neutral-800">
                 {tracks.data?.items.map((t) => (
-                  <li key={t.id} className="flex items-center gap-3 p-2 text-sm">
+                  <li
+                    key={t.id}
+                    className="flex cursor-pointer items-center gap-3 p-2 text-sm hover:bg-neutral-800/50"
+                    onClick={() => playTrack(t as MergedTrack, tracks.data!.items)}
+                  >
                     <DownloadedDot downloaded={t.downloaded} />
+                    <span className="flex-1 hover:underline">
+                      {t.title}
+                    </span>
                     <Link
                       to={`/albums/${t.album_id}`}
-                      className="flex-1 hover:underline"
+                      className="text-xs text-neutral-500 hover:underline"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {t.title}
+                      album
                     </Link>
                     <span className="w-12 text-right tabular-nums text-neutral-500">
                       {formatDuration(t.duration_ms)}

@@ -10,7 +10,10 @@ use server::config::Config;
 use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
-use server::services::{IngestService, LibraryService, PlaylistService, ScanService, StreamingService};
+use server::services::{
+    ArtworkService, CoverArtArchive, IngestService, LibraryService, MetadataService,
+    PlaylistService, ScanService, StreamingService,
+};
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
 use server::{grpc, rest};
@@ -54,6 +57,17 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
     );
 
+    let metadata = MetadataService::new(library.clone(), config.write_tags);
+    let artwork = if config.fetch_artwork {
+        Some(ArtworkService::new(
+            library.clone(),
+            Arc::new(CoverArtArchive::new()),
+            config.artwork_path.clone(),
+        ))
+    } else {
+        None
+    };
+
     let ingest = match config.library_path.clone() {
         Some(ref root) => {
             let organizer = Organizer::new(root.clone());
@@ -80,7 +94,9 @@ async fn main() -> Result<()> {
         scan: scan.clone(),
         streaming,
         playlists: playlists.clone(),
-        ingest,
+        ingest: ingest.clone(),
+        metadata: metadata.clone(),
+        artwork: artwork.clone(),
     };
 
     let grpc_task = tokio::spawn(grpc::serve(
@@ -88,7 +104,10 @@ async fn main() -> Result<()> {
         auth.clone(),
         library,
         scan,
+        metadata,
+        artwork,
         playlists,
+        ingest,
     ));
     let rest_task = tokio::spawn(rest::serve(config.rest_addr, rest_state));
 

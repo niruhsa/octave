@@ -5,9 +5,10 @@
 
 use std::path::Path;
 
+use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
-use lofty::tag::{Accessor, ItemKey};
+use lofty::tag::{Accessor, ItemKey, Tag};
 
 /// File extensions recognised as audio (lowercase, without the dot).
 pub const AUDIO_EXTS: &[&str] = &[
@@ -303,6 +304,81 @@ fn script_of(c: char) -> Option<Script> {
         return Some(Script::Thai);
     }
     None
+}
+
+/// A set of tag fields to write back to an audio file.  Every field is
+/// optional — `None` leaves the existing tag value untouched, `Some` (incl.
+/// empty string) overwrites it.  Used by the metadata-edit pipeline when
+/// server-side tag write-back is enabled.
+#[derive(Debug, Clone, Default)]
+pub struct TagWrite {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub track_no: Option<i32>,
+    pub disc_no: Option<i32>,
+    pub year: Option<i32>,
+}
+
+impl TagWrite {
+    /// `true` when no field is set — nothing to write.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.artist.is_none()
+            && self.album.is_none()
+            && self.track_no.is_none()
+            && self.disc_no.is_none()
+            && self.year.is_none()
+    }
+}
+
+/// Write `edit`'s set fields into the audio file at `path`, preserving any
+/// existing tags not mentioned in `edit`.
+///
+/// If the file has no primary tag yet, a fresh one of the format's primary
+/// type is inserted.  Returns `Err` when `lofty` cannot open/parse the file
+/// or the save fails (e.g. read-only path, unsupported format).
+pub fn write_tags(path: &Path, edit: &TagWrite) -> crate::error::Result<()> {
+    if edit.is_empty() {
+        return Ok(());
+    }
+    let mut tagged = lofty::read_from_path(path)
+        .map_err(|e| crate::error::AppError::Internal(format!("tag write open: {e}")))?;
+    if tagged.primary_tag_mut().is_none() {
+        let tag_type = tagged.primary_tag_type();
+        tagged.insert_tag(Tag::new(tag_type));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .expect("primary tag inserted above");
+    if let Some(t) = &edit.title {
+        tag.set_title(t.clone());
+    }
+    if let Some(a) = &edit.artist {
+        tag.set_artist(a.clone());
+    }
+    if let Some(al) = &edit.album {
+        tag.set_album(al.clone());
+    }
+    if let Some(n) = edit.track_no {
+        if let Ok(v) = u32::try_from(n) {
+            tag.set_track(v);
+        }
+    }
+    if let Some(n) = edit.disc_no {
+        if let Ok(v) = u32::try_from(n) {
+            tag.set_disk(v);
+        }
+    }
+    if let Some(y) = edit.year {
+        if let Ok(v) = u32::try_from(y) {
+            tag.set_year(v);
+        }
+    }
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .map_err(|e| crate::error::AppError::Internal(format!("tag write save: {e}")))?;
+    Ok(())
 }
 
 /// Returns `true` when the file extension (case-insensitive) is a recognised

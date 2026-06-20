@@ -14,6 +14,8 @@ pub mod commands;
 pub mod db;
 pub mod error;
 pub mod library;
+pub mod player;
+pub mod sync;
 pub mod transport;
 
 use std::sync::Arc;
@@ -49,6 +51,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Phase 4 — Playback: `media://<track_id>` serves a cached local
+        // file (range-aware) or proxies the server stream with auth. The
+        // webview's `<audio>` element loads these URLs directly.
+        .register_asynchronous_uri_scheme_protocol(player::stream::SCHEME, player::stream::handle)
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -111,6 +117,12 @@ pub fn run() {
             commands::library_commands::library_search_albums,
             commands::library_commands::library_list_tracks_by_album,
             commands::library_commands::library_search_tracks,
+            // playback (Phase 4)
+            commands::player_commands::player_media_url,
+            // sync engine (Phase 5)
+            commands::sync_commands::sync_now,
+            commands::sync_commands::sync_pending_count,
+            commands::sync_commands::sync_enqueue_op,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

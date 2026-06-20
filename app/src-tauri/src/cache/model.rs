@@ -70,6 +70,18 @@ pub struct PlaylistTrack {
     pub added_at: String,
 }
 
+/// One queued offline edit awaiting replay against the server. `op_type`
+/// selects the payload shape; `payload_json` is decoded by the sync engine.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PendingOp {
+    pub id: i64,
+    pub op_type: String,
+    pub payload_json: String,
+    pub created_at: String,
+    pub attempts: i64,
+    pub last_error: Option<String>,
+}
+
 /// Reconciliation bookkeeping for one cached entity.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SyncState {

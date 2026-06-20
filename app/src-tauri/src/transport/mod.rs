@@ -67,6 +67,29 @@ pub struct Track {
     pub metadata_json: String,
 }
 
+/// Server's view of a playlist (no timestamps in the wire DTO).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Playlist {
+    pub id: String,
+    pub owner_id: String,
+    pub name: String,
+}
+
+/// One server-side playlist entry. `position` is 1-based + contiguous.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistTrack {
+    pub playlist_id: String,
+    pub track_id: String,
+    pub position: i64,
+}
+
+/// A playlist plus its ordered tracks — what `GetPlaylist` returns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistWithTracks {
+    pub playlist: Playlist,
+    pub tracks: Vec<PlaylistTrack>,
+}
+
 /// Pagination params for list/search calls. Server caps `limit` at 200.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Page {

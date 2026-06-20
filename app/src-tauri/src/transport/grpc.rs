@@ -15,11 +15,18 @@ use super::proto::auth::auth_service_client::AuthServiceClient;
 use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
-    ListAlbumsByArtistRequest, ListArtistsRequest, ListTracksByAlbumRequest, Pagination,
-    SearchRequest,
+    GetAlbumRequest, GetArtistRequest, GetTrackRequest, ListAlbumsByArtistRequest,
+    ListArtistsRequest, ListTracksByAlbumRequest, Pagination, SearchRequest,
+};
+use super::proto::playlist::playlist_service_client::PlaylistServiceClient;
+use super::proto::playlist::{
+    AddPlaylistTrackRequest, CreatePlaylistRequest, DeletePlaylistRequest, GetPlaylistRequest,
+    ListMyPlaylistsRequest, RemovePlaylistTrackRequest, RenamePlaylistRequest,
+    ReorderPlaylistTrackRequest,
 };
 use super::{
-    Album, Artist, Credential, PermissionTier, ServerConfig, Track,
+    Album, Artist, Credential, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks,
+    ServerConfig, Track,
 };
 use crate::error::{AppError, AppResult};
 
@@ -52,6 +59,10 @@ impl GrpcClient {
 
     fn library(&self) -> LibraryServiceClient<Channel> {
         LibraryServiceClient::new(self.channel.clone())
+    }
+
+    fn playlists(&self) -> PlaylistServiceClient<Channel> {
+        PlaylistServiceClient::new(self.channel.clone())
     }
 
     /// Username/password login. On success the server returns an opaque
@@ -225,6 +236,196 @@ impl GrpcClient {
             .into_inner();
         Ok(resp.tracks.into_iter().map(track_from_proto).collect())
     }
+
+    // ----- Get-by-id (sync reconcile) ------------------------------------
+    //
+    // `NotFound` maps to `Ok(None)` so the sync engine can treat a missing
+    // server row as "prune locally" without special-casing the gRPC status.
+
+    pub async fn get_artist(&self, cred: &Credential, id: &str) -> AppResult<Option<Artist>> {
+        let mut req = Request::new(GetArtistRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        match self.library().get_artist(req).await {
+            Ok(r) => Ok(Some(artist_from_proto(r.into_inner()))),
+            Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
+            Err(s) => Err(AppError::Transport(format!("get_artist: {s}"))),
+        }
+    }
+
+    pub async fn get_album(&self, cred: &Credential, id: &str) -> AppResult<Option<Album>> {
+        let mut req = Request::new(GetAlbumRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        match self.library().get_album(req).await {
+            Ok(r) => Ok(Some(album_from_proto(r.into_inner()))),
+            Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
+            Err(s) => Err(AppError::Transport(format!("get_album: {s}"))),
+        }
+    }
+
+    pub async fn get_track(&self, cred: &Credential, id: &str) -> AppResult<Option<Track>> {
+        let mut req = Request::new(GetTrackRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        match self.library().get_track(req).await {
+            Ok(r) => Ok(Some(track_from_proto(r.into_inner()))),
+            Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
+            Err(s) => Err(AppError::Transport(format!("get_track: {s}"))),
+        }
+    }
+
+    // ----- Playlists (sync pull + push) ----------------------------------
+
+    pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
+        let mut req = Request::new(ListMyPlaylistsRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .playlists()
+            .list_my_playlists(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_my_playlists: {s}")))?
+            .into_inner();
+        Ok(resp.playlists.into_iter().map(playlist_from_proto).collect())
+    }
+
+    pub async fn get_playlist(
+        &self,
+        cred: &Credential,
+        id: &str,
+    ) -> AppResult<Option<PlaylistWithTracks>> {
+        let mut req = Request::new(GetPlaylistRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        match self.playlists().get_playlist(req).await {
+            Ok(r) => {
+                let v = r.into_inner();
+                let playlist = v.playlist.map(playlist_from_proto).ok_or_else(|| {
+                    AppError::Transport("get_playlist: missing playlist".into())
+                })?;
+                Ok(Some(PlaylistWithTracks {
+                    playlist,
+                    tracks: v.tracks.into_iter().map(playlist_track_from_proto).collect(),
+                }))
+            }
+            Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
+            Err(s) => Err(AppError::Transport(format!("get_playlist: {s}"))),
+        }
+    }
+
+    pub async fn create_playlist(&self, cred: &Credential, name: &str) -> AppResult<Playlist> {
+        let mut req = Request::new(CreatePlaylistRequest { name: name.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .playlists()
+            .create_playlist(req)
+            .await
+            .map_err(map_playlist_err("create_playlist"))?
+            .into_inner();
+        Ok(playlist_from_proto(resp))
+    }
+
+    pub async fn rename_playlist(
+        &self,
+        cred: &Credential,
+        id: &str,
+        name: &str,
+    ) -> AppResult<Playlist> {
+        let mut req = Request::new(RenamePlaylistRequest {
+            id: id.to_string(),
+            name: name.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .playlists()
+            .rename_playlist(req)
+            .await
+            .map_err(map_playlist_err("rename_playlist"))?
+            .into_inner();
+        Ok(playlist_from_proto(resp))
+    }
+
+    pub async fn delete_playlist(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let mut req = Request::new(DeletePlaylistRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        self.playlists()
+            .delete_playlist(req)
+            .await
+            .map_err(map_playlist_err("delete_playlist"))?;
+        Ok(())
+    }
+
+    pub async fn add_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        track_id: &str,
+        position: i32,
+    ) -> AppResult<()> {
+        let mut req = Request::new(AddPlaylistTrackRequest {
+            playlist_id: playlist_id.to_string(),
+            track_id: track_id.to_string(),
+            position,
+        });
+        attach_credential(&mut req, cred)?;
+        self.playlists()
+            .add_playlist_track(req)
+            .await
+            .map_err(map_playlist_err("add_playlist_track"))?;
+        Ok(())
+    }
+
+    pub async fn remove_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        position: i32,
+    ) -> AppResult<()> {
+        let mut req = Request::new(RemovePlaylistTrackRequest {
+            playlist_id: playlist_id.to_string(),
+            position,
+        });
+        attach_credential(&mut req, cred)?;
+        self.playlists()
+            .remove_playlist_track(req)
+            .await
+            .map_err(map_playlist_err("remove_playlist_track"))?;
+        Ok(())
+    }
+
+    pub async fn reorder_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        from_position: i32,
+        to_position: i32,
+    ) -> AppResult<()> {
+        let mut req = Request::new(ReorderPlaylistTrackRequest {
+            playlist_id: playlist_id.to_string(),
+            from_position,
+            to_position,
+        });
+        attach_credential(&mut req, cred)?;
+        self.playlists()
+            .reorder_playlist_track(req)
+            .await
+            .map_err(map_playlist_err("reorder_playlist_track"))?;
+        Ok(())
+    }
+}
+
+/// Map a tonic status to the right `AppError` variant for playlist
+/// mutations. `PermissionDenied` → `Forbidden` so the sync engine drops
+/// the op (server authority); everything else is a transport failure that
+/// keeps the op queued for retry.
+fn map_playlist_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
+    move |s| match s.code() {
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("{op}: {s}")),
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("{op}: {s}")),
+        tonic::Code::NotFound | tonic::Code::InvalidArgument | tonic::Code::FailedPrecondition => {
+            // Server rejected the op on its merits — not a transport fault.
+            // Surface as Forbidden-class "drop it" by reusing Internal so
+            // the engine treats it as a permanent failure.
+            AppError::Internal(format!("{op} rejected: {s}"))
+        }
+        _ => AppError::Transport(format!("{op}: {s}")),
+    }
 }
 
 // --- proto -> public model conversions ------------------------------------
@@ -256,6 +457,22 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         title: a.title,
         release_year: opt_i32(a.release_year),
         cover_path: opt_str(a.cover_path),
+    }
+}
+
+fn playlist_from_proto(p: super::proto::playlist::Playlist) -> Playlist {
+    Playlist {
+        id: p.id,
+        owner_id: p.owner_id,
+        name: p.name,
+    }
+}
+
+fn playlist_track_from_proto(t: super::proto::playlist::PlaylistTrack) -> PlaylistTrack {
+    PlaylistTrack {
+        playlist_id: t.playlist_id,
+        track_id: t.track_id,
+        position: t.position as i64,
     }
 }
 

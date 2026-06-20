@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -28,10 +28,12 @@ pub fn router() -> Router<RestState> {
         .route("/albums/search", get(search_albums))
         .route("/albums/:id", get(get_album).put(update_album).delete(delete_album))
         .route("/albums/:id/tracks", get(list_tracks_by_album))
+        .route("/albums/:id/artwork", post(fetch_album_artwork))
         // Tracks
         .route("/tracks", post(create_track))
         .route("/tracks/search", get(search_tracks))
         .route("/tracks/:id", get(get_track).put(update_track).delete(delete_track))
+        .route("/tracks/:id/metadata", patch(edit_track_metadata))
         // Scan
         .route("/library/scan", post(scan_library))
 }
@@ -438,6 +440,61 @@ async fn search_tracks(
         .search_tracks(&caller, &q.q, q.limit, q.offset)
         .await?;
     Ok(Json(rows.into_iter().map(track_dto).collect()))
+}
+
+// ---------------------------------------------------------------------------
+// Metadata & Artwork (Phase 7)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct EditMetadataBody {
+    pub title: Option<String>,
+    pub track_no: Option<i32>,
+    pub disc_no: Option<i32>,
+    pub metadata_json: Option<String>,
+    pub year: Option<i32>,
+}
+
+async fn edit_track_metadata(
+    State(state): State<RestState>,
+    Path(id_path): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let b: EditMetadataBody = crate::rest::parse_json(req).await?;
+    let edit = crate::services::MetadataEdit {
+        title: b.title,
+        track_no: b.track_no,
+        disc_no: b.disc_no,
+        metadata_json: b.metadata_json,
+        year: b.year,
+    };
+    let t = state.metadata.edit_track(&caller, id_path, edit).await?;
+    Ok(Json(track_dto(t)))
+}
+
+#[derive(Serialize)]
+pub struct ArtworkDto {
+    pub found: bool,
+    pub cover_path: Option<String>,
+}
+
+async fn fetch_album_artwork(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<ArtworkDto>, ApiError> {
+    let caller = id(&req)?;
+    let artwork = state.artwork.as_ref().ok_or_else(|| {
+        ApiError::from(crate::error::AppError::Config(
+            "artwork fetch is disabled (set FETCH_ARTWORK)".into(),
+        ))
+    })?;
+    let cover = artwork.fetch_for_album(&caller, album_id).await?;
+    Ok(Json(ArtworkDto {
+        found: cover.is_some(),
+        cover_path: cover,
+    }))
 }
 
 // ---------------------------------------------------------------------------

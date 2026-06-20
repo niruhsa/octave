@@ -7,6 +7,7 @@ import {
   cacheListDownloadedTracks,
 } from "../ipc";
 import { useAppStore } from "../store";
+import { useSyncStore } from "../sync/useSync";
 
 /**
  * Home view. Verifies:
@@ -20,6 +21,12 @@ export default function Home() {
   const session = useAppStore((s) => s.session);
   const setSession = useAppStore((s) => s.setSession);
   const setOnline = useAppStore((s) => s.setOnline);
+
+  const syncStatus = useSyncStore((s) => s.status);
+  const pending = useSyncStore((s) => s.pending);
+  const lastReport = useSyncStore((s) => s.lastReport);
+  const lastError = useSyncStore((s) => s.lastError);
+  const runSync = useSyncStore((s) => s.run);
 
   const info = useQuery({ queryKey: ["app_info"], queryFn: appInfo });
   const downloads = useQuery({
@@ -110,6 +117,40 @@ export default function Home() {
             : downloads.isError
               ? `error: ${(downloads.error as Error).message}`
               : `${downloads.data?.length ?? 0} downloaded`}
+        </dd>
+        <dt className="text-neutral-400">sync</dt>
+        <dd className="flex items-center gap-2">
+          <span>
+            {syncStatus === "syncing"
+              ? "syncing…"
+              : syncStatus === "error"
+                ? `error: ${lastError}`
+                : syncStatus === "ok"
+                  ? "up to date"
+                  : "idle"}
+          </span>
+          {pending > 0 && (
+            <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-200">
+              {pending} unsynced
+            </span>
+          )}
+          {session && (
+            <button
+              onClick={() => runSync()}
+              disabled={syncStatus === "syncing"}
+              className="text-xs text-blue-400 underline disabled:opacity-50"
+            >
+              sync now
+            </button>
+          )}
+          {lastReport && syncStatus === "ok" && (
+            <span className="text-xs text-neutral-500">
+              ↑{lastReport.ops_pushed} ↻{lastReport.entities_updated} ✕
+              {lastReport.entities_pruned}
+              {lastReport.conflicts.length > 0 &&
+                ` · ${lastReport.conflicts.length} conflict(s)`}
+            </span>
+          )}
         </dd>
       </dl>
     </section>

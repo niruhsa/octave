@@ -44,6 +44,16 @@ pub struct Config {
     /// Filesystem path of the ingest folder (copy-only).
     /// Absolute. Resolved from `INGEST_PATH` relative to the config anchor.
     pub ingest_path: Option<PathBuf>,
+    /// Whether metadata edits are written back to the file's audio tags via
+    /// `lofty`. Off by default (DB stays authoritative; files untouched).
+    pub write_tags: bool,
+    /// Whether album artwork is fetched automatically from an external
+    /// source (Cover Art Archive). Off by default.
+    pub fetch_artwork: bool,
+    /// Directory where fetched album artwork is cached. Absolute. Resolved
+    /// from `ARTWORK_PATH` relative to the config anchor; defaults to
+    /// `<library_path>/.artwork` when unset and a library path exists.
+    pub artwork_path: Option<PathBuf>,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
@@ -73,6 +83,12 @@ impl Config {
         let ingest_path = env::var("INGEST_PATH")
             .ok()
             .map(|p| resolve_path(&anchor, &p));
+        let write_tags = env_flag("WRITE_TAGS");
+        let fetch_artwork = env_flag("FETCH_ARTWORK");
+        let artwork_path = env::var("ARTWORK_PATH")
+            .ok()
+            .map(|p| resolve_path(&anchor, &p))
+            .or_else(|| library_path.as_ref().map(|l| l.join(".artwork")));
 
         if let Some(p) = &library_path {
             debug!(resolved = %p.display(), "LIBRARY_PATH resolved");
@@ -89,6 +105,9 @@ impl Config {
             database_url,
             library_path,
             ingest_path,
+            write_tags,
+            fetch_artwork,
+            artwork_path,
             config_anchor: anchor,
         })
     }
@@ -154,6 +173,14 @@ fn resolve_path(anchor: &Path, raw: &str) -> PathBuf {
     let trimmed = raw.trim();
     let p = PathBuf::from(trimmed);
     if p.is_absolute() { p } else { anchor.join(p) }
+}
+
+/// Parse a boolean-ish env var. Absent / unrecognised => `false`.
+fn env_flag(var: &str) -> bool {
+    env::var(var)
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 fn parse_addr(var: &str, default: &str) -> Result<SocketAddr> {

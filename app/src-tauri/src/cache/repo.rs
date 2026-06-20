@@ -11,7 +11,9 @@
 
 use sqlx::SqlitePool;
 
-use crate::cache::model::{Album, AlbumArt, Artist, Playlist, PlaylistTrack, SyncState, Track};
+use crate::cache::model::{
+    Album, AlbumArt, Artist, PendingOp, Playlist, PlaylistTrack, SyncState, Track,
+};
 use crate::error::AppResult;
 
 // ---------------------------------------------------------------------------
@@ -380,4 +382,70 @@ pub async fn get_sync_state(
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+pub async fn delete_sync_state(
+    pool: &SqlitePool,
+    entity_type: &str,
+    entity_id: &str,
+) -> AppResult<()> {
+    sqlx::query("DELETE FROM sync_state WHERE entity_type = ?1 AND entity_id = ?2")
+        .bind(entity_type)
+        .bind(entity_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// pending_ops (offline-edit outbox)
+// ---------------------------------------------------------------------------
+
+/// Append an op to the outbox. Returns the new row id.
+pub async fn enqueue_op(pool: &SqlitePool, op_type: &str, payload_json: &str) -> AppResult<i64> {
+    let row = sqlx::query(
+        "INSERT INTO pending_ops (op_type, payload_json) VALUES (?1, ?2)",
+    )
+    .bind(op_type)
+    .bind(payload_json)
+    .execute(pool)
+    .await?;
+    Ok(row.last_insert_rowid())
+}
+
+/// All queued ops in insertion order (FIFO replay).
+pub async fn list_pending_ops(pool: &SqlitePool) -> AppResult<Vec<PendingOp>> {
+    let rows = sqlx::query_as::<_, PendingOp>(
+        "SELECT id, op_type, payload_json, created_at, attempts, last_error
+         FROM pending_ops ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn count_pending_ops(pool: &SqlitePool) -> AppResult<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_ops")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+pub async fn delete_pending_op(pool: &SqlitePool, id: i64) -> AppResult<()> {
+    sqlx::query("DELETE FROM pending_ops WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Bump attempt count + record the last error for an op that failed but
+/// should stay queued (transport-level failure).
+pub async fn mark_op_failed(pool: &SqlitePool, id: i64, error: &str) -> AppResult<()> {
+    sqlx::query("UPDATE pending_ops SET attempts = attempts + 1, last_error = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(error)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

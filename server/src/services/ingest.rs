@@ -8,11 +8,12 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::auth::Identity;
 use crate::error::{AppError, Result};
+use crate::services::archive::{self, ArchiveKind};
 use crate::services::organizer::Organizer;
 use crate::services::scan::ScanService;
 use crate::services::tag;
@@ -118,6 +119,95 @@ impl IngestService {
             already_indexed,
         })
     }
+
+    // ------------------------------------------------------------------
+    // Archive ingest
+    // ------------------------------------------------------------------
+
+    /// Extract an archive (zip/tarball) into a temp dir under the ingest
+    /// staging area, then `organize_and_index` every audio member. Non-audio
+    /// members are ignored. The extracted temp tree is removed afterwards;
+    /// the original archive is never modified.
+    ///
+    /// ISO/CD disc images are recognised but not yet supported and return
+    /// `InvalidArgument` (PLAN Phase 6 stub).
+    pub async fn organize_archive(
+        &self,
+        caller: &Identity,
+        source: &Path,
+        kind: ArchiveKind,
+    ) -> Result<ArchiveIngestResult> {
+        // Stage extraction under <ingest_root>/.tmp/<uuid> (or system temp
+        // when no ingest root is configured) so the watcher's leading-dot
+        // skip rule keeps the watcher from re-ingesting extracted files.
+        let stage_base = self
+            .ingest_root
+            .as_ref()
+            .map(|r| r.join(".tmp"))
+            .unwrap_or_else(std::env::temp_dir);
+        let stage = stage_base.join(format!("extract-{}", Uuid::new_v4()));
+
+        let source = source.to_path_buf();
+        let stage_for_blocking = stage.clone();
+        // Extraction is blocking (sync std::fs + decoders) — keep it off the
+        // async runtime's worker threads.
+        let members = tokio::task::spawn_blocking(move || {
+            archive::extract(&source, kind, &stage_for_blocking)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("extract task join: {e}")))??;
+
+        let mut result = ArchiveIngestResult::default();
+        for member in &members {
+            if !tag::is_audio_file(member) {
+                result.non_audio_skipped += 1;
+                continue;
+            }
+            match self.organize_and_index(caller, member).await {
+                Ok(r) if r.already_indexed => {
+                    result.already_indexed += 1;
+                    result.track_ids.push(r.track_id);
+                }
+                Ok(r) => {
+                    result.ingested += 1;
+                    result.track_ids.push(r.track_id);
+                }
+                Err(e) => {
+                    warn!(member = %member.display(), error = %e, "archive: member ingest failed");
+                    result.errors += 1;
+                }
+            }
+        }
+
+        // Best-effort cleanup of the staging tree.
+        if let Err(e) = tokio::fs::remove_dir_all(&stage).await {
+            debug!(stage = %stage.display(), error = %e, "archive: stage cleanup failed");
+        }
+
+        debug!(
+            ingested = result.ingested,
+            already = result.already_indexed,
+            skipped = result.non_audio_skipped,
+            errors = result.errors,
+            "organize_archive: complete"
+        );
+        Ok(result)
+    }
+}
+
+/// Outcome of an `organize_archive` call.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ArchiveIngestResult {
+    /// Newly-ingested audio members.
+    pub ingested: u64,
+    /// Audio members that were already in the library.
+    pub already_indexed: u64,
+    /// Non-audio members ignored.
+    pub non_audio_skipped: u64,
+    /// Members that errored during ingest.
+    pub errors: u64,
+    /// Track ids of every successfully-resolved audio member.
+    pub track_ids: Vec<Uuid>,
 }
 
 /// Outcome of a single `organize_and_index` call.

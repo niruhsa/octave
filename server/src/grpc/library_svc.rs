@@ -11,12 +11,14 @@ use crate::error::AppError;
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::library as pb;
-use crate::services::{LibraryService, ScanService};
+use crate::services::{ArtworkService, LibraryService, MetadataEdit, MetadataService, ScanService};
 
 #[derive(Clone)]
 pub struct LibraryServer {
     pub library: LibraryService,
     pub scan: ScanService,
+    pub metadata: MetadataService,
+    pub artwork: Option<ArtworkService>,
     pub interceptor: AuthInterceptor,
 }
 
@@ -377,6 +379,47 @@ impl pb::library_service_server::LibraryService for LibraryServer {
         Ok(Response::new(pb::ListTracksResponse {
             tracks: rows.into_iter().map(track_to_pb).collect(),
             total,
+        }))
+    }
+
+    // ---- Metadata & Artwork ----
+    async fn edit_track_metadata(
+        &self,
+        req: Request<pb::EditTrackMetadataRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.id, "track")?;
+        let edit = MetadataEdit {
+            title: b.title,
+            track_no: b.track_no,
+            disc_no: b.disc_no,
+            metadata_json: b.metadata_json,
+            year: b.year,
+        };
+        let t = self
+            .metadata
+            .edit_track(&caller, id, edit)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn fetch_album_artwork(
+        &self,
+        req: Request<pb::FetchAlbumArtworkRequest>,
+    ) -> Result<Response<pb::FetchAlbumArtworkResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let album_id = parse_uuid(&req.into_inner().album_id, "album")?;
+        let artwork = self.artwork.as_ref().ok_or_else(|| {
+            Status::failed_precondition("artwork fetch is disabled (set FETCH_ARTWORK)")
+        })?;
+        let cover = artwork
+            .fetch_for_album(&caller, album_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::FetchAlbumArtworkResponse {
+            found: cover.is_some(),
+            cover_path: cover.unwrap_or_default(),
         }))
     }
 
