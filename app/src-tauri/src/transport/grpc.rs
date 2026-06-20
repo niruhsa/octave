@@ -13,6 +13,7 @@ use tonic::Request;
 
 use super::proto::auth::auth_service_client::AuthServiceClient;
 use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
+use super::proto::auth::{ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse};
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
     GetAlbumRequest, GetArtistRequest, GetTrackRequest, ListAlbumsByArtistRequest,
@@ -24,9 +25,12 @@ use super::proto::playlist::{
     ListMyPlaylistsRequest, RemovePlaylistTrackRequest, RenamePlaylistRequest,
     ReorderPlaylistTrackRequest,
 };
+use super::proto::upload::upload_service_client::UploadServiceClient;
+use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUploadResponse};
+use super::proto::upload as pb;
 use super::{
-    Album, Artist, Credential, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks,
-    ServerConfig, Track,
+    Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
+    PlaylistWithTracks, ServerConfig, SingleUploadResult, Track, UploadResult,
 };
 use crate::error::{AppError, AppResult};
 
@@ -63,6 +67,10 @@ impl GrpcClient {
 
     fn playlists(&self) -> PlaylistServiceClient<Channel> {
         PlaylistServiceClient::new(self.channel.clone())
+    }
+
+    fn uploads(&self) -> UploadServiceClient<Channel> {
+        UploadServiceClient::new(self.channel.clone())
     }
 
     /// Username/password login. On success the server returns an opaque
@@ -114,6 +122,90 @@ impl GrpcClient {
             .logout(req)
             .await
             .map_err(|s| AppError::Transport(format!("logout: {s}")))?;
+        Ok(())
+    }
+
+    /// Register a new account. Server-gated to Admin callers (or
+    /// `SECRET_KEY`, which is effective Admin); the caller's credential is
+    /// attached so the server can authorize. Returns the new user id.
+    pub async fn register(
+        &self,
+        cred: &Credential,
+        username: &str,
+        password: &str,
+        level: super::PermissionTier,
+    ) -> AppResult<String> {
+        let mut req = Request::new(RegisterRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+            level: tier_to_proto_level(level),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp: RegisterResponse = self
+            .client()
+            .register(req)
+            .await
+            .map_err(map_register_err)?
+            .into_inner();
+        Ok(resp.user_id)
+    }
+
+    /// Change (or admin-reset) a user's password. `old_password` is empty
+    /// for admin/secret-key resets; required + verified server-side for
+    /// non-admin self-changes. The caller's credential authorizes the call.
+    pub async fn change_password(
+        &self,
+        cred: &Credential,
+        target_user_id: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> AppResult<()> {
+        let mut req = Request::new(ChangePasswordRequest {
+            user_id: target_user_id.to_string(),
+            old_password: old_password.to_string(),
+            new_password: new_password.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        self.client()
+            .change_password(req)
+            .await
+            .map_err(map_password_err)?;
+        Ok(())
+    }
+
+    /// List every registered user. Admin-gated server-side; returns each
+    /// user's id, username, and tier — no password hashes.
+    pub async fn list_users(&self, cred: &Credential) -> AppResult<Vec<super::UserEntry>> {
+        let mut req = Request::new(ListUsersRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .client()
+            .list_users(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_users: {s}")))?
+            .into_inner();
+        Ok(resp
+            .users
+            .into_iter()
+            .map(|u| super::UserEntry {
+                id: u.id,
+                username: u.username,
+                level: super::PermissionTier::from_proto(u.level),
+            })
+            .collect())
+    }
+
+    /// Delete a user account. Admin-gated server-side. The caller's
+    /// credential is attached for authorization.
+    pub async fn delete_user(&self, cred: &Credential, user_id: &str) -> AppResult<()> {
+        let mut req = Request::new(DeleteUserRequest {
+            user_id: user_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        self.client()
+            .delete_user(req)
+            .await
+            .map_err(map_password_err)?;
         Ok(())
     }
 
@@ -408,6 +500,59 @@ impl GrpcClient {
             .map_err(map_playlist_err("reorder_playlist_track"))?;
         Ok(())
     }
+
+    // ----- Uploads (Phase 8) -----------------------------------------------
+
+    /// Upload a file (single audio or archive) to the server via
+    /// client-streaming gRPC. The first message carries an `UploadInfo`
+    /// (filename); subsequent messages carry file chunks. Manager+ required.
+    pub async fn upload_file(
+        &self,
+        cred: &Credential,
+        filename: &str,
+        data: Vec<u8>,
+    ) -> AppResult<UploadResult> {
+        // Build all messages upfront so the stream owns its data
+        // (tonic requires 'static).
+        let mut msgs: Vec<UploadRequest> = Vec::with_capacity(1 + data.len() / 65536 + 1);
+        msgs.push(UploadRequest {
+            payload: Some(pb::upload_request::Payload::Info(UploadInfo {
+                filename: filename.to_string(),
+            })),
+        });
+        for chunk in data.chunks(65536) {
+            msgs.push(UploadRequest {
+                payload: Some(pb::upload_request::Payload::Chunk(chunk.to_vec())),
+            });
+        }
+        let stream = futures_util::stream::iter(msgs);
+
+        let mut req = Request::new(stream);
+        attach_credential(&mut req, cred)?;
+
+        let resp: PbUploadResponse = self
+            .uploads()
+            .upload(req)
+            .await
+            .map_err(map_upload_err)?
+            .into_inner();
+
+        Ok(if resp.is_archive {
+            UploadResult::Archive(ArchiveUploadResult {
+                kind: resp.archive_kind,
+                ingested: resp.ingested as u64,
+                already_indexed: resp.already_indexed as u64,
+                non_audio_skipped: resp.non_audio_skipped as u64,
+                errors: resp.errors as u64,
+                track_ids: resp.track_ids,
+            })
+        } else {
+            UploadResult::Single(SingleUploadResult {
+                track_id: resp.single_track_id,
+                path: resp.path,
+            })
+        })
+    }
 }
 
 /// Map a tonic status to the right `AppError` variant for playlist
@@ -425,6 +570,65 @@ fn map_playlist_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
             AppError::Internal(format!("{op} rejected: {s}"))
         }
         _ => AppError::Transport(format!("{op}: {s}")),
+    }
+}
+
+/// Map a tonic status from `Register` to the right `AppError`. Same
+/// policy as `map_playlist_err`: auth/merit rejections do NOT trigger the
+/// REST fallback (the server spoke); only transport-level faults do.
+fn map_register_err(s: tonic::Status) -> AppError {
+    match s.code() {
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("register: {s}")),
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("register: {s}")),
+        tonic::Code::InvalidArgument | tonic::Code::AlreadyExists => {
+            // Bad username / short password / duplicate — surface the
+            // server's message. Internal (not Transport) so the engine
+            // doesn't retry / fall back.
+            AppError::Internal(format!("register rejected: {s}"))
+        }
+        _ => AppError::Transport(format!("register: {s}")),
+    }
+}
+
+/// Map a tonic status from `UploadFile` to the right `AppError`.
+/// Auth/merit rejections do NOT trigger the REST fallback (the server
+/// spoke); only transport-level faults do.
+fn map_upload_err(s: tonic::Status) -> AppError {
+    match s.code() {
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("upload: {s}")),
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("upload: {s}")),
+        tonic::Code::InvalidArgument | tonic::Code::FailedPrecondition => {
+            AppError::Internal(format!("upload rejected: {s}"))
+        }
+        _ => AppError::Transport(format!("upload: {s}")),
+    }
+}
+/// `map_register_err`: auth/merit rejections do NOT trigger the REST
+/// fallback (the server spoke); only transport-level faults do.
+fn map_password_err(s: tonic::Status) -> AppError {
+    match s.code() {
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("change_password: {s}")),
+        tonic::Code::Unauthenticated => {
+            AppError::Unauthenticated(format!("change_password: {s}"))
+        }
+        tonic::Code::InvalidArgument | tonic::Code::NotFound => {
+            // Bad new-password / wrong old-password / missing user — surface
+            // the server's message. Internal (not Transport) so we don't
+            // retry / fall back.
+            AppError::Internal(format!("change_password rejected: {s}"))
+        }
+        _ => AppError::Transport(format!("change_password: {s}")),
+    }
+}
+
+/// `PermissionTier` → proto `PermissionLevel` wire value. Mirrors
+/// `music.auth.v1.PermissionLevel` (USER=1, MANAGER=2, ADMIN=3) without
+/// importing the generated enum, so a proto rename can't break this.
+fn tier_to_proto_level(tier: super::PermissionTier) -> i32 {
+    match tier {
+        super::PermissionTier::Admin => 3,
+        super::PermissionTier::Manager => 2,
+        super::PermissionTier::User => 1,
     }
 }
 

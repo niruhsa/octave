@@ -12,9 +12,12 @@ pub mod auth;
 pub mod cache;
 pub mod commands;
 pub mod db;
+pub mod downloads;
 pub mod error;
 pub mod library;
 pub mod player;
+pub mod playlists;
+pub mod assets;
 pub mod sync;
 pub mod transport;
 
@@ -51,10 +54,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // Phase 4 — Playback: `media://<track_id>` serves a cached local
         // file (range-aware) or proxies the server stream with auth. The
         // webview's `<audio>` element loads these URLs directly.
         .register_asynchronous_uri_scheme_protocol(player::stream::SCHEME, player::stream::handle)
+        // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
+        // album cover from app-private storage to the webview's `<img>`.
+        .register_asynchronous_uri_scheme_protocol(assets::SCHEME, assets::handle)
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -110,6 +117,11 @@ pub fn run() {
             commands::auth_commands::auth_session,
             commands::auth_commands::auth_logout,
             commands::auth_commands::auth_refresh_online,
+            commands::auth_commands::auth_register,
+            commands::auth_commands::auth_change_password,
+            commands::auth_commands::auth_list_users,
+            commands::auth_commands::auth_delete_user,
+            commands::auth_commands::auth_delete_user,
             // library browse + search
             commands::library_commands::library_list_artists,
             commands::library_commands::library_search_artists,
@@ -117,12 +129,33 @@ pub fn run() {
             commands::library_commands::library_search_albums,
             commands::library_commands::library_list_tracks_by_album,
             commands::library_commands::library_search_tracks,
+            // playlists (Phase 7)
+            commands::playlist_commands::playlist_list,
+            commands::playlist_commands::playlist_get,
+            commands::playlist_commands::playlist_create,
+            commands::playlist_commands::playlist_rename,
+            commands::playlist_commands::playlist_delete,
+            commands::playlist_commands::playlist_add_track,
+            commands::playlist_commands::playlist_remove_track,
+            commands::playlist_commands::playlist_reorder_track,
             // playback (Phase 4)
             commands::player_commands::player_media_url,
             // sync engine (Phase 5)
             commands::sync_commands::sync_now,
             commands::sync_commands::sync_pending_count,
             commands::sync_commands::sync_enqueue_op,
+            // downloads (Phase 6)
+            commands::download_commands::download_track,
+            commands::download_commands::download_album,
+            commands::download_commands::download_playlist,
+            commands::download_commands::download_delete,
+            commands::download_commands::downloads_storage_usage,
+            commands::download_commands::downloads_dir,
+            commands::download_commands::downloads_set_dir,
+            commands::download_commands::downloads_wifi_only,
+            commands::download_commands::downloads_set_wifi_only,
+            // uploads (Phase 8)
+            commands::upload_commands::upload_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

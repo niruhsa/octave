@@ -10,8 +10,8 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, Artist, Credential, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks,
-    ServerConfig, Track,
+    Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
+    PlaylistWithTracks, ServerConfig, SingleUploadResult, Track, UploadResult,
 };
 use crate::error::{AppError, AppResult};
 
@@ -102,6 +102,133 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("logout"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    /// Register a new account. Server-gated to Admin callers. `level` is
+    /// sent as the lowercase tier string the server's `PermissionLevel`
+    /// serde expects ("user" / "manager" / "admin"). Returns the new user id.
+    pub async fn register(
+        &self,
+        cred: &Credential,
+        username: &str,
+        password: &str,
+        level: super::PermissionTier,
+    ) -> AppResult<String> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            username: &'a str,
+            password: &'a str,
+            level: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            user_id: String,
+        }
+        let level_str = tier_to_rest_str(level);
+        let url = format!("{}/auth/register", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&Body {
+                username,
+                password,
+                level: level_str,
+            })
+            .send()
+            .await
+            .map_err(rest_err("register"))?;
+        // 400 (bad username / short password / duplicate) currently maps to
+        // `Transport(msg)` via `check_status`; the message still surfaces to
+        // the UI, which is all the user needs. 403 → Forbidden.
+        let parsed: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("register decode"))?;
+        Ok(parsed.user_id)
+    }
+
+    /// Change (or admin-reset) a user's password via `PUT /users/:id/password`.
+    /// `old_password` is empty for admin/secret-key resets; required +
+    /// verified server-side for non-admin self-changes.
+    pub async fn change_password(
+        &self,
+        cred: &Credential,
+        target_user_id: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> AppResult<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            old_password: &'a str,
+            new_password: &'a str,
+        }
+        let url = format!("{}/users/{target_user_id}/password", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&Body {
+                old_password,
+                new_password,
+            })
+            .send()
+            .await
+            .map_err(rest_err("change_password"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    /// List every registered user. Admin-gated server-side; the `GET /users`
+    /// endpoint returns `{ users: [{id, username, level}] }`.
+    pub async fn list_users(&self, cred: &Credential) -> AppResult<Vec<super::UserEntry>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            users: Vec<UserJson>,
+        }
+        #[derive(Deserialize)]
+        struct UserJson {
+            id: String,
+            username: String,
+            level: String,
+        }
+        let url = format!("{}/users", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_users"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_users decode"))?;
+        Ok(body
+            .users
+            .into_iter()
+            .map(|u| super::UserEntry {
+                id: u.id,
+                username: u.username,
+                level: parse_tier(&u.level),
+            })
+            .collect())
+    }
+
+    /// Delete a user account via `DELETE /users/:id`. Admin-gated server-side.
+    pub async fn delete_user(&self, cred: &Credential, user_id: &str) -> AppResult<()> {
+        let url = format!("{}/users/{user_id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("delete_user"))?;
         check_status(resp).await?;
         Ok(())
     }
@@ -348,6 +475,42 @@ impl RestClient {
         check_status(resp).await?;
         Ok(())
     }
+
+    // ----- Uploads (Phase 8) -----------------------------------------------
+
+    /// Upload a file (single audio or archive) via REST multipart `POST /upload`.
+    /// Manager+ required. Response is either `{track_id, path}` (single) or
+    /// `{kind, ingested, ...}` (archive).
+    pub async fn upload_file(
+        &self,
+        cred: &Credential,
+        filename: &str,
+        data: Vec<u8>,
+    ) -> AppResult<UploadResult> {
+        let part = reqwest::multipart::Part::bytes(data)
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")
+            .map_err(|e| AppError::Transport(format!("mime: {e}")))?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+
+        let url = format!("{}/upload", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(rest_err("upload"))?;
+        let body = check_status(resp).await?;
+
+        // The server returns an untagged enum: try archive shape first, then single.
+        let text = body
+            .text()
+            .await
+            .map_err(rest_err("upload body"))?;
+        parse_upload_response(&text)
+    }
 }
 
 // REST DTOs (match server/src/rest/library.rs exactly).
@@ -469,6 +632,61 @@ fn parse_tier(s: &str) -> PermissionTier {
         "manager" => PermissionTier::Manager,
         _ => PermissionTier::User,
     }
+}
+
+/// Inverse of `parse_tier` — the lowercase string the server's
+/// `PermissionLevel` (serde `rename_all = "lowercase"`) expects on the
+/// `POST /auth/register` body.
+fn tier_to_rest_str(tier: super::PermissionTier) -> &'static str {
+    match tier {
+        super::PermissionTier::Admin => "admin",
+        super::PermissionTier::Manager => "manager",
+        super::PermissionTier::User => "user",
+    }
+}
+
+/// Parse the server's `POST /upload` response. The body is an untagged enum:
+/// either `{track_id, path}` (single) or `{kind, ingested, ...}` (archive).
+fn parse_upload_response(text: &str) -> AppResult<UploadResult> {
+    // Try archive shape first (it has `kind` which is unique).
+    if let Ok(a) = serde_json::from_str::<serde_json::Value>(text) {
+        if a.get("kind").is_some() {
+            let archive: ArchiveUploadResponse = serde_json::from_str(text)
+                .map_err(|e| AppError::Transport(format!("upload archive decode: {e}")))?;
+            return Ok(UploadResult::Archive(ArchiveUploadResult {
+                kind: archive.kind,
+                ingested: archive.ingested,
+                already_indexed: archive.already_indexed,
+                non_audio_skipped: archive.non_audio_skipped,
+                errors: archive.errors,
+                track_ids: archive.track_ids,
+            }));
+        }
+    }
+    // Fall back to single.
+    let single: SingleUploadResponse =
+        serde_json::from_str(text)
+            .map_err(|e| AppError::Transport(format!("upload single decode: {e}")))?;
+    Ok(UploadResult::Single(SingleUploadResult {
+        track_id: single.track_id,
+        path: single.path,
+    }))
+}
+
+#[derive(Deserialize)]
+struct SingleUploadResponse {
+    track_id: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct ArchiveUploadResponse {
+    kind: String,
+    ingested: u64,
+    already_indexed: u64,
+    non_audio_skipped: u64,
+    errors: u64,
+    track_ids: Vec<String>,
 }
 
 fn rest_err(ctx: &'static str) -> impl Fn(reqwest::Error) -> AppError {

@@ -15,7 +15,9 @@ pub trait UserRepo: Send + Sync {
     async fn create(&self, new: NewUser) -> Result<User>;
     async fn get(&self, id: Uuid) -> Result<Option<User>>;
     async fn find_by_username(&self, username: &str) -> Result<Option<User>>;
+    async fn list(&self) -> Result<Vec<User>>;
     async fn update_permission(&self, id: Uuid, level: PermissionLevel) -> Result<()>;
+    async fn update_password(&self, id: Uuid, password_hash: &str) -> Result<()>;
     async fn delete(&self, id: Uuid) -> Result<()>;
 }
 

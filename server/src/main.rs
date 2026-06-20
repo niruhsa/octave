@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         config.secret_key.clone(),
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
+        Arc::new(repos.clone()),
     );
     let library = LibraryService::new(
         Arc::new(repos.clone()),

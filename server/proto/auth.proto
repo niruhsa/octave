@@ -9,6 +9,9 @@ service AuthService {
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
 }
 
 enum PermissionLevel {
@@ -49,3 +52,29 @@ message RegisterRequest {
 message RegisterResponse {
   string user_id = 1;
 }
+
+message ChangePasswordRequest {
+  // UUID of the user whose password is being changed. An admin/secret-key
+  // caller may set any user id; a non-admin may only set their own.
+  string user_id = 1;
+  // Required for a non-admin self-change (verified server-side). Ignored
+  // for admin/secret-key resets (leave empty).
+  string old_password = 2;
+  string new_password = 3;
+}
+message ChangePasswordResponse {}
+
+message ListUsersRequest {}
+message ListUsersResponse {
+  message UserEntry {
+    string id = 1;
+    string username = 2;
+    PermissionLevel level = 3;
+  }
+  repeated UserEntry users = 1;
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+}
+message DeleteUserResponse {}

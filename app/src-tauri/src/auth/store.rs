@@ -41,6 +41,13 @@ pub enum StoredCredentialKind {
 pub struct StoredCredential {
     pub kind: StoredCredentialKind,
     pub secret: String,
+    /// Server URLs — persisted so the app can auto-reconnect on restart
+    /// without the user re-entering the server address. `#[serde(default)]`
+    /// for backward compat with entries saved before this field was added.
+    #[serde(default)]
+    pub rest_url: Option<String>,
+    #[serde(default)]
+    pub grpc_url: Option<String>,
     /// Optional cached identity from the last successful `WhoAmI` /
     /// `Login`. Treated as advisory — the server is authority on tier.
     #[serde(default)]

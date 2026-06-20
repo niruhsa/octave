@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
-use crate::auth::store::SecureStore;
+use crate::auth::store::{SecureStore, StoredCredentialKind};
 use crate::auth::{AuthManager, AuthSession};
 use crate::error::{AppError, AppResult};
-use crate::transport::{ServerClient, ServerConfig};
+use crate::transport::{PermissionTier, ServerClient, ServerConfig};
 use crate::AppStateHandle;
 
 #[cfg(target_os = "android")]
@@ -76,13 +76,54 @@ pub async fn auth_whoami(state: State<'_, AppStateHandle>) -> AppResult<AuthSess
 
 /// Return the cached session snapshot WITHOUT touching the server. Used by
 /// the UI on boot for an instant render before any network roundtrip.
+///
+/// When no manager is configured yet (fresh boot, Tauri state is empty)
+/// but a Bearer credential is persisted in the platform's secure store
+/// (keychain / app-private file) *with* server URLs — i.e. the user
+/// logged in with a username+password in a prior session — this command
+/// lazily rebuilds the `AuthManager` from the stored config so the
+/// session survives an app restart without the user re-entering the
+/// server address.
+///
+/// `SECRET_KEY` entries are NOT auto-restored — the user must re-enter
+/// the key each session (the directive is "only applicable to user
+/// accounts, not secret-key login").
 #[tauri::command]
-pub async fn auth_session(state: State<'_, AppStateHandle>) -> AppResult<Option<AuthSession>> {
-    let guard = state.auth.read().await;
-    match guard.as_ref() {
-        Some(m) => Ok(m.current().await),
-        None => Ok(None),
+pub async fn auth_session(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+) -> AppResult<Option<AuthSession>> {
+    {
+        let guard = state.auth.read().await;
+        if let Some(ref m) = *guard {
+            return Ok(m.current().await);
+        }
     }
+    // No manager yet — try to rebuild from the persisted credential.
+    let store = build_store(&app)?;
+    let stored = match store.load().await {
+        Ok(Some(s)) => s,
+        _ => return Ok(None),
+    };
+    // Only auto-restore Bearer (username+password) sessions.
+    if !matches!(stored.kind, StoredCredentialKind::Bearer) {
+        return Ok(None);
+    }
+    let rest_url = match stored.rest_url.as_deref() {
+        Some(u) if !u.is_empty() => u,
+        _ => return Ok(None),
+    };
+    let config = if let Some(grpc) = stored.grpc_url.as_deref().filter(|g| !g.is_empty()) {
+        ServerConfig::new(rest_url, grpc)?
+    } else {
+        ServerConfig::from_rest_only(rest_url)?
+    };
+    let server = Arc::new(ServerClient::new(config)?);
+    let manager = Arc::new(AuthManager::new(server, store));
+    manager.restore_from_store().await;
+    let session = manager.current().await;
+    *state.auth.write().await = Some(manager);
+    Ok(session)
 }
 
 /// Log out and wipe stored credentials.
@@ -95,6 +136,66 @@ pub async fn auth_logout(state: State<'_, AppStateHandle>) -> AppResult<()> {
 #[tauri::command]
 pub async fn auth_refresh_online(state: State<'_, AppStateHandle>) -> AppResult<bool> {
     with_manager(&state, |m| async move { Ok(m.refresh_online().await) }).await
+}
+
+/// Register a new account. Server-gated to Admin callers (or `SECRET_KEY`,
+/// which is effective Admin); the active credential authorizes the call.
+/// Returns the new user id. The new account is not logged in locally —
+/// the admin stays signed in.
+///
+/// `tier` is the permission level to assign the new account.
+#[tauri::command]
+pub async fn auth_register(
+    state: State<'_, AppStateHandle>,
+    username: String,
+    password: String,
+    tier: PermissionTier,
+) -> AppResult<String> {
+    with_manager(&state, |m| async move {
+        m.register(&username, &password, tier).await
+    })
+    .await
+}
+
+/// Change (or admin-reset) a user's password. The active credential
+/// authorizes the call. `old_password` is empty for admin/secret-key
+/// resets; required + verified server-side for non-admin self-changes.
+/// `target_user_id` is the user whose password changes (self-change uses
+/// the session's own id). The current session stays valid.
+#[tauri::command]
+pub async fn auth_change_password(
+    state: State<'_, AppStateHandle>,
+    target_user_id: String,
+    old_password: String,
+    new_password: String,
+) -> AppResult<()> {
+    with_manager(&state, |m| async move {
+        m.change_password(&target_user_id, &old_password, &new_password)
+            .await
+    })
+    .await
+}
+
+/// List every registered user (admin-gated server-side). Returns
+/// `[{id, username, level}]` — no password hashes. Used by the client
+/// to populate the admin password-reset dropdown.
+#[tauri::command]
+pub async fn auth_list_users(
+    state: State<'_, AppStateHandle>,
+) -> AppResult<Vec<crate::transport::UserEntry>> {
+    with_manager(&state, |m| async move { m.list_users().await }).await
+}
+
+/// Delete a user account (admin-gated server-side). The active credential
+/// authorizes the call. `target_user_id` is the UUID of the user to delete.
+/// Removes the user row + cascades to sessions, follows, audit entries.
+/// The deleted user's downloaded content remains in the local cache.
+#[tauri::command]
+pub async fn auth_delete_user(
+    state: State<'_, AppStateHandle>,
+    target_user_id: String,
+) -> AppResult<()> {
+    with_manager(&state, |m| async move { m.delete_user(&target_user_id).await }).await
 }
 
 // ---------------------------------------------------------------------------

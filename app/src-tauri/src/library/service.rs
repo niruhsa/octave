@@ -33,13 +33,13 @@ pub struct LibraryView<T> {
 }
 
 impl<T> LibraryView<T> {
-    fn server_with_total(items: Vec<T>, total: i64) -> Self {
+    pub(crate) fn server_with_total(items: Vec<T>, total: i64) -> Self {
         Self { source: LibrarySource::Server, items, total: Some(total) }
     }
-    fn server(items: Vec<T>) -> Self {
+    pub(crate) fn server(items: Vec<T>) -> Self {
         Self { source: LibrarySource::Server, items, total: None }
     }
-    fn cache(items: Vec<T>) -> Self {
+    pub(crate) fn cache(items: Vec<T>) -> Self {
         Self { source: LibrarySource::Cache, items, total: None }
     }
 }

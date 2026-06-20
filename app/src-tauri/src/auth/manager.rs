@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
-use crate::transport::{Credential, PermissionTier, ServerClient, ServerConfig};
+use crate::transport::{Credential, PermissionTier, ServerClient, ServerConfig, UploadResult};
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
 /// `StoredCredential` minus the secret material.
@@ -89,12 +89,19 @@ impl AuthManager {
         ok
     }
 
-    /// Username/password login. Persists the resulting bearer token.
+    /// Username/password login. Persists the resulting bearer token AND
+    /// the server URLs so the app can auto-reconnect on restart (no
+    /// re-typing the server address). Only Bearer sessions are
+    /// auto-restored — `SECRET_KEY` entries carry URLs too but are
+    /// skipped by the boot-time restore.
     pub async fn login(&self, username: &str, password: &str) -> AppResult<AuthSession> {
         let outcome = self.server.login(username, password).await?;
+        let cfg = self.server.config();
         let cred = StoredCredential {
             kind: StoredCredentialKind::Bearer,
             secret: outcome.token.clone(),
+            rest_url: Some(cfg.rest_url.clone()),
+            grpc_url: Some(cfg.grpc_url.clone()),
             user_id: Some(outcome.user_id.clone()),
             username: Some(username.to_string()),
             tier: Some(outcome.tier),
@@ -115,12 +122,17 @@ impl AuthManager {
     /// Install a pre-shared `SECRET_KEY` as the active credential. We
     /// verify it via `WhoAmI` before persisting so the user sees an
     /// immediate failure for typos instead of a silent broken state.
+    /// Server URLs are saved too, but SecretKey sessions are NOT
+    /// auto-restored on boot (the user must re-enter the key).
     pub async fn set_secret_key(&self, key: &str) -> AppResult<AuthSession> {
         let probe = Credential::SecretKey(key.to_string());
         let who = self.server.whoami(&probe).await?;
+        let cfg = self.server.config();
         let cred = StoredCredential {
             kind: StoredCredentialKind::SecretKey,
             secret: key.to_string(),
+            rest_url: Some(cfg.rest_url.clone()),
+            grpc_url: Some(cfg.grpc_url.clone()),
             user_id: None,
             username: None,
             tier: Some(who.tier),
@@ -136,6 +148,65 @@ impl AuthManager {
             tier: who.tier,
             expires_at: None,
         })
+    }
+
+    /// Register a new account on the server. Server-gated to Admin callers
+    /// (or `SECRET_KEY`, which is effective Admin). The active credential
+    /// authorizes the call; the new account is NOT logged in locally —
+    /// the admin stays signed in. Returns the new user id.
+    pub async fn register(
+        &self,
+        username: &str,
+        password: &str,
+        tier: PermissionTier,
+    ) -> AppResult<String> {
+        let cred = self.credential().await?;
+        self.server.register(&cred, username, password, tier).await
+    }
+
+    /// Change (or admin-reset) a user's password. The active credential
+    /// authorizes the call. `old_password` is empty for admin/secret-key
+    /// resets; required + verified server-side for non-admin self-changes.
+    /// The caller picks the target `user_id` (self-change uses the
+    /// session's own id). The session is NOT invalidated — the user keeps
+    /// their current token; a re-login with the new password works too.
+    pub async fn change_password(
+        &self,
+        target_user_id: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server
+            .change_password(&cred, target_user_id, old_password, new_password)
+            .await
+    }
+
+    /// List every registered user (admin-gated server-side). Returns
+    /// id/username/tier for each — no password hashes.
+    pub async fn list_users(&self) -> AppResult<Vec<crate::transport::UserEntry>> {
+        let cred = self.credential().await?;
+        self.server.list_users(&cred).await
+    }
+
+    /// Delete a user account (admin-gated server-side). The active
+    /// credential authorizes the call. `target_user_id` is the UUID of
+    /// the user to delete.
+    pub async fn delete_user(&self, target_user_id: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.delete_user(&cred, target_user_id).await
+    }
+
+    /// Upload a file (single audio or archive) to the server. Manager+
+    /// gated server-side. `source_path` is an absolute path to a local
+    /// file — the command handler reads it before calling this method.
+    pub async fn upload_file(
+        &self,
+        filename: &str,
+        data: Vec<u8>,
+    ) -> AppResult<UploadResult> {
+        let cred = self.credential().await?;
+        self.server.upload_file(&cred, filename, data).await
     }
 
     /// Resolve the current credential against the server. Updates the

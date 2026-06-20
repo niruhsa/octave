@@ -1,6 +1,7 @@
 //! gRPC AuthService implementation.
 
 use tonic::{Request, Response, Status};
+use uuid::Uuid;
 
 use crate::auth::service::{AuthService, Credential};
 use crate::auth::Identity;
@@ -87,6 +88,60 @@ impl pb::auth_service_server::AuthService for AuthServer {
         Ok(Response::new(pb::RegisterResponse {
             user_id: id.to_string(),
         }))
+    }
+
+    async fn change_password(
+        &self,
+        req: Request<pb::ChangePasswordRequest>,
+    ) -> Result<Response<pb::ChangePasswordResponse>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let body = req.into_inner();
+        let target_id = Uuid::parse_str(&body.user_id).map_err(|e| {
+            Status::invalid_argument(format!("invalid user_id: {e}"))
+        })?;
+        let old = if body.old_password.is_empty() {
+            None
+        } else {
+            Some(body.old_password.as_str())
+        };
+        self.auth
+            .change_password(&caller, target_id, old, &body.new_password)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ChangePasswordResponse {}))
+    }
+
+    async fn list_users(
+        &self,
+        req: Request<pb::ListUsersRequest>,
+    ) -> Result<Response<pb::ListUsersResponse>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let users = self.auth.list_users(&caller).await.map_err(map_err)?;
+        Ok(Response::new(pb::ListUsersResponse {
+            users: users
+                .into_iter()
+                .map(|u| pb::list_users_response::UserEntry {
+                    id: u.id.to_string(),
+                    username: u.username,
+                    level: to_pb_level(u.level) as i32,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn delete_user(
+        &self,
+        req: Request<pb::DeleteUserRequest>,
+    ) -> Result<Response<pb::DeleteUserResponse>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let target_id = Uuid::parse_str(&req.into_inner().user_id).map_err(|e| {
+            Status::invalid_argument(format!("invalid user_id: {e}"))
+        })?;
+        self.auth
+            .delete_user(&caller, target_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::DeleteUserResponse {}))
     }
 }
 

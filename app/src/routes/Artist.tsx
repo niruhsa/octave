@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { libraryListAlbumsByArtist } from "../ipc";
+import { Cover } from "../components/Cover";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
 
@@ -42,7 +43,7 @@ export default function Artist() {
                 key={a.id}
                 className="flex flex-col gap-2 rounded border border-neutral-800 p-3"
               >
-                <div className="aspect-square w-full rounded bg-neutral-800" />
+                <Cover album={a} size={160} />
                 <div className="flex items-start gap-2">
                   <DownloadedDot downloaded={a.downloaded} />
                   <div className="flex-1">

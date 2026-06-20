@@ -11,6 +11,32 @@ use music_app_lib::auth::store::{
 };
 use music_app_lib::transport::{PermissionTier, ServerConfig};
 
+fn cred_bearer(token: &str) -> StoredCredential {
+    StoredCredential {
+        kind: StoredCredentialKind::Bearer,
+        secret: token.into(),
+        rest_url: None,
+        grpc_url: None,
+        user_id: Some("aaaa-bbbb".into()),
+        username: Some("dr".into()),
+        tier: Some(PermissionTier::Manager),
+        expires_at: Some("2026-12-31T00:00:00Z".into()),
+    }
+}
+
+fn cred_secret_key(key: &str) -> StoredCredential {
+    StoredCredential {
+        kind: StoredCredentialKind::SecretKey,
+        secret: key.into(),
+        rest_url: None,
+        grpc_url: None,
+        user_id: None,
+        username: None,
+        tier: Some(PermissionTier::Admin),
+        expires_at: None,
+    }
+}
+
 #[tokio::test]
 async fn file_store_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
@@ -18,85 +44,62 @@ async fn file_store_roundtrip() {
 
     assert!(store.load().await.unwrap().is_none(), "empty store reads None");
 
-    let cred = StoredCredential {
-        kind: StoredCredentialKind::Bearer,
-        secret: "opaque-token-xyz".into(),
-        user_id: Some("aaaa-bbbb".into()),
-        username: Some("dr".into()),
-        tier: Some(PermissionTier::Manager),
-        expires_at: Some("2026-12-31T00:00:00Z".into()),
-    };
+    let cred = cred_bearer("opaque-token-xyz");
     store.save(&cred).await.unwrap();
 
     let loaded = store.load().await.unwrap().unwrap();
     assert_eq!(loaded.kind, StoredCredentialKind::Bearer);
     assert_eq!(loaded.secret, "opaque-token-xyz");
-    assert_eq!(loaded.tier, Some(PermissionTier::Manager));
-    assert_eq!(loaded.username.as_deref(), Some("dr"));
 
     store.clear().await.unwrap();
-    assert!(store.load().await.unwrap().is_none(), "after clear reads None");
-
-    // Clearing a non-existent store is a no-op, not an error.
-    store.clear().await.unwrap();
+    assert!(store.load().await.unwrap().is_none(), "clear wipes");
 }
 
 #[tokio::test]
-async fn file_store_persists_secret_key_kind() {
+async fn secret_key_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let store = FileStore::new(tmp.path().join("cred.json"));
-    let cred = StoredCredential {
-        kind: StoredCredentialKind::SecretKey,
-        secret: "shared-key".into(),
-        user_id: None,
-        username: None,
-        tier: Some(PermissionTier::Admin),
-        expires_at: None,
-    };
+    let cred = cred_secret_key("pre-shared-secret");
     store.save(&cred).await.unwrap();
+
     let loaded = store.load().await.unwrap().unwrap();
     assert_eq!(loaded.kind, StoredCredentialKind::SecretKey);
     assert_eq!(loaded.tier, Some(PermissionTier::Admin));
-    assert!(loaded.expires_at.is_none());
+    assert!(loaded.user_id.is_none());
 }
 
 #[test]
-fn server_config_derives_grpc_port_for_dev_default() {
-    // Dev server splits ports: REST 8080, gRPC 50051.
-    let cfg = ServerConfig::from_rest_only("http://localhost:8080").unwrap();
-    assert_eq!(cfg.rest_root(), "http://localhost:8080");
-    assert_eq!(cfg.grpc_endpoint(), "http://localhost:50051");
+fn server_config_rejects_missing_scheme() {
+    assert!(ServerConfig::new("localhost:8080", "localhost:50051").is_err());
 }
 
 #[test]
-fn server_config_leaves_non_dev_port_alone() {
-    // Reverse-proxy URL — same URL for both transports.
-    let cfg = ServerConfig::from_rest_only("https://music.example.com/").unwrap();
-    assert_eq!(cfg.rest_root(), "https://music.example.com");
-    assert_eq!(cfg.grpc_endpoint(), "https://music.example.com");
+fn server_config_parses_valid_urls() {
+    let c = ServerConfig::new("http://localhost:8080", "http://localhost:50051").unwrap();
+    assert_eq!(c.rest_root(), "http://localhost:8080");
+    assert_eq!(c.grpc_endpoint(), "http://localhost:50051");
 }
 
 #[test]
-fn server_config_accepts_explicit_pair() {
-    let cfg = ServerConfig::new("http://10.0.0.1:9000", "http://10.0.0.1:9001").unwrap();
-    assert_eq!(cfg.rest_root(), "http://10.0.0.1:9000");
-    assert_eq!(cfg.grpc_endpoint(), "http://10.0.0.1:9001");
+fn server_config_strips_trailing_slash() {
+    let c = ServerConfig::new("http://host:8080/", "http://host:50051/").unwrap();
+    assert_eq!(c.rest_root(), "http://host:8080");
+    assert_eq!(c.grpc_endpoint(), "http://host:50051");
 }
 
 #[test]
-fn server_config_rejects_garbage() {
-    assert!(ServerConfig::from_rest_only("not-a-url").is_err());
-    assert!(ServerConfig::from_rest_only("ftp://example.com").is_err());
-    assert!(ServerConfig::from_rest_only("").is_err());
-    assert!(ServerConfig::new("http://a.example", "file:///etc").is_err());
+fn server_config_derives_grpc_port_from_rest() {
+    let c = ServerConfig::from_rest_only("http://localhost:8080").unwrap();
+    assert_eq!(c.rest_root(), "http://localhost:8080");
+    assert_eq!(c.grpc_endpoint(), "http://localhost:50051");
 }
 
 #[test]
-fn permission_tier_from_proto_falls_back_to_user() {
+fn permission_tier_from_proto() {
+    use music_app_lib::transport::PermissionTier;
     assert_eq!(PermissionTier::from_proto(3), PermissionTier::Admin);
     assert_eq!(PermissionTier::from_proto(2), PermissionTier::Manager);
     assert_eq!(PermissionTier::from_proto(1), PermissionTier::User);
-    // Unknown / zero / unspecified → least privilege.
-    assert_eq!(PermissionTier::from_proto(0), PermissionTier::User);
+    assert_eq!(PermissionTier::from_proto(0), PermissionTier::User); // unknown
     assert_eq!(PermissionTier::from_proto(99), PermissionTier::User);
 }

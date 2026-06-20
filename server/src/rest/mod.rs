@@ -14,12 +14,14 @@ use std::net::SocketAddr;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Request, State},
+    extract::Request,
+    extract::State,
     http::{HeaderMap, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
+use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -55,6 +57,9 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
         .route("/auth/whoami", get(whoami))
         .route("/auth/register", post(register))
         .route("/auth/logout", post(logout))
+        .route("/users", get(list_users))
+        .route("/users/:id", delete(delete_user))
+        .route("/users/:id/password", put(change_password))
         .merge(library::router())
         .merge(playlist::router())
         .merge(streaming::router())
@@ -220,6 +225,103 @@ async fn logout(
     if let Some(Credential::Bearer(t)) = extract_credential(&headers) {
         state.auth.logout(&t).await?;
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    // Empty/omitted for admin resets; required + verified for non-admin
+    // self-changes.
+    #[serde(default)]
+    old_password: String,
+    new_password: String,
+}
+
+/// `PUT /users/:id/password` — change (or admin-reset) a user's password.
+/// Authorization mirrors the gRPC `ChangePassword` RPC: admin/secret-key
+/// callers may reset any user (old_password ignored); non-admin callers
+/// may only reset their own and must supply a verified `old_password`.
+async fn change_password(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> std::result::Result<StatusCode, ApiError> {
+    let caller = req
+        .extensions()
+        .get::<Identity>()
+        .ok_or_else(|| AppError::Unauthenticated("missing identity".into()))?
+        .clone();
+
+    let id = req
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .ok_or_else(|| AppError::InvalidArgument("missing user id in path".into()))?;
+    let target_id = Uuid::parse_str(id)
+        .map_err(|e| AppError::InvalidArgument(format!("invalid user id: {e}")))?;
+
+    let body: ChangePasswordRequest = parse_json(req).await?;
+    let old = if body.old_password.is_empty() {
+        None
+    } else {
+        Some(body.old_password.as_str())
+    };
+    state
+        .auth
+        .change_password(&caller, target_id, old, &body.new_password)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /users` — list every registered user (admin-gated). Returns
+/// `[{id, username, level}]` — no password hashes. Used by the client
+/// to populate the admin password-reset dropdown.
+async fn list_users(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let caller = req
+        .extensions()
+        .get::<Identity>()
+        .ok_or_else(|| AppError::Unauthenticated("missing identity".into()))?
+        .clone();
+    let users = state.auth.list_users(&caller).await?;
+    Ok(Json(serde_json::json!({
+        "users": users
+            .iter()
+            .map(|u| serde_json::json!({
+                "id": u.id.to_string(),
+                "username": u.username,
+                "level": u.level,
+            }))
+            .collect::<Vec<_>>()
+    })))
+}
+
+/// `DELETE /users/:id` — delete a user (admin-gated). Cascades:
+/// sessions, playlists, follows (`ON DELETE CASCADE`); audit-log
+/// actor references become NULL. An audit `user.delete` entry is
+/// written before the row is destroyed.
+async fn delete_user(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> std::result::Result<StatusCode, ApiError> {
+    let caller = req
+        .extensions()
+        .get::<Identity>()
+        .ok_or_else(|| AppError::Unauthenticated("missing identity".into()))?
+        .clone();
+
+    let id = req
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .ok_or_else(|| AppError::InvalidArgument("missing user id in path".into()))?;
+    let target_id = Uuid::parse_str(id)
+        .map_err(|e| AppError::InvalidArgument(format!("invalid user id: {e}")))?;
+
+    state.auth.delete_user(&caller, target_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

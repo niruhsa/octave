@@ -12,6 +12,7 @@ use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
     Album, Artist, Credential, PermissionTier, Playlist, PlaylistWithTracks, ServerConfig, Track,
+    UploadResult,
 };
 use crate::error::{AppError, AppResult};
 
@@ -105,6 +106,80 @@ impl ServerClient {
             }
         }
         self.rest.logout(cred).await
+    }
+
+    /// Register a new account. Server-gated to Admin callers (or
+    /// `SECRET_KEY`); the active credential is attached for authorization.
+    /// Returns the new user id. Auth/merit rejections (403 / invalid /
+    /// duplicate) do NOT trigger the REST fallback — the server spoke.
+    pub async fn register(
+        &self,
+        cred: &Credential,
+        username: &str,
+        password: &str,
+        level: super::PermissionTier,
+    ) -> AppResult<String> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.register(cred, username, password, level).await {
+                Ok(id) => return Ok(id),
+                Err(e) if is_transport_error(&e) => fallback_log("register", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.register(cred, username, password, level).await
+    }
+
+    /// Change (or admin-reset) a user's password. `old_password` empty for
+    /// admin/secret-key resets; required + verified server-side for non-admin
+    /// self-changes. Auth/merit rejections (403 / unauthenticated / invalid /
+    /// not-found) do NOT trigger the REST fallback — the server spoke.
+    pub async fn change_password(
+        &self,
+        cred: &Credential,
+        target_user_id: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .change_password(cred, target_user_id, old_password, new_password)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("change_password", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest
+            .change_password(cred, target_user_id, old_password, new_password)
+            .await
+    }
+
+    /// List every registered user. Admin-gated; returns id/username/tier.
+    /// Used by the client to populate the admin password-reset dropdown.
+    pub async fn list_users(&self, cred: &Credential) -> AppResult<Vec<super::UserEntry>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_users(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_users", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_users(cred).await
+    }
+
+    /// Delete a user account. Admin-gated; reuses `map_password_err` for the
+    /// gRPC error mapping (same auth/merit semantics — `PermissionDenied`→
+    /// `Forbidden`, `NotFound`→`Internal`, transport faults fall back).
+    pub async fn delete_user(&self, cred: &Credential, user_id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_user(cred, user_id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("delete_user", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.delete_user(cred, user_id).await
     }
 
     /// Liveness probe used by the online/offline detector. We only use REST
@@ -367,6 +442,27 @@ impl ServerClient {
         self.rest
             .reorder_playlist_track(cred, playlist_id, from_position, to_position)
             .await
+    }
+
+    // ----- Uploads (Phase 8) -----------------------------------------------
+
+    /// Upload a file (single audio or archive). Manager+ gated server-side.
+    /// Tries gRPC (client-streaming) first; falls back to REST multipart.
+    /// Auth/merit rejections do NOT trigger the fallback — the server spoke.
+    pub async fn upload_file(
+        &self,
+        cred: &Credential,
+        filename: &str,
+        data: Vec<u8>,
+    ) -> AppResult<UploadResult> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.upload_file(cred, filename, data.clone()).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("upload_file", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.upload_file(cred, filename, data).await
     }
 
     /// Open a gRPC channel for one logical operation. Returns `None` (not

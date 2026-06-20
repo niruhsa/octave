@@ -83,6 +83,36 @@ pub struct PlaylistTrack {
     pub position: i64,
 }
 
+// ── Uploads (Phase 8) ─────────────────────────────────────────────────
+
+/// Result of a single-file upload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SingleUploadResult {
+    pub track_id: String,
+    pub path: String,
+}
+
+/// Result of an archive upload (zip/tarball).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveUploadResult {
+    pub kind: String,
+    pub ingested: u64,
+    pub already_indexed: u64,
+    pub non_audio_skipped: u64,
+    pub errors: u64,
+    pub track_ids: Vec<String>,
+}
+
+/// Tagged union — the server returns either a single-file or archive result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "variant", content = "data")]
+pub enum UploadResult {
+    #[serde(rename = "single")]
+    Single(SingleUploadResult),
+    #[serde(rename = "archive")]
+    Archive(ArchiveUploadResult),
+}
+
 /// A playlist plus its ordered tracks — what `GetPlaylist` returns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaylistWithTracks {
@@ -131,6 +161,14 @@ pub enum PermissionTier {
     Admin,
     Manager,
     User,
+}
+
+/// One registered user — what `ListUsers` returns. No password hash.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserEntry {
+    pub id: String,
+    pub username: String,
+    pub level: PermissionTier,
 }
 
 impl PermissionTier {

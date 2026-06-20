@@ -98,6 +98,30 @@ impl UserRepo for PgRepos {
         Ok(())
     }
 
+    async fn update_password(&self, id: Uuid, password_hash: &str) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE users SET password_hash = $1, updated_at = now()
+               WHERE id = $2"#,
+        )
+        .bind(password_hash)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn list(&self) -> Result<Vec<User>> {
+        sqlx::query_as::<_, User>(
+            r#"SELECT id, username, password_hash, permission_level,
+                       created_at, updated_at
+               FROM users ORDER BY username"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
     async fn delete(&self, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(id)

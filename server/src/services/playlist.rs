@@ -698,6 +698,12 @@ mod tests {
         async fn update_permission(&self, _: Uuid, _: PermissionLevel) -> Result<()> {
             Ok(())
         }
+        async fn update_password(&self, _: Uuid, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn list(&self) -> Result<Vec<User>> {
+            Ok(vec![])
+        }
         async fn delete(&self, _: Uuid) -> Result<()> {
             Ok(())
         }

@@ -449,3 +449,76 @@ pub async fn mark_op_failed(pool: &SqlitePool, id: i64, error: &str) -> AppResul
         .await?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// settings (Phase 6 — download prefs: root override, Wi-Fi-only toggle)
+// ---------------------------------------------------------------------------
+
+pub async fn get_setting(pool: &SqlitePool, key: &str) -> AppResult<Option<String>> {
+    let row = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_setting(pool: &SqlitePool, key: &str) -> AppResult<()> {
+    sqlx::query("DELETE FROM settings WHERE key = ?1")
+        .bind(key)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// storage accounting (Phase 6)
+// ---------------------------------------------------------------------------
+
+/// Total bytes used by downloaded tracks (sum of `file_size` where known).
+/// Tracks without a recorded `file_size` are skipped — they still count
+/// toward the row count but not the byte total.
+pub async fn downloaded_bytes(pool: &SqlitePool) -> AppResult<i64> {
+    let total: Option<i64> =
+        sqlx::query_scalar("SELECT COALESCE(SUM(file_size), 0) FROM tracks WHERE file_size IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+    Ok(total.unwrap_or(0))
+}
+
+/// Count of downloaded tracks (rows in `tracks`). Used for storage accounting.
+pub async fn count_downloaded_tracks(pool: &SqlitePool) -> AppResult<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tracks")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+/// Count of cached album covers (one row per downloaded cover).
+pub async fn downloaded_cover_count(pool: &SqlitePool) -> AppResult<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM album_art")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+/// Count of downloaded tracks whose album is `album_id`. Used by the
+/// delete flow to decide whether to drop the album's cover row.
+pub async fn count_downloaded_tracks_for_album(pool: &SqlitePool, album_id: &str) -> AppResult<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tracks WHERE album_id = ?1")
+        .bind(album_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}

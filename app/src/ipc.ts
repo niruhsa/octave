@@ -64,6 +64,52 @@ export const authLogout = () => invoke<void>("auth_logout");
 /** `/health` ping. Drives the online/offline indicator. */
 export const authRefreshOnline = () => invoke<boolean>("auth_refresh_online");
 
+/**
+ * Register a new account. Server-gated to Admin callers (or `SECRET_KEY`,
+ * which is effective Admin); the active credential authorizes the call.
+ * Returns the new user id. The new account is not logged in locally —
+ * the admin stays signed in. Server enforces: username non-empty,
+ * password ≥ 8 chars, username unique.
+ */
+export const authRegister = (
+  username: string,
+  password: string,
+  tier: PermissionTier,
+) => invoke<string>("auth_register", { username, password, tier });
+
+/**
+ * Change (or admin-reset) a user's password. `oldPassword` is empty for
+ * admin/secret-key resets; required + verified server-side for non-admin
+ * self-changes. `targetUserId` is the user whose password changes
+ * (self-change uses the session's own id). The current session stays
+ * valid. Server enforces: new password ≥ 8 chars.
+ */
+export const authChangePassword = (
+  targetUserId: string,
+  oldPassword: string,
+  newPassword: string,
+) =>
+  invoke<void>("auth_change_password", {
+    targetUserId,
+    oldPassword,
+    newPassword,
+  });
+
+export type UserEntry = {
+  id: string;
+  username: string;
+  level: PermissionTier;
+};
+
+/** List every registered user (admin-gated). Used to populate the admin
+ *  password-reset dropdown. */
+export const authListUsers = () =>
+  invoke<UserEntry[]>("auth_list_users");
+
+/** Delete a user account (admin-gated server-side). */
+export const authDeleteUser = (targetUserId: string) =>
+  invoke<void>("auth_delete_user", { targetUserId });
+
 // ---------------------------------------------------------------------------
 // library browse + search (Phase 3)
 //
@@ -135,6 +181,74 @@ export const librarySearchTracks = (query: string, page: Page = {}) =>
   invoke<LibraryView<MergedTrack>>("library_search_tracks", { query, ...page });
 
 // ---------------------------------------------------------------------------
+// playlists (Phase 7)
+//
+// `playlist_list` / `playlist_get` follow the same server-then-cache
+// fallback as the library calls. Mutations either land on the server
+// immediately (cache mirrored) or, when offline / the playlist is a
+// client-minted `local:` placeholder, are recorded as a `PendingOp` and
+// applied optimistically to the cache. `PlaylistDetailView.entries` reuse
+// `MergedTrack` so they drop straight into the player queue.
+// ---------------------------------------------------------------------------
+
+export type MergedPlaylist = {
+  id: string;
+  owner_id: string;
+  name: string;
+  /** True for client-minted `local:` ids whose create op is still queued. */
+  local: boolean;
+};
+
+export type MergedPlaylistEntry = {
+  /** 1-based contiguous position. */
+  position: number;
+  added_at: string;
+  track: MergedTrack;
+};
+
+export type PlaylistDetailView = {
+  source: LibrarySource;
+  playlist: MergedPlaylist;
+  entries: MergedPlaylistEntry[];
+};
+
+export const playlistList = () =>
+  invoke<LibraryView<MergedPlaylist>>("playlist_list");
+
+export const playlistGet = (playlistId: string) =>
+  invoke<PlaylistDetailView | null>("playlist_get", { playlistId });
+
+export const playlistCreate = (name: string) =>
+  invoke<MergedPlaylist>("playlist_create", { name });
+
+export const playlistRename = (playlistId: string, name: string) =>
+  invoke<MergedPlaylist>("playlist_rename", { playlistId, name });
+
+export const playlistDelete = (playlistId: string) =>
+  invoke<void>("playlist_delete", { playlistId });
+
+/** `position = 0` ⇒ append; `position ≥ 1` ⇒ 1-based insert with shift. */
+export const playlistAddTrack = (
+  playlistId: string,
+  trackId: string,
+  position: number,
+) => invoke<PlaylistDetailView>("playlist_add_track", { playlistId, trackId, position });
+
+export const playlistRemoveTrack = (playlistId: string, position: number) =>
+  invoke<PlaylistDetailView>("playlist_remove_track", { playlistId, position });
+
+export const playlistReorderTrack = (
+  playlistId: string,
+  fromPosition: number,
+  toPosition: number,
+) =>
+  invoke<PlaylistDetailView>("playlist_reorder_track", {
+    playlistId,
+    fromPosition,
+    toPosition,
+  });
+
+// ---------------------------------------------------------------------------
 // playback (Phase 4)
 //
 // `player_media_url` returns the platform-correct URL for the webview's
@@ -197,6 +311,95 @@ export const syncPendingCount = () => invoke<number>("sync_pending_count");
 /** Append a typed op to the offline-edit outbox. Returns the new op id. */
 export const syncEnqueueOp = (op: PendingOp) =>
   invoke<number>("sync_enqueue_op", { op });
+
+// ---------------------------------------------------------------------------
+// downloads (Phase 6)
+//
+// `download_track` / `download_album` / `download_playlist` fetch files +
+// cover art into app storage and write the cache rows that make them
+// playable offline. Progress is reported via the `download-progress` Tauri
+// event (see `onDownloadProgress`). `download_delete` removes a file + its
+// cache row (and prunes the album cover when the album is emptied).
+// ---------------------------------------------------------------------------
+
+export type TrackDownloadResult = {
+  track_id: string;
+  local_path: string;
+  bytes: number;
+  skipped: boolean;
+};
+
+export type BatchKind = "album" | "playlist";
+
+export type BatchDownloadResult = {
+  id: string;
+  kind: BatchKind;
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+};
+
+export type StorageUsage = {
+  bytes: number;
+  track_count: number;
+  cover_count: number;
+};
+
+export type ProgressScope = "track" | "batch";
+export type ProgressPhase = "start" | "progress" | "done" | "error";
+
+export type ProgressEvent = {
+  scope: ProgressScope;
+  id: string;
+  phase: ProgressPhase;
+  received?: number;
+  total?: number;
+  track_id?: string;
+  index?: number;
+  total_tracks?: number;
+  message?: string;
+};
+
+export const downloadTrack = (trackId: string) =>
+  invoke<TrackDownloadResult>("download_track", { trackId });
+export const downloadAlbum = (albumId: string) =>
+  invoke<BatchDownloadResult>("download_album", { albumId });
+export const downloadPlaylist = (playlistId: string) =>
+  invoke<BatchDownloadResult>("download_playlist", { playlistId });
+export const downloadDelete = (trackId: string) =>
+  invoke<void>("download_delete", { trackId });
+export const downloadsStorageUsage = () =>
+  invoke<StorageUsage>("downloads_storage_usage");
+export const downloadsDir = () => invoke<string>("downloads_dir");
+export const downloadsSetDir = (path: string) =>
+  invoke<void>("downloads_set_dir", { path });
+export const downloadsWifiOnly = () => invoke<boolean>("downloads_wifi_only");
+export const downloadsSetWifiOnly = (on: boolean) =>
+  invoke<void>("downloads_set_wifi_only", { on });
+
+/**
+ * Subscribe to download-progress events. Returns an unlisten fn.
+ * Callers aggregate by `id` to render a per-track / per-batch bar.
+ */
+export async function onDownloadProgress(
+  cb: (e: ProgressEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ProgressEvent>("download-progress", (e) => cb(e.payload));
+}
+
+/** Platform-correct `cover://` URL for a downloaded album cover. */
+export function coverUrl(albumId: string): string {
+  // Mirrors `player_media_url`'s platform split: Windows/Android need the
+  // `http://<scheme>.localhost` form because they don't allow custom schemes.
+  const isWinLike =
+    typeof navigator !== "undefined" && /Windows|Android/i.test(navigator.userAgent);
+  return isWinLike
+    ? `http://cover.localhost/${encodeURIComponent(albumId)}`
+    : `cover://localhost/${encodeURIComponent(albumId)}`;
+}
 
 // ---------------------------------------------------------------------------
 // offline cache (Phase 1) — types mirror `cache::model` 1:1
@@ -327,3 +530,33 @@ export const cacheUpsertSyncState = (sync: SyncState) =>
   invoke<void>("cache_upsert_sync_state", { sync });
 export const cacheGetSyncState = (entityType: SyncEntityType, entityId: string) =>
   invoke<SyncState | null>("cache_get_sync_state", { entityType, entityId });
+
+// ---------------------------------------------------------------------------
+// uploads (Phase 8)
+//
+// `uploadFile` takes a local file path (from a native dialog picker),
+// reads the bytes in Rust, and pushes them to the server via gRPC
+// (client-streaming) or REST (multipart) fallback. Manager+ gated.
+// ---------------------------------------------------------------------------
+
+export type SingleUploadResult = {
+  track_id: string;
+  path: string;
+};
+
+export type ArchiveUploadResult = {
+  kind: string;
+  ingested: number;
+  already_indexed: number;
+  non_audio_skipped: number;
+  errors: number;
+  track_ids: string[];
+};
+
+export type UploadResult =
+  | { variant: "single"; data: SingleUploadResult }
+  | { variant: "archive"; data: ArchiveUploadResult };
+
+/** Upload a single file (audio track or archive) from a local path. */
+export const uploadFile = (path: string) =>
+  invoke<UploadResult>("upload_file", { path });

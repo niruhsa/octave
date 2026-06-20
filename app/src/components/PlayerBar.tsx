@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "../player/store";
 import { formatDuration } from "../lib/format";
+import { coverUrl } from "../ipc";
 
 /**
  * Persistent playback bar + hidden `<audio>` element.
@@ -89,7 +90,18 @@ export default function PlayerBar() {
           <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-2">
         {/* Now-playing */}
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="h-10 w-10 shrink-0 rounded bg-neutral-800" />
+          {current?.downloaded ? (
+            <img
+              src={coverUrl(current.album_id)}
+              alt="cover"
+              className="h-10 w-10 shrink-0 rounded bg-neutral-800 object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
+              }}
+            />
+          ) : (
+            <div className="h-10 w-10 shrink-0 rounded bg-neutral-800" />
+          )}
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">
               {current?.title ?? "—"}
