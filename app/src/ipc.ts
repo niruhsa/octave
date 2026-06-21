@@ -180,6 +180,23 @@ export const libraryListTracksByAlbum = (albumId: string) =>
 export const librarySearchTracks = (query: string, page: Page = {}) =>
   invoke<LibraryView<MergedTrack>>("library_search_tracks", { query, ...page });
 
+/** Delete an artist, album, or track. Manager+ gated server-side. */
+export const libraryDeleteArtist = (id: string) =>
+  invoke<void>("library_delete_artist", { id });
+export const libraryDeleteAlbum = (id: string) =>
+  invoke<void>("library_delete_album", { id });
+export const libraryDeleteTrack = (id: string) =>
+  invoke<void>("library_delete_track", { id });
+
+export type RescanReport = {
+  tracks_checked: number;
+  tracks_updated: number;
+  errors: number;
+};
+
+/** Re-measure actual durations for all tracks. Manager+ gated. */
+export const libraryRescan = () => invoke<RescanReport>("library_rescan");
+
 // ---------------------------------------------------------------------------
 // playlists (Phase 7)
 //
@@ -560,3 +577,32 @@ export type UploadResult =
 /** Upload a single file (audio track or archive) from a local path. */
 export const uploadFile = (path: string) =>
   invoke<UploadResult>("upload_file", { path });
+
+export type FolderUploadResult = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
+};
+
+/** Upload every audio + archive file in a directory tree. */
+export const uploadFolder = (dirPath: string) =>
+  invoke<FolderUploadResult>("upload_folder", { dirPath });
+
+export type UploadProgressEvent = {
+  phase: "scanning" | "uploading" | "done";
+  current: number;
+  total: number;
+  file?: string;
+  ok?: boolean;
+  message?: string;
+};
+
+/** Subscribe to upload-progress events. Returns an unlisten fn. */
+export async function onUploadProgress(
+  cb: (e: UploadProgressEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<UploadProgressEvent>("upload-progress", (e) => cb(e.payload));
+}

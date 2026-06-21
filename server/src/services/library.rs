@@ -5,9 +5,11 @@
 //! - Mutations: `Manager+`. Every mutation writes an [`audit_log`] row.
 //! - Pagination is capped (`MAX_PAGE_LIMIT`).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::auth::Identity;
@@ -26,6 +28,10 @@ pub struct LibraryService {
     pub albums: Arc<dyn AlbumRepo>,
     pub tracks: Arc<dyn TrackRepo>,
     pub audit: Arc<dyn AuditRepo>,
+    /// Root directory for the organised library.  When set, file deletions
+    /// resolve relative `file_path` values against this root and remove the
+    /// on-disk file.  Absolute `file_path` values are used as-is.
+    pub library_root: Option<PathBuf>,
 }
 
 impl LibraryService {
@@ -40,7 +46,14 @@ impl LibraryService {
             albums,
             tracks,
             audit,
+            library_root: None,
         }
+    }
+
+    /// Set the library root for file-deletion support.
+    pub fn with_library_root(mut self, root: Option<PathBuf>) -> Self {
+        self.library_root = root;
+        self
     }
 
     // -----------------------------------------------------------------------
@@ -113,6 +126,14 @@ impl LibraryService {
         if before.is_none() {
             return Ok(false);
         }
+
+        // Cascade: delete every album → its tracks → then the artist.
+        let albums = self.albums.list_by_artist(id).await?;
+        for album in &albums {
+            // Reuse delete_album which cascades to tracks.
+            self.delete_album(caller, album.id).await?;
+        }
+
         self.artists.delete(id).await?;
         self.audit(caller, "artist.delete", "artist", Some(id), before.as_ref(), None::<&()>)
             .await?;
@@ -226,6 +247,15 @@ impl LibraryService {
         if before.is_none() {
             return Ok(false);
         }
+
+        // Cascade: delete every track in this album, then the album.
+        let tracks = self.tracks.list_by_album(id).await?;
+        for track in &tracks {
+            // Use the full delete_track path so audit entries are written
+            // and files are cleaned up from disk.
+            self.delete_track(caller, track.id).await?;
+        }
+
         self.albums.delete(id).await?;
         self.audit(caller, "album.delete", "album", Some(id), before.as_ref(), None::<&()>)
             .await?;
@@ -327,6 +357,33 @@ impl LibraryService {
         if before.is_none() {
             return Ok(false);
         }
+        // Remove the on-disk file before the DB row (best-effort).
+        let before_ref = before.as_ref().unwrap();
+        if let Some(root) = &self.library_root {
+            let candidate = std::path::PathBuf::from(&before_ref.file_path);
+            let resolved = if candidate.is_absolute() {
+                candidate
+            } else {
+                root.join(&candidate)
+            };
+            if let Err(e) = std::fs::remove_file(&resolved) {
+                warn!(
+                    path = %resolved.display(),
+                    error = %e,
+                    "delete_track: failed to remove file from disk"
+                );
+            }
+            // Prune now-empty parent dirs (Album, then Artist, then
+            // Language) up to the library root. `remove_dir` only succeeds
+            // on an empty directory, so this naturally removes the album
+            // folder when its last track goes, the artist folder when its
+            // last album goes, and the language folder when its last artist
+            // goes — while leaving any folder that still holds other files
+            // (e.g. cover art) untouched.
+            if let Some(parent) = resolved.parent() {
+                self.prune_empty_dirs(parent);
+            }
+        }
         self.tracks.delete(id).await?;
         self.audit(caller, "track.delete", "track", Some(id), before.as_ref(), None::<&()>)
             .await?;
@@ -355,6 +412,63 @@ impl LibraryService {
         }
         let (limit, offset) = paginate(limit, offset);
         self.tracks.search(query, limit, offset).await
+    }
+
+    // -----------------------------------------------------------------------
+    // On-disk cleanup
+    // -----------------------------------------------------------------------
+
+    /// Remove `dir` and its ancestors as long as each is empty and stays
+    /// strictly inside `library_root` (the root itself is never removed).
+    ///
+    /// `std::fs::remove_dir` fails on a non-empty directory, so this walks
+    /// upward and stops at the first directory that still contains entries
+    /// (other tracks, other albums, cover art, etc.). Best-effort: any error
+    /// other than "not empty" is logged and aborts the walk.
+    fn prune_empty_dirs(&self, start: &std::path::Path) {
+        let Some(root) = &self.library_root else {
+            return;
+        };
+        // Canonicalise the root once so the boundary check is robust against
+        // `.`/`..`/symlink differences.
+        let root_canon = match root.canonicalize() {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        let mut dir = start.to_path_buf();
+        // Loop while the current dir canonicalises (exists + accessible);
+        // every other exit condition `break`s out of the body.
+        while let Ok(dir_canon) = dir.canonicalize() {
+            // Never touch the root or anything outside it.
+            if dir_canon == root_canon || !dir_canon.starts_with(&root_canon) {
+                break;
+            }
+
+            match std::fs::read_dir(&dir) {
+                Ok(mut entries) => {
+                    if entries.next().is_some() {
+                        // Not empty — stop here, parents necessarily non-empty too.
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+
+            if let Err(e) = std::fs::remove_dir(&dir) {
+                warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "prune_empty_dirs: failed to remove empty directory"
+                );
+                break;
+            }
+
+            match dir.parent() {
+                Some(p) => dir = p.to_path_buf(),
+                None => break,
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

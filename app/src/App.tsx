@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useEffect, useCallback } from "react";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { RouterProvider, createBrowserRouter, Outlet } from "react-router-dom";
 import Home from "./routes/Home";
 import Login from "./routes/Login";
@@ -23,12 +23,61 @@ import { useDownloadListener } from "./downloads/useDownloads";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Server is authority when online; cache offline. Phase 5 tunes this.
-      staleTime: 30_000,
+      // Always refetch on mount so the UI never shows stale data.
+      // placeholderData keeps the previous view while fetching.
+      staleTime: 0,
+      refetchOnWindowFocus: true,
       retry: 1,
     },
   },
 });
+
+/** Export for modules that can't use hooks (sync engine, etc.). */
+export { queryClient };
+
+/** Cross-tab query invalidation via BroadcastChannel. */
+function useQuerySync() {
+  const qc = useQueryClient();
+  useEffect(() => {
+    try {
+      const ch = new BroadcastChannel("music-app-query-sync");
+      const handler = (e: MessageEvent<{ type: string; queryKey: string[] }>) => {
+        if (e.data?.type === "invalidate" && e.data.queryKey) {
+          qc.invalidateQueries({ queryKey: e.data.queryKey });
+        }
+      };
+      ch.addEventListener("message", handler);
+      return () => {
+        ch.removeEventListener("message", handler);
+        ch.close();
+      };
+    } catch {
+      /* BroadcastChannel unavailable (e.g. some mobile webviews) */
+    }
+  }, [qc]);
+}
+
+/** Persistent singleton channel for sending invalidation messages.
+ *  Creating a new BroadcastChannel per postMessage can drop messages
+ *  due to registration timing in some engines. */
+let _bc: BroadcastChannel | null = null;
+function bc(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === "undefined") return null;
+  if (!_bc) _bc = new BroadcastChannel("music-app-query-sync");
+  return _bc;
+}
+
+/** Post an invalidation to all tabs (including current). */
+export function broadcastInvalidate(queryKey: string[]) {
+  try {
+    bc()?.postMessage({ type: "invalidate", queryKey });
+    // Also invalidate locally — BroadcastChannel delivers to the sending
+    // tab, but some engines delay registration so use an explicit call too.
+    queryClient.invalidateQueries({ queryKey });
+  } catch {
+    /* unavailable */
+  }
+}
 
 function RootLayout() {
   const setSession = useAppStore((s) => s.setSession);
@@ -37,7 +86,16 @@ function RootLayout() {
   useSyncScheduler();
 
   // Phase 6: aggregate download-progress events + read storage usage.
-  useDownloadListener();
+  // When a download finishes (done/error), invalidate all library and
+  // downloads queries so every page picks up the change automatically.
+  const onDownloadComplete = useCallback(() => {
+    broadcastInvalidate(["library"]);
+    broadcastInvalidate(["cache", "downloaded_tracks"]);
+  }, []);
+  useDownloadListener(onDownloadComplete);
+
+  // Cross-tab query invalidation.
+  useQuerySync();
 
   // On boot, ask Rust for any cached session so the UI starts with the
   // right tier without a network round-trip. Errors are non-fatal — they

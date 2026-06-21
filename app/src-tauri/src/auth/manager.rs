@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
-use crate::transport::{Credential, PermissionTier, ServerClient, ServerConfig, UploadResult};
+use crate::transport::{Credential, PermissionTier, RescanReport, ServerClient, ServerConfig, UploadResult};
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
 /// `StoredCredential` minus the secret material.
@@ -204,9 +204,34 @@ impl AuthManager {
         &self,
         filename: &str,
         data: Vec<u8>,
+        cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         let cred = self.credential().await?;
-        self.server.upload_file(&cred, filename, data).await
+        self.server
+            .upload_file(&cred, filename, data, cover)
+            .await
+    }
+
+    /// Delete an artist, album, or track. Manager+ gated server-side.
+    pub async fn delete_artist(&self, id: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.delete_artist(&cred, id).await
+    }
+
+    pub async fn delete_album(&self, id: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.delete_album(&cred, id).await
+    }
+
+    pub async fn delete_track(&self, id: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.delete_track(&cred, id).await
+    }
+
+    /// Re-measure durations for every track in the library. Manager+ gated.
+    pub async fn rescan_library(&self) -> AppResult<RescanReport> {
+        let cred = self.credential().await?;
+        self.server.rescan_library(&cred).await
     }
 
     /// Resolve the current credential against the server. Updates the

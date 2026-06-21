@@ -475,6 +475,55 @@ impl TrackRepo for PgRepos {
             .map_err(db)?;
         Ok(())
     }
+
+    async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>> {
+        sqlx::query_as::<_, TrackIdPath>(
+            "SELECT id, file_path, duration_ms FROM tracks ORDER BY file_path",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn update_duration(&self, id: Uuid, duration_ms: i64) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET duration_ms = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         metadata_json, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(duration_ms)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn update_file_props(
+        &self,
+        id: Uuid,
+        codec: &str,
+        bitrate_kbps: Option<i32>,
+        file_size: Option<i64>,
+    ) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET codec = $2, bitrate_kbps = $3, file_size = $4, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         metadata_json, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(codec)
+        .bind(bitrate_kbps)
+        .bind(file_size)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
 }
 
 // ---------------------------------------------------------------------------

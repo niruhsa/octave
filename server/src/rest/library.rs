@@ -28,6 +28,7 @@ pub fn router() -> Router<RestState> {
         .route("/albums/search", get(search_albums))
         .route("/albums/:id", get(get_album).put(update_album).delete(delete_album))
         .route("/albums/:id/tracks", get(list_tracks_by_album))
+        .route("/albums/:id/cover", get(serve_album_cover))
         .route("/albums/:id/artwork", post(fetch_album_artwork))
         // Tracks
         .route("/tracks", post(create_track))
@@ -36,6 +37,7 @@ pub fn router() -> Router<RestState> {
         .route("/tracks/:id/metadata", patch(edit_track_metadata))
         // Scan
         .route("/library/scan", post(scan_library))
+        .route("/library/rescan", post(rescan_library))
 }
 
 // ---------------------------------------------------------------------------
@@ -497,6 +499,68 @@ async fn fetch_album_artwork(
     }))
 }
 
+/// Serve the cached cover image for an album (if any).
+///
+/// Returns the image bytes with the correct `Content-Type` derived from the
+/// cached file extension, or 404 when no cover has been fetched yet / the
+/// cached file is missing.
+async fn serve_album_cover(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>), ApiError> {
+    use axum::http::header::{CONTENT_TYPE, HeaderValue};
+
+    let caller = id(&req)?;
+    let album = state.library.get_album(&caller, album_id).await?;
+
+    let cover_path = match album.cover_path {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(&p),
+        // No cover_path set → optionally try to fetch if the artwork
+        // service is configured.
+        _ => {
+            if let Some(artwork) = &state.artwork {
+                match artwork.fetch_for_album(&caller, album_id).await {
+                    Ok(Some(new_path)) => std::path::PathBuf::from(&new_path),
+                    Ok(None) => return Err(ApiError::from(crate::error::AppError::NotFound(
+                        "no cover art available for this album".into(),
+                    ))),
+                    Err(e) => return Err(ApiError::from(e)),
+                }
+            } else {
+                return Err(ApiError::from(crate::error::AppError::NotFound(
+                    "no cover art available for this album".into(),
+                )));
+            }
+        }
+    };
+
+    if !cover_path.is_file() {
+        return Err(ApiError::from(crate::error::AppError::NotFound(
+            "cached cover file not found".into(),
+        )));
+    }
+
+    let bytes = tokio::fs::read(&cover_path).await
+        .map_err(|e| crate::error::AppError::Io(e))?;
+
+    let content_type = match cover_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    };
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    Ok((axum::http::StatusCode::OK, headers, bytes))
+}
+
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
@@ -523,6 +587,26 @@ async fn scan_library(
     Ok(Json(ScanDto {
         tracks_added: report.tracks_added,
         tracks_skipped: report.tracks_skipped,
+        errors: report.errors,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct RescanDto {
+    pub tracks_checked: u64,
+    pub tracks_updated: u64,
+    pub errors: u64,
+}
+
+async fn rescan_library(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> Result<Json<RescanDto>, ApiError> {
+    let caller = id(&req)?;
+    let report = state.scan.refresh_durations(&caller).await?;
+    Ok(Json(RescanDto {
+        tracks_checked: report.total,
+        tracks_updated: report.corrected,
         errors: report.errors,
     }))
 }

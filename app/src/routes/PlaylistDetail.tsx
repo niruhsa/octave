@@ -18,6 +18,7 @@ import { formatError } from "../lib/error";
 import { usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useAppStore } from "../store";
+import { broadcastInvalidate } from "../App";
 
 /**
  * /playlists/:id — one playlist with its ordered entries. Reorder via ↑/↓
@@ -67,6 +68,7 @@ export default function PlaylistDetail() {
   const canEdit = isOwnerOrManager || !!playlist?.local;
 
   function refresh() {
+    broadcastInvalidate(["playlists", "detail", id]);
     return qc.invalidateQueries({ queryKey: ["playlists", "detail", id] });
   }
 
@@ -95,6 +97,7 @@ export default function PlaylistDetail() {
     setBusy(true);
     await guard(async () => {
       await playlistRename(playlist.id, trimmed);
+      broadcastInvalidate(["playlists", "mine"]);
       await Promise.all([
         refresh(),
         qc.invalidateQueries({ queryKey: ["playlists", "mine"] }),
@@ -113,6 +116,7 @@ export default function PlaylistDetail() {
     });
     setBusy(false);
     if (ok !== null) {
+      broadcastInvalidate(["playlists", "mine"]);
       await qc.invalidateQueries({ queryKey: ["playlists", "mine"] });
       // Navigate back to the list via a full reload of the list query; the
       // link below is the cheap way "back".
@@ -164,6 +168,7 @@ export default function PlaylistDetail() {
     setBusy(true);
     await guard(async () => {
       await downloadPlaylist(playlist.id);
+      broadcastInvalidate(["library"]);
       await Promise.all([refresh(), refreshStorage()]);
     });
     setBusy(false);

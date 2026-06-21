@@ -438,7 +438,7 @@ mod tests {
         AuditEntry, NewAuditEntry, NewPlaylist, NewTrack, NewUser, PermissionLevel, Playlist,
         PlaylistTrack, Track, User,
     };
-    use crate::db::repo::{AuditRepo, PlaylistRepo, TrackRepo, UserRepo};
+    use crate::db::repo::{AuditRepo, PlaylistRepo, TrackRepo, TrackIdPath, UserRepo};
     use async_trait::async_trait;
     use std::sync::Mutex;
     use time::OffsetDateTime;
@@ -678,6 +678,21 @@ mod tests {
         }
         async fn delete(&self, _: Uuid) -> Result<()> {
             Ok(())
+        }
+        async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>> {
+            Ok(vec![])
+        }
+        async fn update_duration(&self, _: Uuid, _: i64) -> Result<Option<Track>> {
+            Ok(None)
+        }
+        async fn update_file_props(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Option<i32>,
+            _: Option<i64>,
+        ) -> Result<Option<Track>> {
+            Ok(None)
         }
     }
 

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, Credential, PermissionTier, Playlist, PlaylistWithTracks, ServerConfig, Track,
-    UploadResult,
+    Album, Artist, Credential, PermissionTier, Playlist, PlaylistWithTracks, RescanReport,
+    ServerConfig, Track, UploadResult,
 };
 use crate::error::{AppError, AppResult};
 
@@ -323,6 +323,41 @@ impl ServerClient {
         self.rest.get_track(cred, id).await
     }
 
+    // ----- Delete (Manager+ gated server-side) ----------------------------
+
+    pub async fn delete_artist(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_artist(cred, id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("delete_artist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.delete_artist(cred, id).await
+    }
+
+    pub async fn delete_album(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_album(cred, id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("delete_album", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.delete_album(cred, id).await
+    }
+
+    pub async fn delete_track(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_track(cred, id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("delete_track", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.delete_track(cred, id).await
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
@@ -454,15 +489,33 @@ impl ServerClient {
         cred: &Credential,
         filename: &str,
         data: Vec<u8>,
+        cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.upload_file(cred, filename, data.clone()).await {
+            match grpc
+                .upload_file(cred, filename, data.clone(), cover.clone())
+                .await
+            {
                 Ok(r) => return Ok(r),
                 Err(e) if is_transport_error(&e) => fallback_log("upload_file", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.upload_file(cred, filename, data).await
+        self.rest.upload_file(cred, filename, data, cover).await
+    }
+
+    // ----- Rescan library (Phase 8+) ---------------------------------------
+
+    /// Re-measure durations for all tracks. Manager+ gated server-side.
+    pub async fn rescan_library(&self, cred: &Credential) -> AppResult<RescanReport> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.rescan_library(cred).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("rescan_library", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.rescan_library(cred).await
     }
 
     /// Open a gRPC channel for one logical operation. Returns `None` (not

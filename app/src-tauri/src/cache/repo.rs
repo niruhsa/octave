@@ -60,6 +60,24 @@ pub async fn list_artists(pool: &SqlitePool) -> AppResult<Vec<Artist>> {
 }
 
 pub async fn delete_artist(pool: &SqlitePool, id: &str) -> AppResult<()> {
+    // Cascade manually: tracks.artist_id has ON DELETE RESTRICT, so a plain
+    // DELETE FROM artists would fail (error 1811) if any tracks remain.
+    // Must remove tracks → album_art → albums → artist, in that order.
+    sqlx::query("DELETE FROM tracks WHERE artist_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    // Also clean up album art and albums for this artist.
+    sqlx::query(
+        "DELETE FROM album_art WHERE album_id IN (SELECT id FROM albums WHERE artist_id = ?1)",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+    sqlx::query("DELETE FROM albums WHERE artist_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM artists WHERE id = ?1")
         .bind(id)
         .execute(pool)
@@ -116,6 +134,17 @@ pub async fn list_albums_by_artist(pool: &SqlitePool, artist_id: &str) -> AppRes
 }
 
 pub async fn delete_album(pool: &SqlitePool, id: &str) -> AppResult<()> {
+    // Cascade manually: tracks.album_id has ON DELETE CASCADE so a plain
+    // delete would work, but being explicit avoids any edge-case FK ordering
+    // surprises.
+    sqlx::query("DELETE FROM tracks WHERE album_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM album_art WHERE album_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM albums WHERE id = ?1")
         .bind(id)
         .execute(pool)
@@ -232,6 +261,20 @@ pub async fn list_tracks_by_album(pool: &SqlitePool, album_id: &str) -> AppResul
            ORDER BY disc_no, track_no, title COLLATE NOCASE"#,
     )
     .bind(album_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn list_tracks_by_artist(pool: &SqlitePool, artist_id: &str) -> AppResult<Vec<Track>> {
+    let rows = sqlx::query_as::<_, Track>(
+        r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
+                 duration_ms, codec, bitrate_kbps, file_size,
+                 local_file_path, metadata_json, downloaded_at, updated_at
+           FROM tracks WHERE artist_id = ?1
+           ORDER BY album_id, disc_no, track_no, title COLLATE NOCASE"#,
+    )
+    .bind(artist_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)

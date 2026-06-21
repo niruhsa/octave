@@ -1,9 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   downloadAlbum,
   downloadDelete,
   downloadTrack,
+  libraryDeleteAlbum,
+  libraryDeleteTrack,
   libraryListTracksByAlbum,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
@@ -11,11 +13,17 @@ import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
 import { usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
+import { broadcastInvalidate } from "../App";
+import { useAppStore } from "../store";
 import type { MergedTrack } from "../ipc";
 
 export default function Album() {
   const { id = "" } = useParams();
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const tier = useAppStore((s) => s.tier);
+  const isManager = tier === "admin" || tier === "manager";
+
   const q = useQuery({
     queryKey: ["library", "tracks-by-album", id],
     queryFn: () => libraryListTracksByAlbum(id),
@@ -66,6 +74,27 @@ export default function Album() {
     }
   }
 
+  async function delTrack(track: MergedTrack) {
+    if (!window.confirm(`Permanently delete "${track.title}" from the server?`)) return;
+    try {
+      await libraryDeleteTrack(track.id);
+      await qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] });
+      broadcastInvalidate(["library"]);
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+
+  async function delAlbum() {
+    if (!window.confirm("Permanently delete this entire album from the server? All tracks will be removed.")) return;
+    try {
+      await libraryDeleteAlbum(id);
+      navigate("/library");
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+
   const anyDownloaded = q.data?.items.some((t) => t.downloaded) ?? false;
 
   return (
@@ -102,6 +131,14 @@ export default function Album() {
             >
               manage downloads
             </Link>
+          )}
+          {isManager && (
+            <button
+              onClick={delAlbum}
+              className="ml-auto rounded border border-red-800 px-3 py-1.5 text-sm text-red-400 hover:bg-red-900/20"
+            >
+              ✕ Delete album
+            </button>
           )}
         </div>
       )}
@@ -149,6 +186,15 @@ export default function Album() {
                       title="Download for offline"
                     >
                       ⬇
+                    </button>
+                  )}
+                  {isManager && (
+                    <button
+                      onClick={() => void delTrack(t)}
+                      className="rounded border border-red-800 px-1.5 py-0.5 text-xs text-red-400 hover:bg-red-900/20"
+                      title="Delete from server"
+                    >
+                      🗑
                     </button>
                   )}
                 </span>

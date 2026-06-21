@@ -19,6 +19,7 @@ use crate::auth::Identity;
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
 use crate::services::library::LibraryService;
+use crate::services::tag;
 
 /// User-Agent required by both MusicBrainz and the Cover Art Archive.
 const USER_AGENT: &str = concat!(
@@ -186,10 +187,6 @@ impl ArtworkService {
     ) -> Result<Option<String>> {
         caller.require(PermissionLevel::Manager)?;
 
-        let cache_dir = self.cache_dir.as_ref().ok_or_else(|| {
-            AppError::Config("artwork cache dir not configured (set ARTWORK_PATH)".into())
-        })?;
-
         let album = self.library.get_album(caller, album_id).await?;
         let artist = self.library.get_artist(caller, album.artist_id).await?;
 
@@ -197,6 +194,32 @@ impl ArtworkService {
             Some(c) => c,
             None => return Ok(None),
         };
+
+        let cover_path = self.set_cover_from_bytes(caller, album_id, &cover).await?;
+        Ok(Some(cover_path))
+    }
+
+    /// Cache an already-obtained cover image for `album_id`, update the
+    /// album's `cover_path` (audited), and embed it into every track file.
+    ///
+    /// Shared by the remote CAA fetch ([`fetch_for_album`]) and by ingest's
+    /// local-cover capture (sidecar `cover.jpg` / embedded art) so both
+    /// paths cache + audit + embed identically. Manager+ only.
+    ///
+    /// Returns the cached `cover_path`.
+    pub async fn set_cover_from_bytes(
+        &self,
+        caller: &Identity,
+        album_id: Uuid,
+        cover: &CoverImage,
+    ) -> Result<String> {
+        caller.require(PermissionLevel::Manager)?;
+
+        let cache_dir = self.cache_dir.as_ref().ok_or_else(|| {
+            AppError::Config("artwork cache dir not configured (set ARTWORK_PATH)".into())
+        })?;
+
+        let album = self.library.get_album(caller, album_id).await?;
 
         // Cache to <cache_dir>/<album_id>.<ext>.
         tokio::fs::create_dir_all(cache_dir)
@@ -220,8 +243,65 @@ impl ArtworkService {
             )
             .await?;
 
-        debug!(%album_id, cover_path, "artwork: cached + album updated");
-        Ok(Some(cover_path))
+        // Embed the cover into every track in the album so the art
+        // follows the files (portable to other players, survives cache
+        // wipe). Best-effort per track — a missing/unreadable file
+        // just logs a warning.
+        self.embed_cover_in_tracks(caller, album_id, &cover.bytes, &cover.content_type)
+            .await?;
+
+        debug!(%album_id, cover_path, "artwork: cached + album updated + embedded in tracks");
+        Ok(cover_path)
+    }
+
+    /// Embed `cover_bytes` (with the given `mime_type` string, e.g.
+    /// `"image/jpeg"`) into every track file of the album.  Best-effort
+    /// per track — a missing or unreadable file logs a warning and is
+    /// skipped so one bad file doesn't abort the whole batch.
+    async fn embed_cover_in_tracks(
+        &self,
+        caller: &Identity,
+        album_id: Uuid,
+        cover_bytes: &[u8],
+        mime_type: &str,
+    ) -> Result<()> {
+        let tracks = self.library.list_tracks_by_album(caller, album_id).await?;
+
+        for t in &tracks {
+            let raw_path = std::path::Path::new(&t.file_path);
+            let resolved = if raw_path.is_absolute() {
+                raw_path.to_path_buf()
+            } else if let Some(root) = &self.library.library_root {
+                root.join(raw_path)
+            } else {
+                tracing::warn!(
+                    track = %t.id,
+                    file_path = %t.file_path,
+                    "embed_cover: relative path but no library_root configured"
+                );
+                continue;
+            };
+
+            if !resolved.is_file() {
+                tracing::warn!(
+                    track = %t.id,
+                    path = %resolved.display(),
+                    "embed_cover: file not found, skipping"
+                );
+                continue;
+            }
+
+            if let Err(e) = tag::write_cover(&resolved, cover_bytes, mime_type) {
+                tracing::warn!(
+                    track = %t.id,
+                    path = %resolved.display(),
+                    error = %e,
+                    "embed_cover: write failed"
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 

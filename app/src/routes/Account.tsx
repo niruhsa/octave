@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   authChangePassword,
   authDeleteUser,
@@ -9,6 +9,7 @@ import {
 } from "../ipc";
 import { formatError } from "../lib/error";
 import { useAppStore } from "../store";
+import { broadcastInvalidate } from "../App";
 
 /**
  * /account — change your own password, or (admin/secret-key) manage any
@@ -27,6 +28,7 @@ export default function Account() {
   const session = useAppStore((s) => s.session);
   const tier = useAppStore((s) => s.tier);
   const setSession = useAppStore((s) => s.setSession);
+  const qc = useQueryClient();
 
   const isAdmin = tier === "admin";
   const selfId = session?.user_id ?? "";
@@ -111,6 +113,8 @@ export default function Account() {
       await authDeleteUser(delTarget);
       setDelDone(true);
       setDelTyped("");
+      broadcastInvalidate(["users"]);
+      await qc.invalidateQueries({ queryKey: ["users"] });
       if (delIsSelf) {
         await authLogout();
         setSession(null);

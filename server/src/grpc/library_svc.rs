@@ -442,6 +442,24 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             errors: report.errors as i64,
         }))
     }
+
+    async fn rescan_library(
+        &self,
+        req: Request<pb::RescanRequest>,
+    ) -> Result<Response<pb::RescanResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let full = req.into_inner().full_metadata;
+        let report = self
+            .scan
+            .rescan_library(&caller, full)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::RescanResponse {
+            tracks_checked: report.total as i64,
+            tracks_updated: report.corrected as i64,
+            errors: report.errors as i64,
+        }))
+    }
 }
 
 // Keep `AppError` import alive even if some helpers below get pruned.

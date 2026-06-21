@@ -171,6 +171,14 @@ pub struct UserEntry {
     pub level: PermissionTier,
 }
 
+/// Report from a library rescan (duration refresh).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RescanReport {
+    pub tracks_checked: u64,
+    pub tracks_updated: u64,
+    pub errors: u64,
+}
+
 impl PermissionTier {
     /// Decode the proto enum's i32 wire value into a tier. Unknown values
     /// fall back to `User` (least privilege) on the principle that an

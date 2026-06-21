@@ -2,31 +2,37 @@ import { coverUrl } from "../ipc";
 import type { MergedAlbum } from "../ipc";
 
 /**
- * Renders an album cover. Prefers the downloaded local cover (via the
- * `cover://` protocol) so it shows offline; falls back to the server's
- * `cover_path` when online and no local copy exists; falls back to a
- * neutral placeholder otherwise.
+ * Renders an album cover via the `cover://` protocol, which resolves a
+ * downloaded local cover first (works offline) and otherwise proxies the
+ * server's auth-gated `GET /albums/:id/cover` so online albums still show
+ * their artwork. Falls back to a neutral placeholder when neither exists
+ * (the protocol returns 404 → `<img onerror>` hides the image).
  *
- * `size` is the square edge in px.
+ * The cover container is responsive: `w-full` with `aspectRatio: "1 / 1"`
+ * and optional `maxWidth` (defaults to 160px). The image always fills the
+ * container with `object-cover`, ensuring square covers fit without
+ * overflow.
  */
 export function Cover({
   album,
   size = 160,
 }: {
-  album: { local_cover_path: string | null; cover_path: string | null };
+  album: { id?: string; local_cover_path: string | null; cover_path: string | null };
   size?: number;
 }) {
-  const src = album.local_cover_path ? coverUrl((album as MergedAlbum).id) : null;
+  // Use the protocol whenever a cover exists on either side (local or
+  // server) and we have an album id to address it by.
+  const id = (album as MergedAlbum).id;
+  const hasCover = Boolean(album.local_cover_path || album.cover_path);
+  const src = id && hasCover ? coverUrl(id) : null;
   return (
     <div
-      className="relative overflow-hidden rounded bg-neutral-800"
-      style={{ width: size, height: size }}
+      className="relative w-full overflow-hidden rounded bg-neutral-800"
+      style={{ aspectRatio: "1 / 1", maxWidth: size }}
     >
       {src ? (
         <img
           src={src}
-          width={size}
-          height={size}
           alt="cover"
           className="h-full w-full object-cover"
           loading="lazy"

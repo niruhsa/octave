@@ -25,6 +25,15 @@ message UploadInfo {
   // Original filename incl. extension (e.g. "album.tar.gz", "track.flac").
   // Used to detect archive formats and to choose the staged file extension.
   string filename = 1;
+
+  // Optional album cover image bytes shipped alongside a single-file upload.
+  // Staged as a `cover.<ext>` sidecar next to the source so the ingest
+  // pipeline picks it up before any remote artwork lookup. Empty = none.
+  bytes cover = 2;
+
+  // Cover image filename for its extension (e.g. "cover.jpg"). Optional;
+  // defaults to `cover.jpg` when `cover` is set but this is empty.
+  string cover_filename = 3;
 }
 
 message UploadResponse {

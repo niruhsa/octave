@@ -48,7 +48,8 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
-    );
+    )
+    .with_library_root(config.library_path.clone());
     let scan = ScanService::new(library.clone(), config.library_path.clone());
     let streaming = StreamingService::new(Arc::new(repos.clone()), config.library_path.clone());
     let playlists = PlaylistService::new(
@@ -76,6 +77,7 @@ async fn main() -> Result<()> {
                 scan.clone(),
                 organizer,
                 config.ingest_path.clone(),
+                artwork.clone().map(Arc::new),
             ))
         }
         None => None,

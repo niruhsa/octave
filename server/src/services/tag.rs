@@ -5,8 +5,9 @@
 
 use std::path::Path;
 
-use lofty::config::WriteOptions;
+use lofty::config::{ParseOptions, ParsingMode, WriteOptions};
 use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey, Tag};
 
@@ -51,18 +52,59 @@ pub struct TagInfo {
 /// cannot open/parse the file at all — missing individual tags fall back to
 /// `Unknown` / filename defaults.
 pub fn read_tags(path: &Path) -> crate::error::Result<TagInfo> {
-    let probe = Probe::open(path)
+    // Use `Relaxed` parsing so a single malformed tag field (e.g. a
+    // non-conforming date/timestamp frame, which is common in real-world
+    // MP3s) doesn't abort the whole read and reject the file from ingest.
+    // Relaxed discards the bad field and keeps going; missing values then
+    // fall through to our `Unknown`/filename defaults below.
+    //
+    // Some files (notably MP3s with a dotted `date` frame like `2025.11.24`)
+    // trip a *fatal* error in lofty's ID3v2 timestamp parser even under
+    // Relaxed mode. Rather than reject the whole file from the library, we
+    // fall back to a **properties-only** read (tags disabled): we still get
+    // an accurate duration/codec/bitrate and the title/artist/etc. fall
+    // through to filename / `Unknown` defaults below.
+    let probe = match Probe::open(path)
         .map_err(|e| crate::error::AppError::Internal(format!("probe open: {e}")))?
+        .options(ParseOptions::new().parsing_mode(ParsingMode::Relaxed))
         .read()
-        .map_err(|e| crate::error::AppError::Internal(format!("probe read: {e}")))?;
+    {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "read_tags: full tag read failed; retrying properties-only"
+            );
+            Probe::open(path)
+                .map_err(|e| crate::error::AppError::Internal(format!("probe open: {e}")))?
+                .options(
+                    ParseOptions::new()
+                        .parsing_mode(ParsingMode::Relaxed)
+                        .read_tags(false),
+                )
+                .read()
+                .ok()
+        }
+    };
 
-    let props = probe.properties();
-    let duration_ms = props.duration().as_millis() as i64;
-    let bitrate_kbps = props.audio_bitrate().map(|b| b as i32);
-    let codec = format!("{:?}", probe.file_type());
     let file_size = std::fs::metadata(path).ok().map(|m| m.len() as i64);
+    let (duration_ms, bitrate_kbps, codec) = match &probe {
+        Some(p) => {
+            let props = p.properties();
+            (
+                props.duration().as_millis() as i64,
+                props.audio_bitrate().map(|b| b as i32),
+                format!("{:?}", p.file_type()),
+            )
+        }
+        // Even a properties-only read failed — keep going with empty
+        // defaults so the file can still be indexed (duration is repaired
+        // separately by the Symphonia / MP3-walker cross-validation step).
+        None => (0, None, "Unknown".to_string()),
+    };
 
-    let tag = probe.primary_tag().or_else(|| probe.first_tag());
+    let tag = probe.as_ref().and_then(|p| p.primary_tag().or_else(|| p.first_tag()));
 
     let title = tag
         .and_then(|t| t.title().map(|s| s.to_string()))
@@ -381,6 +423,80 @@ pub fn write_tags(path: &Path, edit: &TagWrite) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// Embed a cover image into the audio file at `path`.
+///
+/// Removes any existing front-cover picture first (if the format supports
+/// per-type removal — ID3v2 APIC, Ogg FLAC, etc.), then inserts the new
+/// one.  Best-effort: when the format doesn't support embedded pictures the
+/// save will fail and bubble up.
+pub fn write_cover(path: &Path, data: &[u8], mime_type_str: &str) -> crate::error::Result<()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+    let mut tagged = lofty::read_from_path(path)
+        .map_err(|e| crate::error::AppError::Internal(format!("cover write open: {e}")))?;
+    if tagged.primary_tag_mut().is_none() {
+        let tag_type = tagged.primary_tag_type();
+        tagged.insert_tag(Tag::new(tag_type));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .expect("primary tag inserted above");
+
+    // Remove any existing front-cover picture so we don't accumulate
+    // duplicate APIC / METADATA_BLOCK_PICTURE frames.
+    tag.remove_picture_type(PictureType::CoverFront);
+
+    let mime = MimeType::from_str(mime_type_str);
+    let picture = Picture::new_unchecked(
+        PictureType::CoverFront,
+        Some(mime),
+        None,
+        data.to_vec(),
+    );
+    tag.push_picture(picture);
+
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .map_err(|e| crate::error::AppError::Internal(format!("cover write save: {e}")))?;
+    Ok(())
+}
+
+/// Extract the embedded front-cover (or first available) picture from the
+/// audio file at `path`.
+///
+/// Returns `Ok(Some((bytes, mime)))` when the file carries embedded art,
+/// `Ok(None)` when it has none. `mime` is a content-type string like
+/// `"image/jpeg"` (falls back to `"image/jpeg"` when the tag omits it).
+/// Errors only when the file can't be opened/parsed at all.
+pub fn read_embedded_cover(path: &Path) -> crate::error::Result<Option<(Vec<u8>, String)>> {
+    let tagged = lofty::read_from_path(path)
+        .map_err(|e| crate::error::AppError::Internal(format!("cover read open: {e}")))?;
+
+    let tag = match tagged.primary_tag().or_else(|| tagged.first_tag()) {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+
+    // Prefer an explicit front cover; otherwise take the first picture.
+    let pic = tag
+        .pictures()
+        .iter()
+        .find(|p| p.pic_type() == PictureType::CoverFront)
+        .or_else(|| tag.pictures().first());
+
+    let pic = match pic {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let mime = pic
+        .mime_type()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "image/jpeg".to_string());
+    Ok(Some((pic.data().to_vec(), mime)))
+}
+
 /// Returns `true` when the file extension (case-insensitive) is a recognised
 /// audio format.
 pub fn is_audio_file(path: &Path) -> bool {
@@ -393,7 +509,6 @@ pub fn is_audio_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn audio_ext_recognised() {

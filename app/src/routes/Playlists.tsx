@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { playlistCreate, playlistList } from "../ipc";
 import { formatError } from "../lib/error";
 import { SourceBadge } from "../components/SourceBadge";
+import { broadcastInvalidate } from "../App";
 
 /**
  * /playlists — the current user's playlists. Online → server list (mirrored
@@ -31,7 +32,9 @@ export default function Playlists() {
     try {
       await playlistCreate(trimmed);
       setName("");
+      broadcastInvalidate(["playlists", "mine"]);
       await qc.invalidateQueries({ queryKey: ["playlists", "mine"] });
+      broadcastInvalidate(["playlists"]);
     } catch (e) {
       setErr(formatError(e));
     } finally {

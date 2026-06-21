@@ -16,6 +16,7 @@ use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
 use super::proto::auth::{ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse};
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
+    DeleteAlbumRequest, DeleteArtistRequest, DeleteTrackRequest,
     GetAlbumRequest, GetArtistRequest, GetTrackRequest, ListAlbumsByArtistRequest,
     ListArtistsRequest, ListTracksByAlbumRequest, Pagination, SearchRequest,
 };
@@ -30,7 +31,7 @@ use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUpload
 use super::proto::upload as pb;
 use super::{
     Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
-    PlaylistWithTracks, ServerConfig, SingleUploadResult, Track, UploadResult,
+    PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track, UploadResult,
 };
 use crate::error::{AppError, AppResult};
 
@@ -364,6 +365,38 @@ impl GrpcClient {
         }
     }
 
+    // ----- Delete (Manager+ gated server-side) ----------------------------
+
+    pub async fn delete_artist(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let mut req = Request::new(DeleteArtistRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        self.library()
+            .delete_artist(req)
+            .await
+            .map_err(map_mutation_err("delete_artist"))?;
+        Ok(())
+    }
+
+    pub async fn delete_album(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let mut req = Request::new(DeleteAlbumRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        self.library()
+            .delete_album(req)
+            .await
+            .map_err(map_mutation_err("delete_album"))?;
+        Ok(())
+    }
+
+    pub async fn delete_track(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let mut req = Request::new(DeleteTrackRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        self.library()
+            .delete_track(req)
+            .await
+            .map_err(map_mutation_err("delete_track"))?;
+        Ok(())
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
@@ -511,13 +544,20 @@ impl GrpcClient {
         cred: &Credential,
         filename: &str,
         data: Vec<u8>,
+        cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         // Build all messages upfront so the stream owns its data
         // (tonic requires 'static).
         let mut msgs: Vec<UploadRequest> = Vec::with_capacity(1 + data.len() / 65536 + 1);
+        let (cover_filename, cover_bytes) = match cover {
+            Some((name, bytes)) => (name, bytes),
+            None => (String::new(), Vec::new()),
+        };
         msgs.push(UploadRequest {
             payload: Some(pb::upload_request::Payload::Info(UploadInfo {
                 filename: filename.to_string(),
+                cover: cover_bytes,
+                cover_filename,
             })),
         });
         for chunk in data.chunks(65536) {
@@ -551,6 +591,29 @@ impl GrpcClient {
                 track_id: resp.single_track_id,
                 path: resp.path,
             })
+        })
+    }
+
+    // ----- Rescan library (Phase 8+) --------------------------------------
+
+    /// Re-measure actual audio duration for every track in the library.
+    /// Updates DB rows that disagree with the measured value. Manager+ gated.
+    pub async fn rescan_library(&self, cred: &Credential) -> AppResult<RescanReport> {
+        use super::proto::library::RescanRequest;
+        let mut req = Request::new(RescanRequest {
+            full_metadata: false,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .rescan_library(req)
+            .await
+            .map_err(map_mutation_err("rescan_library"))?
+            .into_inner();
+        Ok(RescanReport {
+            tracks_checked: resp.tracks_checked as u64,
+            tracks_updated: resp.tracks_updated as u64,
+            errors: resp.errors as u64,
         })
     }
 }
@@ -601,6 +664,22 @@ fn map_upload_err(s: tonic::Status) -> AppError {
             AppError::Internal(format!("upload rejected: {s}"))
         }
         _ => AppError::Transport(format!("upload: {s}")),
+    }
+}
+
+/// Map a tonic status from library mutations (create/update/delete).
+/// `PermissionDenied` → `Forbidden`; `InvalidArgument` / `NotFound` /
+/// `FailedPrecondition` → permanent `Internal`; everything else → `Transport`.
+fn map_mutation_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
+    move |s| match s.code() {
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("{op}: {s}")),
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("{op}: {s}")),
+        tonic::Code::NotFound
+        | tonic::Code::InvalidArgument
+        | tonic::Code::FailedPrecondition => {
+            AppError::Internal(format!("{op} rejected: {s}"))
+        }
+        _ => AppError::Transport(format!("{op}: {s}")),
     }
 }
 /// `map_register_err`: auth/merit rejections do NOT trigger the REST

@@ -192,6 +192,56 @@ impl DownloadManager {
         repo::set_setting(&self.pool, SETTING_WIFI_ONLY, if on { "true" } else { "false" }).await
     }
 
+    /// Fetch cover bytes from the server's `GET /albums/:id/cover` endpoint
+    /// and write them to `dest`.  Returns `Ok(true)` on success, `Ok(false)`
+    /// when the server responds 404 (no cover on the server either).
+    async fn fetch_cover_from_server(
+        &self,
+        album_id: &str,
+        dest: &std::path::Path,
+    ) -> AppResult<bool> {
+        let cred = self.auth.credential().await?;
+        let config = self.auth.server_config();
+        let url = format!("{}/albums/{}/cover", config.rest_root(), album_id);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", auth_header(&cred))
+            .send()
+            .await
+            .map_err(|e| AppError::Transport(format!("server cover fetch: {e}")))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        if !resp.status().is_success() {
+            tracing::warn!(
+                status = %resp.status(),
+                album_id,
+                "server cover fetch returned non-2xx"
+            );
+            return Ok(false);
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| AppError::Transport(format!("server cover bytes: {e}")))?;
+
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(dest, &bytes).await?;
+        tracing::info!(
+            album_id,
+            path = %dest.display(),
+            bytes = bytes.len(),
+            "downloaded cover from server"
+        );
+        Ok(true)
+    }
+
     // ----- single track --------------------------------------------------
 
     pub async fn download_track(&self, track_id: &str) -> AppResult<TrackDownloadResult> {
@@ -302,25 +352,61 @@ impl DownloadManager {
                 .parent()
                 .unwrap_or(&self.downloads_root)
                 .join("cover.jpg");
-            match artwork::fetch_cover(&self.http, &artist.name, &album.title, &cover_path).await {
-                Ok(true) => {
-                    repo::upsert_album_art(
-                        &self.pool,
-                        &cm::AlbumArt {
-                            album_id: album.id.clone(),
-                            local_cover_path: cover_path.to_string_lossy().into_owned(),
-                            fetched_at: now.clone(),
-                        },
-                    )
-                    .await?;
-                    stamp(&self.pool, "album_art", &album.id).await?;
+            // Try the server's cover endpoint first (the authoritative
+            // source — the server fetches + embeds art via the Cover Art
+            // Archive automatically during ingest, and stores it under
+            // ARTWORK_PATH). Fall back to the client-side CAA lookup only
+            // when the server doesn't have a cover or is unreachable.
+            let fetched = if album.cover_path.is_some() {
+                // Server has a cover — download from the server.
+                match self.fetch_cover_from_server(&album.id, &cover_path).await {
+                    Ok(true) => true,
+                    Ok(false) => {
+                        tracing::warn!(
+                            album = %album.id,
+                            "server has cover_path but cover endpoint returned nothing"
+                        );
+                        false
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            err = %e, album = %album.id,
+                            "server cover fetch failed; falling back to CAA"
+                        );
+                        false
+                    }
                 }
-                Ok(false) => {
-                    tracing::debug!(album = %album.id, "no cover art available");
+            } else {
+                false
+            };
+            let fetched = if fetched {
+                true
+            } else {
+                // Fall back to the client-side CAA lookup.
+                match artwork::fetch_cover(&self.http, &artist.name, &album.title, &cover_path).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(
+                            err = %e, album = %album.id,
+                            "CAA cover fetch failed; track still downloaded"
+                        );
+                        false
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(err = %e, album = %album.id, "cover fetch failed; track still downloaded");
-                }
+            };
+            if fetched {
+                repo::upsert_album_art(
+                    &self.pool,
+                    &cm::AlbumArt {
+                        album_id: album.id.clone(),
+                        local_cover_path: cover_path.to_string_lossy().into_owned(),
+                        fetched_at: now.clone(),
+                    },
+                )
+                .await?;
+                stamp(&self.pool, "album_art", &album.id).await?;
+            } else {
+                tracing::debug!(album = %album.id, "no cover art available");
             }
         }
 

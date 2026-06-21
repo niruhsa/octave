@@ -129,6 +129,11 @@ pub fn run() {
             commands::library_commands::library_search_albums,
             commands::library_commands::library_list_tracks_by_album,
             commands::library_commands::library_search_tracks,
+            // library delete (Phase 8+ — Manager+ gated server-side)
+            commands::library_commands::library_delete_artist,
+            commands::library_commands::library_delete_album,
+            commands::library_commands::library_delete_track,
+            commands::library_commands::library_rescan,
             // playlists (Phase 7)
             commands::playlist_commands::playlist_list,
             commands::playlist_commands::playlist_get,
@@ -156,6 +161,7 @@ pub fn run() {
             commands::download_commands::downloads_set_wifi_only,
             // uploads (Phase 8)
             commands::upload_commands::upload_file,
+            commands::upload_commands::upload_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

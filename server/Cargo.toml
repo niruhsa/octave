@@ -54,6 +54,23 @@ subtle = "2"
 lofty = "0.21"
 walkdir = "2"
 
+# Audio duration measurement — cross-validates tag-reported duration
+# against actual frame count (critical for VBR files without a seek index).
+# The default feature set only enables flac/ogg/vorbis/wav/pcm/mkv, so
+# `measure_duration` returned `None` for m4a/mp4/aac/aiff/alac and silently
+# fell back to the (often wrong) tag-reported duration. Enable every codec
+# + container demuxer that ships in the 0.6.0 release line.
+# NOTE: mp3/mp1/mp2 are intentionally omitted — symphonia 0.6.0 pins
+# `symphonia-bundle-mp3 = 0.6.0`, which was never published (only alpha), so
+# the `all`/`mpa` feature sets fail to resolve. MP3 duration therefore still
+# relies on lofty's header read.
+symphonia = { version = "0.6", default-features = true, features = [
+    "aac",
+    "alac",
+    "isomp4",
+    "aiff",
+] }
+
 # Streaming (Phase 4): byte-range responses, async file IO
 tokio-util = { version = "0.7", features = ["io"] }
 httpdate = "1"

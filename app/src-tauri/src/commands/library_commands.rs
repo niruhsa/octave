@@ -9,6 +9,7 @@ use tauri::State;
 use crate::error::{AppError, AppResult};
 use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::library::service::LibraryService;
+use crate::transport::RescanReport;
 use crate::AppStateHandle;
 
 /// Server default page sizes mirror the server's cap (200) / default (50).
@@ -105,4 +106,67 @@ pub async fn library_search_tracks(
 ) -> AppResult<LibraryView<MergedTrack>> {
     let svc = service(&state).await?;
     svc.search_tracks(&query, normalise_limit(limit), normalise_offset(offset)).await
+}
+
+// ---------------------------------------------------------------------------
+// rescan (Manager+ gated server-side)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn library_rescan(
+    state: State<'_, AppStateHandle>,
+) -> AppResult<RescanReport> {
+    let auth = {
+        let guard = state.auth.read().await;
+        guard
+            .clone()
+            .ok_or_else(|| AppError::AuthNotConfigured("log in first".into()))?
+    };
+    auth.rescan_library().await
+}
+
+// ---------------------------------------------------------------------------
+// delete (Manager+ gated server-side)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn library_delete_artist(
+    state: State<'_, AppStateHandle>,
+    id: String,
+) -> AppResult<()> {
+    let auth = {
+        let guard = state.auth.read().await;
+        guard
+            .clone()
+            .ok_or_else(|| AppError::AuthNotConfigured("log in first".into()))?
+    };
+    auth.delete_artist(&id).await
+}
+
+#[tauri::command]
+pub async fn library_delete_album(
+    state: State<'_, AppStateHandle>,
+    id: String,
+) -> AppResult<()> {
+    let auth = {
+        let guard = state.auth.read().await;
+        guard
+            .clone()
+            .ok_or_else(|| AppError::AuthNotConfigured("log in first".into()))?
+    };
+    auth.delete_album(&id).await
+}
+
+#[tauri::command]
+pub async fn library_delete_track(
+    state: State<'_, AppStateHandle>,
+    id: String,
+) -> AppResult<()> {
+    let auth = {
+        let guard = state.auth.read().await;
+        guard
+            .clone()
+            .ok_or_else(|| AppError::AuthNotConfigured("log in first".into()))?
+    };
+    auth.delete_track(&id).await
 }

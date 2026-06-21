@@ -64,8 +64,10 @@ impl pb::upload_service_server::UploadService for UploadServer {
             .message()
             .await?
             .ok_or_else(|| Status::invalid_argument("empty upload stream"))?;
-        let filename = match first.payload {
-            Some(pb::upload_request::Payload::Info(info)) => info.filename,
+        let (filename, cover, cover_filename) = match first.payload {
+            Some(pb::upload_request::Payload::Info(info)) => {
+                (info.filename, info.cover, info.cover_filename)
+            }
             _ => {
                 return Err(Status::invalid_argument(
                     "first message must be UploadInfo",
@@ -76,10 +78,12 @@ impl pb::upload_service_server::UploadService for UploadServer {
             return Err(Status::invalid_argument("filename is required"));
         }
 
-        // 2. Stage to <ingest_root>/.tmp/<uuid>.<ext>.
+        // 2. Stage in a per-upload subdir under <ingest_root>/.tmp/<uuid>/ so
+        //    an optional `cover.<ext>` sidecar is isolated from concurrent
+        //    uploads (ingest's sidecar scan reads the source's parent dir).
         let ingest_root = ingest.ingest_root.as_deref().unwrap_or(Path::new("."));
-        let tmp_dir = ingest_root.join(".tmp");
-        tokio::fs::create_dir_all(&tmp_dir)
+        let upload_dir = ingest_root.join(".tmp").join(Uuid::new_v4().to_string());
+        tokio::fs::create_dir_all(&upload_dir)
             .await
             .map_err(|e| Status::internal(format!("create tmp dir: {e}")))?;
 
@@ -87,18 +91,31 @@ impl pb::upload_service_server::UploadService for UploadServer {
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("bin");
-        let source_path = tmp_dir.join(format!("{}.{ext}", Uuid::new_v4()));
+        let source_path = upload_dir.join(format!("source.{ext}"));
 
         // 3. Drain chunks to disk (with size cap).
         if let Err(e) = drain_to_file(&mut stream, &source_path).await {
-            let _ = tokio::fs::remove_file(&source_path).await;
+            let _ = tokio::fs::remove_dir_all(&upload_dir).await;
             return Err(e);
         }
 
-        // 4. Archive vs single-file ingest, then clean up the staged source.
+        // 3b. Write the optional cover sidecar as `cover.<imgext>` next to
+        //     the source so `local_cover` picks it up before remote fetch.
+        if !cover.is_empty() {
+            let cover_ext = Path::new(&cover_filename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("jpg");
+            let cover_path = upload_dir.join(format!("cover.{cover_ext}"));
+            if let Err(e) = tokio::fs::write(&cover_path, &cover).await {
+                tracing::debug!(error = %e, "upload: cover sidecar write failed");
+            }
+        }
+
+        // 4. Archive vs single-file ingest, then clean up the staged dir.
         let resp = if let Some(kind) = ArchiveKind::detect(Path::new(&filename)) {
             let outcome = ingest.organize_archive(&caller, &source_path, kind).await;
-            let _ = tokio::fs::remove_file(&source_path).await;
+            let _ = tokio::fs::remove_dir_all(&upload_dir).await;
             let res = outcome.map_err(map_err)?;
             pb::UploadResponse {
                 is_archive: true,
@@ -114,13 +131,13 @@ impl pb::upload_service_server::UploadService for UploadServer {
         } else {
             // Reject obvious non-audio before the pipeline does, for a clearer error.
             if !tag::is_audio_file(Path::new(&filename)) {
-                let _ = tokio::fs::remove_file(&source_path).await;
+                let _ = tokio::fs::remove_dir_all(&upload_dir).await;
                 return Err(Status::invalid_argument(format!(
                     "unsupported file type: {filename}"
                 )));
             }
             let outcome = ingest.organize_and_index(&caller, &source_path).await;
-            let _ = tokio::fs::remove_file(&source_path).await;
+            let _ = tokio::fs::remove_dir_all(&upload_dir).await;
             let res = outcome.map_err(map_err)?;
             pb::UploadResponse {
                 is_archive: false,

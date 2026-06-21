@@ -223,6 +223,21 @@ mod tests {
         async fn delete(&self, _: Uuid) -> crate::error::Result<()> {
             Ok(())
         }
+        async fn list_all_ids_paths(&self) -> crate::error::Result<Vec<crate::db::repo::TrackIdPath>> {
+            Ok(vec![])
+        }
+        async fn update_duration(&self, _: Uuid, _: i64) -> crate::error::Result<Option<crate::db::models::Track>> {
+            Ok(None)
+        }
+        async fn update_file_props(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Option<i32>,
+            _: Option<i64>,
+        ) -> crate::error::Result<Option<crate::db::models::Track>> {
+            Ok(None)
+        }
     }
 
     fn svc(root: Option<PathBuf>) -> StreamingService {

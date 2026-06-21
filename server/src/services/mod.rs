@@ -5,9 +5,11 @@
 
 pub mod archive;
 pub mod artwork;
+pub mod duration;
 pub mod ingest;
 pub mod library;
 pub mod metadata;
+pub mod mp3;
 pub mod organizer;
 pub mod playlist;
 pub mod scan;

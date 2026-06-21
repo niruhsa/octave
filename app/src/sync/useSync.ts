@@ -28,6 +28,7 @@ import {
   type SyncReport,
 } from "../ipc";
 import { useAppStore } from "../store";
+import { broadcastInvalidate } from "../App";
 
 type SyncStatus = "idle" | "syncing" | "ok" | "error";
 
@@ -61,6 +62,13 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
         lastSyncedAt: Date.now(),
       });
       await get().refreshPending();
+      // After sync, invalidate React Query so mounted components refetch
+      // server data. This is how the UI picks up server-side changes
+      // (uploads from another client, metadata edits, server-side deletes)
+      // without the user having to manually refresh.
+      broadcastInvalidate(["library"]);
+      broadcastInvalidate(["playlists"]);
+      broadcastInvalidate(["cache", "downloaded_tracks"]);
     } catch (e) {
       // AuthNotConfigured is the anonymous case — treat as a no-op, not an
       // error the user needs to see.

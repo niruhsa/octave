@@ -72,7 +72,11 @@ async fn upload(
         .ok_or_else(|| AppError::Config("ingest service not configured".into()))
         .map_err(ApiError::from)?;
 
+    // The primary audio/archive file plus an optional cover image carried in
+    // a separate multipart field (so single-file uploads can ship art that
+    // would otherwise only exist as a sidecar in a folder/archive upload).
     let mut source: Option<(String, Vec<u8>)> = None;
+    let mut cover: Option<(String, Vec<u8>)> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -80,14 +84,16 @@ async fn upload(
         .map_err(|e| AppError::InvalidArgument(format!("multipart field: {e}")))
         .map_err(ApiError::from)?
     {
+        let field_name = field.name().map(|s| s.to_string());
+        let content_type = field.content_type().map(|s| s.to_string());
         let filename = field
             .file_name()
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
-                let name = field.name().unwrap_or("upload").to_string();
-                let ct = field
-                    .content_type()
-                    .and_then(|m| mime_to_ext(m))
+                let name = field_name.clone().unwrap_or_else(|| "upload".to_string());
+                let ct = content_type
+                    .as_deref()
+                    .and_then(mime_to_ext)
                     .unwrap_or("bin");
                 format!("{name}.{ct}")
             });
@@ -98,7 +104,14 @@ async fn upload(
             .map_err(|e| AppError::Internal(format!("read upload: {e}")))
             .map_err(ApiError::from)?;
 
-        if source.is_none() {
+        // Classify as a cover image when the field is named `cover` (or
+        // similar), the content-type is an image, or the filename has an
+        // image extension. Everything else is the primary source file.
+        if is_cover_field(field_name.as_deref(), content_type.as_deref(), &filename) {
+            if cover.is_none() {
+                cover = Some((filename, data.to_vec()));
+            }
+        } else if source.is_none() {
             source = Some((filename, data.to_vec()));
         }
     }
@@ -109,39 +122,50 @@ async fn upload(
         ))
     })?;
 
-    // Write to a temp file inside INGEST_PATH/.tmp with a `.uploading`
-    // extension so the background watcher ignores it.
+    // Stage each upload in its own per-upload subdir under INGEST_PATH/.tmp
+    // so an accompanying `cover.<ext>` sidecar is isolated from concurrent
+    // uploads (the ingest pipeline's sidecar scan reads the source's parent
+    // dir). The leading-dot `.tmp` keeps the folder-watcher from re-ingesting
+    // staged files.
     let ingest_root = ingest.ingest_root.as_deref().unwrap_or(Path::new("."));
-    let tmp_dir = ingest_root.join(".tmp");
-    tokio::fs::create_dir_all(&tmp_dir)
+    let upload_dir = ingest_root.join(".tmp").join(Uuid::new_v4().to_string());
+    tokio::fs::create_dir_all(&upload_dir)
         .await
         .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
         .map_err(ApiError::from)?;
 
-    let tmp_path = tmp_dir.join(format!("{}.uploading", Uuid::new_v4()));
-    tokio::fs::write(&tmp_path, &data)
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
-        .map_err(ApiError::from)?;
-
-    // Rename to real extension so ingest sees it as audio.
+    // Audio/archive file keeps its real extension so ingest can detect it.
     let ext = Path::new(&filename)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("bin");
-    let source_path = tmp_path.with_extension(ext);
-    if let Err(e) = tokio::fs::rename(&tmp_path, &source_path).await {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
+    let source_path = upload_dir.join(format!("source.{ext}"));
+    if let Err(e) = tokio::fs::write(&source_path, &data).await {
+        let _ = tokio::fs::remove_dir_all(&upload_dir).await;
         return Err(
             AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())).into(),
         );
+    }
+
+    // Write the cover sidecar as `cover.<imgext>` next to the source so the
+    // ingest pipeline's `local_cover` picks it up before any remote fetch.
+    if let Some((cover_name, cover_bytes)) = &cover {
+        let cover_ext = Path::new(cover_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg");
+        let cover_path = upload_dir.join(format!("cover.{cover_ext}"));
+        if let Err(e) = tokio::fs::write(&cover_path, cover_bytes).await {
+            // Non-fatal: log and proceed without the cover.
+            debug!(error = %e, "upload: cover sidecar write failed");
+        }
     }
 
     // Archive uploads (zip/tarball/disc-image) take the multi-file path;
     // everything else is treated as a single audio file.
     if let Some(kind) = ArchiveKind::detect(Path::new(&filename)) {
         let outcome = ingest.organize_archive(&caller, &source_path, kind).await;
-        let _ = tokio::fs::remove_file(&source_path).await;
+        let _ = tokio::fs::remove_dir_all(&upload_dir).await;
         let res = outcome?;
         debug!(
             ingested = res.ingested,
@@ -163,11 +187,11 @@ async fn upload(
 
     let result = match ingest.organize_and_index(&caller, &source_path).await {
         Ok(r) => {
-            let _ = tokio::fs::remove_file(&source_path).await;
+            let _ = tokio::fs::remove_dir_all(&upload_dir).await;
             r
         }
         Err(e) => {
-            let _ = tokio::fs::remove_file(&source_path).await;
+            let _ = tokio::fs::remove_dir_all(&upload_dir).await;
             return Err(e.into());
         }
     };
@@ -280,6 +304,34 @@ async fn ingest_scan(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Classify a multipart field as the cover image rather than the primary
+/// source file. Matches when the field is named like a cover, its
+/// content-type is `image/*`, or its filename has an image extension.
+fn is_cover_field(
+    field_name: Option<&str>,
+    content_type: Option<&str>,
+    filename: &str,
+) -> bool {
+    const COVER_FIELD_NAMES: &[&str] = &["cover", "artwork", "art", "image", "thumbnail"];
+    const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif"];
+
+    if let Some(name) = field_name {
+        if COVER_FIELD_NAMES.contains(&name.to_ascii_lowercase().as_str()) {
+            return true;
+        }
+    }
+    if let Some(ct) = content_type {
+        if ct.to_ascii_lowercase().starts_with("image/") {
+            return true;
+        }
+    }
+    Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
 
 fn mime_to_ext(mime: &str) -> Option<&str> {
     match mime {

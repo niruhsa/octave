@@ -221,6 +221,19 @@ impl SyncEngine {
 
     // ----- pull / reconcile ---------------------------------------------
 
+    /// Delete a downloaded track file from disk, best-effort. Logs the
+    /// attempt — missing files are not considered errors since the prune
+    /// step already covers that case.
+    async fn delete_track_file(path: &str) {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => tracing::info!(path, "deleted pruned track file"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!(path, "pruned track file already gone");
+            }
+            Err(e) => tracing::warn!(path, err = %e, "failed to delete pruned track file"),
+        }
+    }
+
     async fn pull_artists(
         &self,
         server: &ServerClient,
@@ -244,8 +257,28 @@ impl SyncEngine {
                     }
                 }
                 None => {
+                    // Delete all downloaded track files + album covers
+                    // under this artist before cascading DB rows.
+                    let tracks = repo::list_tracks_by_artist(&self.pool, &row.id).await?;
+                    for t in &tracks {
+                        Self::delete_track_file(&t.local_file_path).await;
+                    }
+                    let albums = repo::list_albums_by_artist(&self.pool, &row.id).await?;
+                    for a in &albums {
+                        if let Some(art) = repo::get_album_art(&self.pool, &a.id).await? {
+                            Self::delete_track_file(&art.local_cover_path).await;
+                        }
+                    }
                     repo::delete_artist(&self.pool, &row.id).await?;
                     repo::delete_sync_state(&self.pool, "artist", &row.id).await?;
+                    // Clean up per-track and per-album sync states that
+                    // `delete_artist` cascaded.
+                    for t in &tracks {
+                        repo::delete_sync_state(&self.pool, "track", &t.id).await?;
+                    }
+                    for a in &albums {
+                        repo::delete_sync_state(&self.pool, "album", &a.id).await?;
+                    }
                     report.entities_pruned += 1;
                 }
             }
@@ -285,8 +318,22 @@ impl SyncEngine {
                         }
                     }
                     None => {
+                        // Delete all downloaded track files + the album's
+                        // cover art file before cascading the DB rows.
+                        let tracks = repo::list_tracks_by_album(&self.pool, &row.id).await?;
+                        for t in &tracks {
+                            Self::delete_track_file(&t.local_file_path).await;
+                        }
+                        if let Some(art) = repo::get_album_art(&self.pool, &row.id).await? {
+                            Self::delete_track_file(&art.local_cover_path).await;
+                        }
                         repo::delete_album(&self.pool, &row.id).await?;
                         repo::delete_sync_state(&self.pool, "album", &row.id).await?;
+                        // Also clear the per-track sync states that
+                        // `delete_album` cascaded.
+                        for t in &tracks {
+                            repo::delete_sync_state(&self.pool, "track", &t.id).await?;
+                        }
                         report.entities_pruned += 1;
                     }
                 }
@@ -340,6 +387,7 @@ impl SyncEngine {
                     }
                 }
                 None => {
+                    Self::delete_track_file(&row.local_file_path).await;
                     repo::delete_track(&self.pool, &row.id).await?;
                     repo::delete_sync_state(&self.pool, "track", &row.id).await?;
                     report.entities_pruned += 1;

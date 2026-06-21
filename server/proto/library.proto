@@ -31,6 +31,8 @@ service LibraryService {
 
   // Library scan: index files on disk into the DB.
   rpc ScanLibrary(ScanRequest) returns (ScanResponse);
+  // Rescan all existing tracks: re-read tags + re-measure duration, update DB.
+  rpc RescanLibrary(RescanRequest) returns (RescanResponse);
 
   // Metadata & Artwork (Phase 7)
   // Opt-in metadata edit (Manager+). Optionally writes back to file tags.
@@ -173,6 +175,17 @@ message ScanRequest {
 message ScanResponse {
   int64 tracks_added = 1;
   int64 tracks_skipped = 2;
+  int64 errors = 3;
+}
+
+message RescanRequest {
+  // When true, re-read file tags and update title/track_no/etc. too.
+  // When false (default), only re-measure duration.
+  bool full_metadata = 1;
+}
+message RescanResponse {
+  int64 tracks_checked = 1;
+  int64 tracks_updated = 2;
   int64 errors = 3;
 }
 

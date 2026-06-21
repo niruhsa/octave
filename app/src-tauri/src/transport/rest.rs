@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
-    PlaylistWithTracks, ServerConfig, SingleUploadResult, Track, UploadResult,
+    PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track, UploadResult,
 };
 use crate::error::{AppError, AppResult};
 
@@ -404,6 +404,47 @@ impl RestClient {
         }
     }
 
+    // ----- Delete (Manager+ gated server-side) ----------------------------
+
+    pub async fn delete_artist(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let url = format!("{}/artists/{id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("delete_artist"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn delete_album(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let url = format!("{}/albums/{id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("delete_album"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn delete_track(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let url = format!("{}/tracks/{id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("delete_track"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
@@ -476,6 +517,26 @@ impl RestClient {
         Ok(())
     }
 
+    // ----- Rescan library (Phase 8+) ---------------------------------------
+
+    /// `POST /library/rescan` — re-measure actual duration for all tracks.
+    pub async fn rescan_library(&self, cred: &Credential) -> AppResult<RescanReport> {
+        let url = format!("{}/library/rescan", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("rescan_library"))?;
+        let body: RescanDto = check_status(resp).await?.json().await.map_err(rest_err("rescan_library decode"))?;
+        Ok(RescanReport {
+            tracks_checked: body.tracks_checked,
+            tracks_updated: body.tracks_updated,
+            errors: body.errors,
+        })
+    }
+
     // ----- Uploads (Phase 8) -----------------------------------------------
 
     /// Upload a file (single audio or archive) via REST multipart `POST /upload`.
@@ -486,12 +547,23 @@ impl RestClient {
         cred: &Credential,
         filename: &str,
         data: Vec<u8>,
+        cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         let part = reqwest::multipart::Part::bytes(data)
             .file_name(filename.to_string())
             .mime_str("application/octet-stream")
             .map_err(|e| AppError::Transport(format!("mime: {e}")))?;
-        let form = reqwest::multipart::Form::new().part("file", part);
+        let mut form = reqwest::multipart::Form::new().part("file", part);
+
+        // Optional album cover as a second `cover` field; the server stages
+        // it as a sidecar so ingest picks it up before any remote fetch.
+        if let Some((cover_name, cover_bytes)) = cover {
+            let cover_part = reqwest::multipart::Part::bytes(cover_bytes)
+                .file_name(cover_name)
+                .mime_str("image/jpeg")
+                .map_err(|e| AppError::Transport(format!("cover mime: {e}")))?;
+            form = form.part("cover", cover_part);
+        }
 
         let url = format!("{}/upload", self.base);
         let resp = self
@@ -687,6 +759,13 @@ struct ArchiveUploadResponse {
     non_audio_skipped: u64,
     errors: u64,
     track_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RescanDto {
+    tracks_checked: u64,
+    tracks_updated: u64,
+    errors: u64,
 }
 
 fn rest_err(ctx: &'static str) -> impl Fn(reqwest::Error) -> AppError {

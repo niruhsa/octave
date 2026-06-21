@@ -70,6 +70,27 @@ pub trait TrackRepo: Send + Sync {
     ) -> Result<Option<Track>>;
     async fn find_by_file_path(&self, file_path: &str) -> Result<Option<Track>>;
     async fn delete(&self, id: Uuid) -> Result<()>;
+    /// Return every track's (id, file_path, duration_ms) for bulk rescan.
+    async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>>;
+    /// Overwrite the duration of a single track.  Returns the updated row.
+    async fn update_duration(&self, id: Uuid, duration_ms: i64) -> Result<Option<Track>>;
+    /// Refresh the file-derived technical fields (codec, bitrate, size)
+    /// during a full library rescan.  Returns the updated row.
+    async fn update_file_props(
+        &self,
+        id: Uuid,
+        codec: &str,
+        bitrate_kbps: Option<i32>,
+        file_size: Option<i64>,
+    ) -> Result<Option<Track>>;
+}
+
+/// Lightweight row for `list_all_ids_paths` — avoids fetching every column.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TrackIdPath {
+    pub id: Uuid,
+    pub file_path: String,
+    pub duration_ms: i64,
 }
 
 #[async_trait]

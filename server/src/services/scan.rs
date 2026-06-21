@@ -14,11 +14,21 @@ use crate::db::models::{NewTrack, PermissionLevel};
 use crate::error::{AppError, Result};
 use crate::services::library::LibraryService;
 use crate::services::tag::{self, AUDIO_EXTS};
+use super::duration;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScanReport {
     pub tracks_added: u64,
     pub tracks_skipped: u64,
+    pub errors: u64,
+}
+
+/// Report from a `refresh_durations` run.
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+pub struct DurationRefreshReport {
+    pub total: u64,
+    pub corrected: u64,
+    pub skipped_missing: u64,
     pub errors: u64,
 }
 
@@ -99,7 +109,23 @@ impl ScanService {
             return Ok(false);
         }
 
-        let info = tag::read_tags(path)?;
+        let mut info = tag::read_tags(path)?;
+
+        // Cross-validate duration (same logic as index_file).
+        if let Some(actual) = duration::measure_duration(path) {
+            let actual_ms = actual.as_millis() as i64;
+            let diff = (info.duration_ms - actual_ms).abs();
+            let threshold = (info.duration_ms.max(1) / 100).max(500);
+            if diff > threshold {
+                tracing::info!(
+                    path = %path.display(),
+                    tag_ms = info.duration_ms,
+                    actual_ms,
+                    "duration corrected during scan"
+                );
+                info.duration_ms = actual_ms;
+            }
+        }
 
         // Upsert artist (find-by-name, else create).
         let artist = match self.library.artists.find_by_name(&info.artist).await? {
@@ -170,7 +196,29 @@ impl ScanService {
             return Ok(None);
         }
 
-        let info = tag::read_tags(path)?;
+        let mut info = tag::read_tags(path)?;
+
+        // Cross-validate tag-reported duration against actual audio frame
+        // count.  VBR MP3 without Xing header can report a duration that's
+        // off by minutes; this corrects it to the real playable length.
+        if let Some(actual) = duration::measure_duration(path) {
+            let actual_ms = actual.as_millis() as i64;
+            let diff = (info.duration_ms - actual_ms).abs();
+            // Use measured duration when they differ by >1% AND >500 ms.
+            // Small discrepancies (rounding, different frame-boundary
+            // conventions) are expected and not worth logging.
+            let threshold = (info.duration_ms.max(1) / 100).max(500);
+            if diff > threshold {
+                tracing::info!(
+                    path = %path.display(),
+                    tag_ms = info.duration_ms,
+                    actual_ms,
+                    diff_ms = diff,
+                    "duration corrected: tag was inaccurate"
+                );
+                info.duration_ms = actual_ms;
+            }
+        }
 
         let artist = match self.library.artists.find_by_name(&info.artist).await? {
             Some(a) => a,
@@ -206,5 +254,210 @@ impl ScanService {
         let track = self.library.create_track(caller, new).await?;
         debug!(path = %path.display(), track_id = %track.id, "index_file: indexed");
         Ok(Some(track.id))
+    }
+
+    /// Refresh the duration of every track in the library.
+    ///
+    /// Walks all tracks in the DB, opens each file, measures actual audio
+    /// duration via Symphonia, and updates the DB row when the measured
+    /// value differs from the stored one.  Manager+ only.
+    pub async fn refresh_durations(
+        &self,
+        caller: &Identity,
+    ) -> Result<DurationRefreshReport> {
+        caller.require(PermissionLevel::Manager)?;
+
+        let rows = self.library.tracks.list_all_ids_paths().await?;
+        let total = rows.len() as u64;
+        let mut corrected: u64 = 0;
+        let mut skipped_missing: u64 = 0;
+        let mut errors: u64 = 0;
+
+        for row in &rows {
+            let path = std::path::Path::new(&row.file_path);
+            // Resolve relative paths against the library root.
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else if let Some(root) = &self.library.library_root {
+                root.join(path)
+            } else {
+                skipped_missing += 1;
+                continue;
+            };
+
+            if !resolved.is_file() {
+                skipped_missing += 1;
+                continue;
+            }
+
+            match duration::measure_duration(&resolved) {
+                Some(actual) => {
+                    let actual_ms = actual.as_millis() as i64;
+                    let diff = (row.duration_ms - actual_ms).abs();
+                    // Same threshold as index_file: >1% and >500ms.
+                    let threshold = (row.duration_ms.max(1) / 100).max(500);
+                    if diff > threshold {
+                        if let Err(e) = self
+                            .library
+                            .tracks
+                            .update_duration(row.id, actual_ms)
+                            .await
+                        {
+                            tracing::warn!(
+                                id = %row.id,
+                                error = %e,
+                                "refresh_durations: update failed"
+                            );
+                            errors += 1;
+                        } else {
+                            tracing::info!(
+                                id = %row.id,
+                                tag_ms = row.duration_ms,
+                                actual_ms,
+                                "refresh_durations: corrected"
+                            );
+                            corrected += 1;
+                        }
+                    }
+                }
+                None => {
+                    // Format not supported by Symphonia — skip.
+                    skipped_missing += 1;
+                }
+            }
+        }
+
+        let report = DurationRefreshReport {
+            total,
+            corrected,
+            skipped_missing,
+            errors,
+        };
+        tracing::info!(
+            total,
+            corrected,
+            skipped_missing,
+            errors,
+            "refresh_durations: complete"
+        );
+        Ok(report)
+    }
+
+    /// Rescan every track: re-read file tags (title, track_no, disc_no,
+    /// codec, bitrate) AND re-measure duration via Symphonia.  Manager+ only.
+    pub async fn rescan_library(
+        &self,
+        caller: &Identity,
+        full_metadata: bool,
+    ) -> Result<DurationRefreshReport> {
+        caller.require(PermissionLevel::Manager)?;
+
+        let rows = self.library.tracks.list_all_ids_paths().await?;
+        let total = rows.len() as u64;
+        let mut corrected: u64 = 0;
+        let mut skipped_missing: u64 = 0;
+        let mut errors: u64 = 0;
+
+        for row in &rows {
+            let path = std::path::Path::new(&row.file_path);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else if let Some(root) = &self.library.library_root {
+                root.join(path)
+            } else {
+                skipped_missing += 1;
+                continue;
+            };
+
+            if !resolved.is_file() {
+                skipped_missing += 1;
+                continue;
+            }
+
+            let mut changed = false;
+
+            // Re-measure actual playback duration via Symphonia.
+            if let Some(actual) = super::duration::measure_duration(&resolved) {
+                let actual_ms = actual.as_millis() as i64;
+                let diff = (row.duration_ms - actual_ms).abs();
+                let threshold = (row.duration_ms.max(1) / 100).max(500);
+                if diff > threshold {
+                    if let Err(e) = self
+                        .library
+                        .tracks
+                        .update_duration(row.id, actual_ms)
+                        .await
+                    {
+                        tracing::warn!(id=%row.id, error=%e, "rescan: duration update failed");
+                        errors += 1;
+                        continue;
+                    }
+                    changed = true;
+                }
+            }
+
+            // Re-read tags for full metadata refresh.
+            if full_metadata {
+                match tag::read_tags(&resolved) {
+                    Ok(info) => {
+                        // Update tag-derived fields (title, track_no, disc_no).
+                        // Duration is handled above via Symphonia measurement.
+                        if let Err(e) = self
+                            .library
+                            .tracks
+                            .update(
+                                row.id,
+                                &info.title,
+                                info.track_no,
+                                info.disc_no,
+                                "{}",
+                            )
+                            .await
+                        {
+                            tracing::warn!(id=%row.id, error=%e, "rescan: tag update failed");
+                            errors += 1;
+                        } else {
+                            changed = true;
+                        }
+                        // Refresh the file-derived technical fields too so a
+                        // rescan repairs stale codec/bitrate/size as well as
+                        // duration.
+                        if let Err(e) = self
+                            .library
+                            .tracks
+                            .update_file_props(
+                                row.id,
+                                &info.codec,
+                                info.bitrate_kbps,
+                                info.file_size,
+                            )
+                            .await
+                        {
+                            tracing::warn!(id=%row.id, error=%e, "rescan: file-props update failed");
+                            errors += 1;
+                        } else {
+                            changed = true;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(id=%row.id, error=%e, "rescan: tag read failed");
+                        errors += 1;
+                    }
+                }
+            }
+
+            if changed {
+                corrected += 1;
+            }
+        }
+
+        let report = DurationRefreshReport {
+            total,
+            corrected,
+            skipped_missing,
+            errors,
+        };
+        tracing::info!(total, corrected, skipped_missing, errors, "rescan_library: complete");
+        Ok(report)
     }
 }

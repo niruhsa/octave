@@ -14,6 +14,7 @@ import {
 } from "../downloads/useDownloads";
 import { formatError } from "../lib/error";
 import { formatDuration } from "../lib/format";
+import { broadcastInvalidate } from "../App";
 
 /**
  * Offline-downloads management view (Phase 6):
@@ -51,8 +52,10 @@ export default function Downloads() {
   async function remove(id: string) {
     try {
       await downloadDelete(id);
+      broadcastInvalidate(["library"]);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["cache", "downloaded_tracks"] }),
+        qc.invalidateQueries({ queryKey: ["library"] }),
         refreshStorage(),
       ]);
     } catch (e) {

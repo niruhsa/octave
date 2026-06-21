@@ -1,17 +1,36 @@
-import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
-import { libraryListAlbumsByArtist } from "../ipc";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useParams, useNavigate } from "react-router-dom";
+import { libraryDeleteArtist, libraryListAlbumsByArtist } from "../ipc";
 import { Cover } from "../components/Cover";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
+import { useAppStore } from "../store";
+import { broadcastInvalidate } from "../App";
 
 export default function Artist() {
   const { id = "" } = useParams();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const tier = useAppStore((s) => s.tier);
+  const isManager = tier === "admin" || tier === "manager";
+
   const q = useQuery({
     queryKey: ["library", "albums-by-artist", id],
     queryFn: () => libraryListAlbumsByArtist(id),
     enabled: !!id,
   });
+
+  async function delArtist() {
+    if (!window.confirm("Permanently delete this artist and all their albums/tracks from the server?")) return;
+    try {
+      await libraryDeleteArtist(id);
+      await qc.invalidateQueries({ queryKey: ["library"] });
+      broadcastInvalidate(["library"]);
+      navigate("/library");
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
 
   return (
     <section className="flex flex-col gap-4">
@@ -23,7 +42,17 @@ export default function Artist() {
           <h1 className="text-2xl font-semibold">Albums</h1>
           <p className="text-xs text-neutral-500">artist {id}</p>
         </div>
-        {q.data && <SourceBadge source={q.data.source} />}
+        <div className="flex items-center gap-3">
+          {q.data && <SourceBadge source={q.data.source} />}
+          {isManager && (
+            <button
+              onClick={delArtist}
+              className="rounded border border-red-800 px-3 py-1 text-sm text-red-400 hover:bg-red-900/20"
+            >
+              ✕ Delete artist
+            </button>
+          )}
+        </div>
       </header>
 
       {q.isLoading && <p className="text-sm text-neutral-400">Loading…</p>}
@@ -34,7 +63,7 @@ export default function Artist() {
       )}
 
       {q.data && (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {q.data.items.length === 0 ? (
             <li className="text-sm text-neutral-500">No albums.</li>
           ) : (
@@ -43,13 +72,13 @@ export default function Artist() {
                 key={a.id}
                 className="flex flex-col gap-2 rounded border border-neutral-800 p-3"
               >
-                <Cover album={a} size={160} />
+                <Cover album={a} />
                 <div className="flex items-start gap-2">
                   <DownloadedDot downloaded={a.downloaded} />
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <Link
                       to={`/albums/${a.id}`}
-                      className="block text-sm font-medium hover:underline"
+                      className="block text-sm font-medium hover:underline truncate"
                     >
                       {a.title}
                     </Link>

@@ -80,23 +80,31 @@ export const useDownloadsStore = create<DownloadsState>((set) => ({
 }));
 
 /**
- * Mount once (root layout). Wires the progress-event listener and an
- * initial storage-usage read.
+ * Mount once (root layout). Wires the progress-event listener, an
+ * initial storage-usage read, and triggers query invalidation whenever a
+ * download reaches its terminal phase so all pages reflect the new state
+ * without a manual refresh.
  */
-export function useDownloadListener() {
+export function useDownloadListener(onTransactionComplete?: () => void) {
   const apply = useDownloadsStore((s) => s.apply);
   const refreshStorage = useDownloadsStore((s) => s.refreshStorage);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    onDownloadProgress(apply).then((fn) => {
+    onDownloadProgress((e) => {
+      apply(e);
+      if (e.phase === "done" || e.phase === "error") {
+        onTransactionComplete?.();
+        void refreshStorage();
+      }
+    }).then((fn) => {
       unlisten = fn;
     });
     void refreshStorage();
     return () => {
       unlisten?.();
     };
-  }, [apply, refreshStorage]);
+  }, [apply, refreshStorage, onTransactionComplete]);
 }
 
 /** Format bytes as a human-readable string. */

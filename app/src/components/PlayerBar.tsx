@@ -90,7 +90,7 @@ export default function PlayerBar() {
           <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-2">
         {/* Now-playing */}
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          {current?.downloaded ? (
+          {current ? (
             <img
               src={coverUrl(current.album_id)}
               alt="cover"

@@ -1,27 +1,31 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { broadcastInvalidate } from "../App";
 import {
   librarySearchAlbums,
   librarySearchArtists,
   librarySearchTracks,
+  libraryDeleteArtist,
+  libraryDeleteAlbum,
+  libraryDeleteTrack,
 } from "../ipc";
 import type { MergedTrack } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
 import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
 import { usePlayerStore } from "../player/store";
+import { useAppStore } from "../store";
 
 const PAGE_SIZE = 25;
 
-/**
- * Unified search across artists, albums, tracks. Each section fires its
- * own query so a slow track index doesn't gate the others.
- */
 export default function Search() {
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
+  const qc = useQueryClient();
   const playTrack = usePlayerStore((s) => s.playTrack);
+  const tier = useAppStore((s) => s.tier);
+  const isManager = tier === "admin" || tier === "manager";
 
   const artists = useQuery({
     queryKey: ["search", "artists", submitted],
@@ -38,6 +42,35 @@ export default function Search() {
     queryFn: () => librarySearchTracks(submitted, { limit: PAGE_SIZE }),
     enabled: submitted.length > 0,
   });
+
+  async function delArtist(id: string, name: string) {
+    if (!window.confirm(`Permanently delete artist "${name}" and all their albums/tracks?`)) return;
+    try {
+      await libraryDeleteArtist(id);
+      invalidateSearch();
+    } catch (e) { alert(formatError(e)); }
+  }
+  async function delAlbum(id: string, title: string) {
+    if (!window.confirm(`Permanently delete album "${title}" and all its tracks?`)) return;
+    try {
+      await libraryDeleteAlbum(id);
+      invalidateSearch();
+    } catch (e) { alert(formatError(e)); }
+  }
+  async function delTrack(id: string, title: string) {
+    if (!window.confirm(`Permanently delete track "${title}" from the server?`)) return;
+    try {
+      await libraryDeleteTrack(id);
+      invalidateSearch();
+    } catch (e) { alert(formatError(e)); }
+  }
+
+  function invalidateSearch() {
+    broadcastInvalidate(["search"]);
+    broadcastInvalidate(["library"]);
+    qc.invalidateQueries({ queryKey: ["search"] });
+    qc.invalidateQueries({ queryKey: ["library"] });
+  }
 
   return (
     <section className="flex flex-col gap-4">
@@ -72,7 +105,6 @@ export default function Search() {
 
       {submitted && (
         <div className="flex flex-col gap-6">
-          {/* Artists ----------------------------------------------------- */}
           <Section
             title="Artists"
             error={artists.error}
@@ -86,19 +118,24 @@ export default function Search() {
                 {artists.data?.items.map((a) => (
                   <li key={a.id} className="flex items-center gap-3 p-2 text-sm">
                     <DownloadedDot downloaded={a.downloaded} />
-                    <Link
-                      to={`/artists/${a.id}`}
-                      className="flex-1 hover:underline"
-                    >
+                    <Link to={`/artists/${a.id}`} className="flex-1 hover:underline">
                       {a.name}
                     </Link>
+                    {isManager && (
+                      <button
+                        onClick={() => void delArtist(a.id, a.name)}
+                        className="rounded border border-red-800 px-1.5 py-0.5 text-xs text-red-400 hover:bg-red-900/20"
+                        title="Delete artist"
+                      >
+                        🗑
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
           </Section>
 
-          {/* Albums ------------------------------------------------------ */}
           <Section
             title="Albums"
             error={albums.error}
@@ -112,16 +149,20 @@ export default function Search() {
                 {albums.data?.items.map((a) => (
                   <li key={a.id} className="flex items-center gap-3 p-2 text-sm">
                     <DownloadedDot downloaded={a.downloaded} />
-                    <Link
-                      to={`/albums/${a.id}`}
-                      className="flex-1 hover:underline"
-                    >
+                    <Link to={`/albums/${a.id}`} className="flex-1 hover:underline">
                       {a.title}
                     </Link>
                     {a.release_year && (
-                      <span className="text-xs text-neutral-500">
-                        {a.release_year}
-                      </span>
+                      <span className="text-xs text-neutral-500">{a.release_year}</span>
+                    )}
+                    {isManager && (
+                      <button
+                        onClick={() => void delAlbum(a.id, a.title)}
+                        className="rounded border border-red-800 px-1.5 py-0.5 text-xs text-red-400 hover:bg-red-900/20"
+                        title="Delete album"
+                      >
+                        🗑
+                      </button>
                     )}
                   </li>
                 ))}
@@ -129,7 +170,6 @@ export default function Search() {
             )}
           </Section>
 
-          {/* Tracks ------------------------------------------------------ */}
           <Section
             title="Tracks"
             error={tracks.error}
@@ -147,9 +187,7 @@ export default function Search() {
                     onClick={() => playTrack(t as MergedTrack, tracks.data!.items)}
                   >
                     <DownloadedDot downloaded={t.downloaded} />
-                    <span className="flex-1 hover:underline">
-                      {t.title}
-                    </span>
+                    <span className="flex-1 hover:underline">{t.title}</span>
                     <Link
                       to={`/albums/${t.album_id}`}
                       className="text-xs text-neutral-500 hover:underline"
@@ -160,6 +198,15 @@ export default function Search() {
                     <span className="w-12 text-right tabular-nums text-neutral-500">
                       {formatDuration(t.duration_ms)}
                     </span>
+                    {isManager && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void delTrack(t.id, t.title); }}
+                        className="rounded border border-red-800 px-1.5 py-0.5 text-xs text-red-400 hover:bg-red-900/20"
+                        title="Delete track"
+                      >
+                        🗑
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
