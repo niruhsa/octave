@@ -4,13 +4,15 @@ import { Link } from "react-router-dom";
 import { playlistCreate, playlistList } from "../ipc";
 import { formatError } from "../lib/error";
 import { SourceBadge } from "../components/SourceBadge";
+import { PlaylistIcon, PlusIcon } from "../components/icons";
 import { broadcastInvalidate } from "../App";
+import { btnPrimary, card, errorBox, input } from "../lib/ui";
+import { SkeletonList } from "../components/Skeleton";
 
 /**
  * /playlists — the current user's playlists. Online → server list (mirrored
- * into the cache so the next offline view has them); offline → cache only.
- * A locally-created playlist (whose `playlist.create` op is still queued)
- * carries a `local` flag and is badged "unsynced".
+ * into the cache); offline → cache only. A locally-created playlist (create
+ * op still queued) carries a `local` flag and is badged "unsynced".
  */
 export default function Playlists() {
   const qc = useQueryClient();
@@ -18,10 +20,7 @@ export default function Playlists() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const q = useQuery({
-    queryKey: ["playlists", "mine"],
-    queryFn: playlistList,
-  });
+  const q = useQuery({ queryKey: ["playlists", "mine"], queryFn: playlistList });
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -42,12 +41,16 @@ export default function Playlists() {
     }
   }
 
+  const items = q.data?.items ?? [];
+
   return (
-    <section className="flex flex-col gap-4">
-      <header className="flex items-baseline justify-between">
+    <section className="flex flex-col gap-6 p-6 md:p-8">
+      <header className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Playlists</h1>
-          <p className="text-xs text-neutral-500">yours · server-synced</p>
+          <h1 className="text-[27px] font-semibold tracking-tight">Playlists</h1>
+          <p className="mt-1 font-mono text-[11.5px] text-oct-subtle">
+            {items.length} playlist{items.length === 1 ? "" : "s"} · server-synced
+          </p>
         </div>
         {q.data && <SourceBadge source={q.data.source} />}
       </header>
@@ -58,54 +61,47 @@ export default function Playlists() {
           onChange={(e) => setName(e.target.value)}
           placeholder="New playlist name…"
           maxLength={200}
-          className="flex-1 rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+          className={`${input} flex-1`}
         />
-        <button
-          type="submit"
-          disabled={busy || !name.trim()}
-          className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
-        >
-          {busy ? "…" : "Create"}
+        <button type="submit" disabled={busy || !name.trim()} className={btnPrimary}>
+          <PlusIcon size={14} /> {busy ? "…" : "Create"}
         </button>
       </form>
-      {err && (
-        <p className="rounded border border-red-700 bg-red-900/30 p-2 text-sm text-red-200">
-          {err}
-        </p>
-      )}
+      {err && <p className={errorBox}>{err}</p>}
 
-      {q.isLoading && <p className="text-sm text-neutral-400">Loading…</p>}
-      {q.isError && (
-        <p className="rounded border border-red-700 bg-red-900/30 p-2 text-sm text-red-200">
-          {formatError(q.error)}
-        </p>
-      )}
+      {q.isLoading && <SkeletonList rows={6} avatar="square" trailing={false} />}
+      {q.isError && <p className={errorBox}>{formatError(q.error)}</p>}
 
       {q.data && (
-        <ul className="divide-y divide-neutral-800 rounded border border-neutral-800">
-          {q.data.items.length === 0 ? (
-            <li className="p-3 text-sm text-neutral-500">No playlists yet.</li>
+        <div className={`${card} divide-y divide-oct-border`}>
+          {items.length === 0 ? (
+            <p className="p-4 text-sm text-oct-subtle">No playlists yet.</p>
           ) : (
-            q.data.items.map((p) => (
-              <li key={p.id}>
-                <Link
-                  to={`/playlists/${encodeURIComponent(p.id)}`}
-                  className="flex items-center justify-between p-3 text-sm hover:bg-neutral-800/50"
+            items.map((p) => (
+              <Link
+                key={p.id}
+                to={`/playlists/${encodeURIComponent(p.id)}`}
+                className="group flex items-center gap-3 px-3 py-2.5 first:rounded-t-xl last:rounded-b-xl hover:bg-oct-elevated/50"
+              >
+                <span
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-oct-accent"
+                  style={{ background: "rgba(224,168,75,0.12)" }}
                 >
-                  <span className="truncate">{p.name}</span>
-                  {p.local && (
-                    <span
-                      className="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-200"
-                      title="Created offline; waiting to sync"
-                    >
-                      unsynced
-                    </span>
-                  )}
-                </Link>
-              </li>
+                  <PlaylistIcon size={18} />
+                </span>
+                <span className="flex-1 truncate text-[13.5px] group-hover:text-white">{p.name}</span>
+                {p.local && (
+                  <span
+                    className="rounded-md bg-oct-accent/15 px-1.5 py-0.5 font-mono text-[10px] text-oct-accent-bright"
+                    title="Created offline; waiting to sync"
+                  >
+                    UNSYNCED
+                  </span>
+                )}
+              </Link>
             ))
           )}
-        </ul>
+        </div>
       )}
     </section>
   );

@@ -1,7 +1,53 @@
+/* Fonts — vendored via @fontsource so the app keeps its typography offline
+   (no Google Fonts CDN round-trip). Space Grotesk = UI, Space Mono =
+   technical/metadata readouts (codecs, counts, timings). */
+@import "@fontsource/space-grotesk/latin-300.css";
+@import "@fontsource/space-grotesk/latin-400.css";
+@import "@fontsource/space-grotesk/latin-500.css";
+@import "@fontsource/space-grotesk/latin-600.css";
+@import "@fontsource/space-grotesk/latin-700.css";
+@import "@fontsource/space-mono/latin-400.css";
+@import "@fontsource/space-mono/latin-700.css";
 @import "tailwindcss";
 
-/* Base app shell. Keep this file minimal — component-level styling lives with
-   the components via Tailwind utilities. */
+/* ── OCTAVE "Obsidian" design tokens ───────────────────────────────────────
+   Warm-dark, refined audiophile palette with an amber accent. Exposed as
+   Tailwind utilities (bg-oct-bg, text-oct-accent, border-oct-line, …). */
+@theme {
+  --font-sans: "Space Grotesk", system-ui, -apple-system, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Surfaces */
+  --color-oct-bg: #0b0c0e; /* app canvas */
+  --color-oct-surface: #0e0f12; /* sidebar, player bar */
+  --color-oct-panel: #121316; /* status panel */
+  --color-oct-card: #141518; /* inputs, search field */
+  --color-oct-elevated: #16181c; /* active nav, row hover, dividers */
+  --color-oct-elevated2: #1f2228; /* graphite hover */
+
+  /* Lines */
+  --color-oct-border: #16181c;
+  --color-oct-border-strong: #1f2127;
+  --color-oct-line: #26282d; /* progress tracks, faint rules */
+
+  /* Accent */
+  --color-oct-accent: #e0a84b;
+  --color-oct-accent-bright: #f0c074;
+  --color-oct-accent-dim: #c99a5a;
+
+  /* Text */
+  --color-oct-text: #ececee;
+  --color-oct-muted: #9a9ea6; /* inactive nav */
+  --color-oct-subtle: #6b6f76; /* secondary text */
+  --color-oct-faint: #54585f; /* labels, counts */
+  --color-oct-dim: #73777e;
+
+  /* Status */
+  --color-oct-online: #3fb950;
+  --color-oct-offline: #8a5a4a;
+  --color-oct-danger: #e5658a;
+}
+
 html,
 body,
 #root {
@@ -10,16 +56,112 @@ body,
 
 body {
   margin: 0;
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    Oxygen,
-    Ubuntu,
-    Cantarell,
-    "Helvetica Neue",
-    sans-serif;
-  background-color: #0b0b0d;
-  color: #f5f5f5;
+  font-family: var(--font-sans);
+  background-color: var(--color-oct-bg);
+  color: var(--color-oct-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Animations (lifted from the OCTAVE design comps) ───────────────────── */
+@keyframes eqbar {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@keyframes octspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes octpulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes octshimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Skeleton placeholder block: dark base with a gentle shimmer sweep. */
+.oct-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-oct-elevated);
+}
+.oct-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: octshimmer 1.4s ease-in-out infinite;
+}
+
+.animate-octspin {
+  animation: octspin 1.4s linear infinite;
+  transform-origin: center;
+}
+.animate-octpulse {
+  animation: octpulse 2.4s ease-in-out infinite;
+}
+
+/* ── Custom scrollbars (OCTAVE) ─────────────────────────────────────────── */
+.oct-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.oct-scroll::-webkit-scrollbar-thumb {
+  background: #1f2127;
+  border-radius: 6px;
+  border: 3px solid var(--color-oct-bg);
+}
+.oct-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Range inputs styled to the amber accent (sliders in the player bar). */
+input[type="range"].oct-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-oct-line);
+  cursor: pointer;
+}
+input[type="range"].oct-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--color-oct-accent);
+}
+input[type="range"].oct-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-oct-accent);
+}
+
+/* Native select dark styling for the few dropdowns (account admin). */
+select option {
+  background: var(--color-oct-surface);
+  color: var(--color-oct-text);
 }

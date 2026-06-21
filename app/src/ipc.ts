@@ -549,36 +549,41 @@ export const cacheGetSyncState = (entityType: SyncEntityType, entityId: string) 
   invoke<SyncState | null>("cache_get_sync_state", { entityType, entityId });
 
 // ---------------------------------------------------------------------------
-// uploads (Phase 8)
+// uploads (Phase 8) — background jobs + notifications
 //
-// `uploadFile` takes a local file path (from a native dialog picker),
-// reads the bytes in Rust, and pushes them to the server via gRPC
-// (client-streaming) or REST (multipart) fallback. Manager+ gated.
+// `uploadFiles` / `uploadFolder` start a background job in Rust and return a
+// jobId immediately (the UI never blocks). Progress arrives via the
+// `upload-progress` event + an OS notification; a final `upload-complete`
+// event carries the tally, and the notification is replaced with a summary.
+// On Android the picker returns `content://` URIs which the Upload route
+// stages into the app cache before passing them here as `UploadItem`s.
 // ---------------------------------------------------------------------------
 
-export type SingleUploadResult = {
-  track_id: string;
-  path: string;
+/** A resolved upload source. `name` hints a display name (for staged temp
+ *  files whose path has no usable name); `cleanup` deletes the path after
+ *  upload (Android temp files staged from a content URI). */
+export type UploadItem = { path: string; name?: string; cleanup?: boolean };
+
+/** Start a background upload of resolved files. Returns the job id. */
+export const uploadFiles = (items: UploadItem[]) =>
+  invoke<string>("upload_files", { items });
+
+/** Start a background folder upload (desktop). Returns the job id. */
+export const uploadFolder = (dirPath: string) =>
+  invoke<string>("upload_folder", { dirPath });
+
+export type UploadProgressEvent = {
+  jobId: string;
+  phase: "scanning" | "uploading" | "done";
+  current: number;
+  total: number;
+  file: string | null;
+  ok: boolean | null;
+  message: string | null;
 };
 
-export type ArchiveUploadResult = {
-  kind: string;
-  ingested: number;
-  already_indexed: number;
-  non_audio_skipped: number;
-  errors: number;
-  track_ids: string[];
-};
-
-export type UploadResult =
-  | { variant: "single"; data: SingleUploadResult }
-  | { variant: "archive"; data: ArchiveUploadResult };
-
-/** Upload a single file (audio track or archive) from a local path. */
-export const uploadFile = (path: string) =>
-  invoke<UploadResult>("upload_file", { path });
-
-export type FolderUploadResult = {
+export type UploadCompleteEvent = {
+  jobId: string;
   total: number;
   succeeded: number;
   failed: number;
@@ -586,23 +591,18 @@ export type FolderUploadResult = {
   errors: string[];
 };
 
-/** Upload every audio + archive file in a directory tree. */
-export const uploadFolder = (dirPath: string) =>
-  invoke<FolderUploadResult>("upload_folder", { dirPath });
-
-export type UploadProgressEvent = {
-  phase: "scanning" | "uploading" | "done";
-  current: number;
-  total: number;
-  file?: string;
-  ok?: boolean;
-  message?: string;
-};
-
-/** Subscribe to upload-progress events. Returns an unlisten fn. */
+/** Subscribe to per-file upload progress. Returns an unlisten fn. */
 export async function onUploadProgress(
   cb: (e: UploadProgressEvent) => void,
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<UploadProgressEvent>("upload-progress", (e) => cb(e.payload));
+}
+
+/** Subscribe to upload-job completion. Returns an unlisten fn. */
+export async function onUploadComplete(
+  cb: (e: UploadCompleteEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<UploadCompleteEvent>("upload-complete", (e) => cb(e.payload));
 }

@@ -7,18 +7,15 @@ import {
   authSetSecretKey,
 } from "../ipc";
 import { useAppStore } from "../store";
+import { btnPrimary, errorBox, input, label } from "../lib/ui";
+import { KeyIcon, ArtistIcon } from "../components/icons";
 
 type Mode = "password" | "secret_key";
 
 /**
- * Phase 2 login screen.
- *
- * Two paths:
- *   1. Server URL + username/password → bearer token.
- *   2. Server URL + `SECRET_KEY` → effective Admin.
- *
- * Both verified against the server before we persist anything; we do not
- * trust user input as proof of access.
+ * Phase 2 login screen, OCTAVE-branded. Two paths — username/password →
+ * bearer token, or `SECRET_KEY` → effective Admin. Both verified against the
+ * server before anything persists.
  */
 export default function Login() {
   const setSession = useAppStore((s) => s.setSession);
@@ -63,109 +60,115 @@ export default function Login() {
     }
   }
 
+  const tab = (m: Mode, text: string, Icon: typeof KeyIcon) => (
+    <button
+      type="button"
+      onClick={() => setMode(m)}
+      className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] transition-colors ${
+        mode === m ? "bg-oct-elevated text-oct-text" : "text-oct-subtle hover:text-oct-muted"
+      }`}
+    >
+      <Icon size={14} />
+      {text}
+    </button>
+  );
+
   return (
-    <form onSubmit={submit} className="flex max-w-md flex-col gap-3">
-      <h1 className="text-2xl font-semibold">Sign in</h1>
-
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Server URL (REST)</span>
-        <input
-          type="url"
-          required
-          value={restUrl}
-          onChange={(e) => setRestUrl(e.target.value)}
-          className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-        />
-        <span className="text-xs text-neutral-500">
-          Dev default: REST :8080, gRPC :50051 (auto-derived).
-        </span>
-      </label>
-
-      <button
-        type="button"
-        onClick={() => setShowAdvanced((v) => !v)}
-        className="self-start text-xs text-neutral-400 underline"
+    <div className="flex min-h-full items-center justify-center bg-oct-bg p-6">
+      <form
+        onSubmit={submit}
+        className="flex w-full max-w-sm flex-col gap-4 rounded-2xl border border-oct-border-strong bg-oct-surface p-7 shadow-[0_24px_60px_-18px_rgba(0,0,0,0.55)]"
       >
-        {showAdvanced ? "Hide" : "Show"} advanced
-      </button>
-      {showAdvanced && (
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">gRPC URL (optional)</span>
+        <div className="flex flex-col items-center gap-3 pb-1">
+          <span className="block h-10 w-10 rounded-lg bg-oct-accent" />
+          <div className="text-center">
+            <div className="text-lg font-semibold tracking-[0.18em]">OCTAVE</div>
+            <div className="mt-1 font-mono text-[10.5px] tracking-[0.14em] text-oct-faint">
+              SIGN IN TO YOUR LIBRARY
+            </div>
+          </div>
+        </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className={label}>SERVER URL (REST)</span>
           <input
             type="url"
-            value={grpcUrl}
-            placeholder="http://localhost:50051"
-            onChange={(e) => setGrpcUrl(e.target.value)}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+            required
+            value={restUrl}
+            onChange={(e) => setRestUrl(e.target.value)}
+            className={input}
           />
+          <span className="text-[11px] text-oct-faint">
+            Dev default: REST :8080, gRPC :50051 (auto-derived).
+          </span>
         </label>
-      )}
 
-      <div className="flex gap-2 text-sm">
         <button
           type="button"
-          className={`rounded px-2 py-1 ${mode === "password" ? "bg-neutral-700" : "bg-neutral-900 border border-neutral-700"}`}
-          onClick={() => setMode("password")}
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="self-start text-[11px] text-oct-subtle underline decoration-oct-border-strong hover:text-oct-muted"
         >
-          Username + password
+          {showAdvanced ? "Hide" : "Show"} advanced
         </button>
-        <button
-          type="button"
-          className={`rounded px-2 py-1 ${mode === "secret_key" ? "bg-neutral-700" : "bg-neutral-900 border border-neutral-700"}`}
-          onClick={() => setMode("secret_key")}
-        >
-          SECRET_KEY
-        </button>
-      </div>
-
-      {mode === "password" ? (
-        <>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-neutral-400">Username</span>
+        {showAdvanced && (
+          <label className="flex flex-col gap-1.5">
+            <span className={label}>GRPC URL (OPTIONAL)</span>
             <input
-              required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+              type="url"
+              value={grpcUrl}
+              placeholder="http://localhost:50051"
+              onChange={(e) => setGrpcUrl(e.target.value)}
+              className={input}
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-neutral-400">Password</span>
+        )}
+
+        <div className="flex gap-1 rounded-xl border border-oct-border bg-oct-card p-1">
+          {tab("password", "Password", ArtistIcon)}
+          {tab("secret_key", "SECRET_KEY", KeyIcon)}
+        </div>
+
+        {mode === "password" ? (
+          <>
+            <label className="flex flex-col gap-1.5">
+              <span className={label}>USERNAME</span>
+              <input
+                required
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className={input}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5">
+              <span className={label}>PASSWORD</span>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={input}
+              />
+            </label>
+          </>
+        ) : (
+          <label className="flex flex-col gap-1.5">
+            <span className={label}>SECRET_KEY</span>
             <input
               type="password"
               required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+              value={secretKey}
+              onChange={(e) => setSecretKey(e.target.value)}
+              className={input}
             />
           </label>
-        </>
-      ) : (
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">SECRET_KEY</span>
-          <input
-            type="password"
-            required
-            value={secretKey}
-            onChange={(e) => setSecretKey(e.target.value)}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-          />
-        </label>
-      )}
+        )}
 
-      {err && (
-        <p className="rounded border border-red-700 bg-red-900/30 p-2 text-sm text-red-200">
-          {err}
-        </p>
-      )}
+        {err && <p className={errorBox}>{err}</p>}
 
-      <button
-        type="submit"
-        disabled={busy}
-        className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      >
-        {busy ? "Signing in…" : "Sign in"}
-      </button>
-    </form>
+        <button type="submit" disabled={busy} className={`${btnPrimary} mt-1`}>
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </div>
   );
 }

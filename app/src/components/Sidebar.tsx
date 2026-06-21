@@ -1,39 +1,56 @@
-// Permanent left navigation rail.
+// Permanent left navigation rail — OCTAVE "Obsidian" styling.
 //
-// Rendered by `RootLayout` whenever a session is active, on every
-// authenticated route — so a page with no in-content hyperlinks (e.g. an
-// Album, a single Playlist) can never leave the user stranded. The Login
-// screen is the only route without it (no session yet).
-//
-// Nav items are `NavLink`s so the active route is highlighted. The footer
-// carries the online indicator + sync status (reused from the Phase 5
-// store) and the sign-out action, so those controls are reachable from
-// anywhere too.
+// Rendered by `RootLayout` on every authenticated route (hidden on small
+// screens, where `MobileNav` takes over). Carries the OCTAVE wordmark, a
+// search field, the primary nav (active route gets an amber edge), a LIBRARY
+// group, a live SERVER/SYNC status panel wired to the app + sync stores, and
+// a user/sign-out footer. Returns null with no session so Login stays
+// full-width.
 
 import { NavLink, useNavigate } from "react-router-dom";
 import { authLogout, authRefreshOnline } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
+import { useDownloadsStore } from "../downloads/useDownloads";
+import {
+  ArtistIcon,
+  CloudOffIcon,
+  DiscIcon,
+  DownloadIcon,
+  GearIcon,
+  HomeIcon,
+  PlaylistIcon,
+  PlusIcon,
+  PowerIcon,
+  SearchIcon,
+  SyncIcon,
+  UploadIcon,
+  type IconProps,
+} from "./icons";
+import { OFFLINE_MSG } from "./OfflineGate";
 
 type NavItem = {
   to: string;
   label: string;
-  icon: string;
-  /** When true, only render for admin tier. */
+  Icon: (p: IconProps) => React.ReactElement;
   adminOnly?: boolean;
-  /** When true, only render for manager+ tier. */
   managerOnly?: boolean;
+  /** Render in the secondary "LIBRARY" group instead of the primary group. */
+  group?: "library";
+  badge?: "downloads" | "pending";
+  /** Dim + tooltip when offline — the route is connection-only. */
+  requiresConnection?: boolean;
 };
 
 const NAV: NavItem[] = [
-  { to: "/", label: "Home", icon: "⌂" },
-  { to: "/library", label: "Library", icon: "♪" },
-  { to: "/search", label: "Search", icon: "⌕" },
-  { to: "/playlists", label: "Playlists", icon: "☰" },
-  { to: "/downloads", label: "Downloads", icon: "⬇" },
-  { to: "/upload", label: "Upload", icon: "⬆", managerOnly: true },
-  { to: "/account", label: "Account", icon: "♯" },
-  { to: "/register", label: "Create account", icon: "✚", adminOnly: true },
+  { to: "/", label: "Home", Icon: HomeIcon },
+  { to: "/library", label: "Library", Icon: DiscIcon },
+  { to: "/search", label: "Search", Icon: SearchIcon },
+  { to: "/playlists", label: "Playlists", Icon: PlaylistIcon, badge: "pending" },
+  { to: "/downloads", label: "Downloads", Icon: DownloadIcon, group: "library", badge: "downloads" },
+  { to: "/upload", label: "Upload", Icon: UploadIcon, group: "library", managerOnly: true, requiresConnection: true },
+  { to: "/account", label: "Account", Icon: ArtistIcon, group: "library", requiresConnection: true },
+  { to: "/register", label: "Create account", Icon: PlusIcon, group: "library", adminOnly: true, requiresConnection: true },
 ];
 
 export default function Sidebar() {
@@ -47,12 +64,16 @@ export default function Sidebar() {
   const syncStatus = useSyncStore((s) => s.status);
   const pending = useSyncStore((s) => s.pending);
   const runSync = useSyncStore((s) => s.run);
+  const downloads = useDownloadsStore((s) => s.storage);
 
   if (!session) return null;
 
-  async function refresh() {
-    setOnline(await authRefreshOnline());
-  }
+  const visible = (n: NavItem) =>
+    (!n.adminOnly || tier === "admin") &&
+    (!n.managerOnly || tier === "admin" || tier === "manager");
+
+  const primary = NAV.filter((n) => !n.group && visible(n));
+  const library = NAV.filter((n) => n.group === "library" && visible(n));
 
   async function logout() {
     await authLogout();
@@ -60,98 +81,208 @@ export default function Sidebar() {
     navigate("/login");
   }
 
+  const badgeFor = (n: NavItem): number | null => {
+    if (n.badge === "downloads") return downloads?.track_count ?? null;
+    if (n.badge === "pending") return pending > 0 ? pending : null;
+    return null;
+  };
+
+  const renderItem = (n: NavItem) => {
+    const count = badgeFor(n);
+    const gated = !!n.requiresConnection && !online;
+    return (
+      <NavLink
+        key={n.to}
+        to={n.to}
+        end={n.to === "/"}
+        title={gated ? `${n.label} — ${OFFLINE_MSG}` : n.label}
+        className={({ isActive }) =>
+          `group relative flex items-center gap-3 rounded-lg px-2.5 py-2 text-[13.5px] transition-colors ${
+            isActive
+              ? "bg-oct-elevated text-oct-text"
+              : "text-oct-muted hover:bg-oct-elevated/60 hover:text-oct-text"
+          } ${gated ? "opacity-40" : ""}`
+        }
+      >
+        {({ isActive }) => (
+          <>
+            {isActive && (
+              <span className="absolute inset-y-2 left-0 w-[2.5px] rounded-full bg-oct-accent" />
+            )}
+            <n.Icon size={16} className="shrink-0" />
+            <span className="flex-1 truncate">{n.label}</span>
+            {gated && <CloudOffIcon size={13} className="shrink-0 text-oct-faint" />}
+            {count !== null && !gated && (
+              <span
+                className={`font-mono text-[10.5px] ${
+                  n.badge === "pending" ? "text-oct-accent" : "text-oct-faint"
+                }`}
+              >
+                {count}
+              </span>
+            )}
+          </>
+        )}
+      </NavLink>
+    );
+  };
+
   return (
     <nav
       aria-label="Primary"
-      className="flex h-full w-14 shrink-0 flex-col gap-1 border-r border-neutral-800 bg-neutral-950/60 px-1 py-3 sm:w-52"
+      className="hidden h-full w-[248px] shrink-0 flex-col border-r border-oct-border bg-oct-surface px-3 py-5 md:flex"
     >
-      <div className="mb-1 hidden px-2 text-xs font-semibold tracking-wide text-neutral-500 sm:block">
-        music-app
+      {/* wordmark */}
+      <div className="flex items-center gap-2.5 px-1.5 pb-4">
+        <span className="block h-4 w-4 rounded bg-oct-accent" />
+        <span className="text-base font-semibold tracking-[0.16em]">OCTAVE</span>
       </div>
 
-      <ul className="flex flex-1 flex-col gap-1">
-        {NAV.filter(
-          (n) =>
-            (!n.adminOnly || tier === "admin") &&
-            (!n.managerOnly || tier === "admin" || tier === "manager"),
-        ).map((n) => (
-          <li key={n.to}>
-            <NavLink
-              to={n.to}
-              end={n.to === "/"}
-              title={n.label}
-              className={({ isActive }) =>
-                `flex items-center gap-2 rounded px-2 py-1.5 text-sm ${
-                  isActive
-                    ? "bg-neutral-800 text-white"
-                    : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
-                }`
-              }
-            >
-              <span className="w-4 text-center text-base leading-none">
-                {n.icon}
-              </span>
-              <span className="hidden sm:inline">{n.label}</span>
-              {n.to === "/playlists" && pending > 0 && (
-                <span className="hidden rounded bg-amber-900/40 px-1 text-xs text-amber-200 sm:inline">
-                  {pending}
-                </span>
-              )}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
+      {/* search field → /search */}
+      <NavLink
+        to="/search"
+        className="mb-4 flex items-center gap-2.5 rounded-lg border border-oct-border-strong bg-oct-card px-3 py-2 text-[13px] text-oct-subtle transition-colors hover:text-oct-muted"
+      >
+        <SearchIcon size={15} sw={1.4} />
+        <span>Search</span>
+      </NavLink>
 
-      {/* Footer: online + sync + session. */}
-      <div className="mt-2 flex flex-col gap-2 border-t border-neutral-800 pt-2 text-xs text-neutral-400">
-        <button
-          onClick={refresh}
-          className="flex items-center gap-2 rounded px-2 py-1 text-left hover:bg-neutral-800/50"
-          title="Click to re-check server reachability"
+      {/* nav (scrolls if it overflows) */}
+      <div className="oct-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex flex-col gap-0.5">{primary.map(renderItem)}</div>
+
+        {library.length > 0 && (
+          <>
+            <div className="mx-1.5 my-4 h-px bg-oct-border" />
+            <div className="px-2 pb-2 font-mono text-[10.5px] tracking-[0.16em] text-oct-faint">
+              LIBRARY
+            </div>
+            <div className="flex flex-col gap-0.5">{library.map(renderItem)}</div>
+          </>
+        )}
+      </div>
+
+      <StatusPanel
+        online={online}
+        syncStatus={syncStatus}
+        pending={pending}
+        onRecheck={async () => setOnline(await authRefreshOnline())}
+        onSync={() => void runSync()}
+      />
+
+      {/* user footer */}
+      <div className="mt-3 flex items-center gap-2 border-t border-oct-border px-1 pt-3">
+        <NavLink
+          to="/account"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-oct-elevated/60"
+          title="Account"
         >
-          <span
-            className={`inline-block h-2 w-2 rounded-full ${
-              online ? "bg-emerald-400" : "bg-red-500"
-            }`}
-          />
-          <span className="hidden sm:inline">
-            {online ? "online" : "offline"}
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-oct-elevated text-oct-muted">
+            <GearIcon size={14} />
           </span>
-        </button>
-
-        <button
-          onClick={() => void runSync()}
-          disabled={syncStatus === "syncing"}
-          className="flex items-center gap-2 rounded px-2 py-1 text-left hover:bg-neutral-800/50 disabled:opacity-50"
-          title="Sync now"
-        >
-          <span>{syncStatus === "syncing" ? "↻" : "⟳"}</span>
-          <span className="hidden sm:inline">
-            {syncStatus === "syncing"
-              ? "syncing…"
-              : pending > 0
-                ? `${pending} unsynced`
-                : "synced"}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[12.5px] text-oct-text">
+              {session.username ?? session.kind}
+            </span>
+            <span className="block font-mono text-[9.5px] uppercase tracking-wide text-oct-faint">
+              {tier}
+            </span>
           </span>
-        </button>
-
-        <div className="hidden items-center gap-2 px-2 py-1 sm:flex">
-          <span className="truncate text-neutral-500">
-            {session.username ?? session.kind}
-          </span>
-          <span className="ml-auto rounded bg-neutral-800 px-1 py-0.5 text-[10px] uppercase tracking-wide text-neutral-400">
-            {tier}
-          </span>
-        </div>
-
+        </NavLink>
         <button
           onClick={logout}
-          className="flex items-center gap-2 rounded px-2 py-1 text-left text-red-300 hover:bg-red-900/20"
+          title="Sign out"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-oct-subtle hover:bg-oct-offline/15 hover:text-oct-danger"
         >
-          <span>⏻</span>
-          <span className="hidden sm:inline">Sign out</span>
+          <PowerIcon size={15} />
         </button>
       </div>
     </nav>
+  );
+}
+
+function StatusPanel({
+  online,
+  syncStatus,
+  pending,
+  onRecheck,
+  onSync,
+}: {
+  online: boolean;
+  syncStatus: "idle" | "syncing" | "ok" | "error";
+  pending: number;
+  onRecheck: () => void;
+  onSync: () => void;
+}) {
+  const syncing = syncStatus === "syncing";
+  const syncColor = !online
+    ? "text-oct-subtle"
+    : syncing
+      ? "text-oct-accent"
+      : pending > 0
+        ? "text-oct-accent"
+        : "text-oct-online";
+  const syncLabel = !online
+    ? "Sync paused"
+    : syncing
+      ? "Syncing library…"
+      : pending > 0
+        ? `${pending} change${pending === 1 ? "" : "s"} pending`
+        : "Library up to date";
+  const syncSub = !online
+    ? "Reconnect to resume sync"
+    : syncing
+      ? "pushing edits · pulling changes"
+      : pending > 0
+        ? "tap to sync now"
+        : "everything in sync";
+
+  return (
+    <div className="mt-4 rounded-xl border border-oct-border-strong bg-oct-panel p-3.5">
+      {/* server row */}
+      <button
+        onClick={onRecheck}
+        className="flex w-full items-center justify-between"
+        title="Re-check server reachability"
+      >
+        <span className="font-mono text-[10px] tracking-[0.16em] text-oct-faint">
+          SERVER
+        </span>
+        <span className="flex items-center gap-2">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${
+              online ? "bg-oct-online animate-octpulse" : "bg-oct-offline"
+            }`}
+            style={
+              online
+                ? { boxShadow: "0 0 0 3px rgba(63,185,80,0.15)" }
+                : { boxShadow: "0 0 0 3px rgba(138,90,74,0.12)" }
+            }
+          />
+          <span className={`text-xs font-medium ${online ? "text-oct-online" : "text-oct-offline"}`}>
+            {online ? "Online" : "Offline"}
+          </span>
+        </span>
+      </button>
+
+      <div className="my-3 h-px bg-oct-border-strong" />
+
+      {/* sync row */}
+      <button onClick={onSync} disabled={syncing} className="flex w-full items-start gap-2.5 text-left">
+        <SyncIcon size={15} className={`mt-0.5 shrink-0 ${syncColor} ${syncing ? "animate-octspin" : ""}`} />
+        <span className="min-w-0 flex-1">
+          <span className={`block text-[12.5px] font-medium ${syncColor}`}>{syncLabel}</span>
+          <span className="mt-0.5 block truncate font-mono text-[10px] text-oct-subtle">
+            {syncSub}
+          </span>
+        </span>
+      </button>
+
+      {syncing && (
+        <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-oct-border-strong">
+          <div className="h-full w-[62%] rounded-full bg-oct-accent" />
+        </div>
+      )}
+    </div>
   );
 }

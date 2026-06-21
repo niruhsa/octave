@@ -55,6 +55,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Phase 8 — Uploads: `fs` reads picked files (incl. Android
+        // `content://` URIs) for staging; `notification` drives the
+        // background-upload progress + completion notifications.
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         // Phase 4 — Playback: `media://<track_id>` serves a cached local
         // file (range-aware) or proxies the server stream with auth. The
         // webview's `<audio>` element loads these URLs directly.
@@ -159,8 +164,8 @@ pub fn run() {
             commands::download_commands::downloads_set_dir,
             commands::download_commands::downloads_wifi_only,
             commands::download_commands::downloads_set_wifi_only,
-            // uploads (Phase 8)
-            commands::upload_commands::upload_file,
+            // uploads (Phase 8) — background jobs + notifications
+            commands::upload_commands::upload_files,
             commands::upload_commands::upload_folder,
         ])
         .run(tauri::generate_context!())

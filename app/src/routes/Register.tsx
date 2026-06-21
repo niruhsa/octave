@@ -3,19 +3,13 @@ import { Link } from "react-router-dom";
 import { authRegister, type PermissionTier } from "../ipc";
 import { formatError } from "../lib/error";
 import { useAppStore } from "../store";
+import { btnPrimary, errorBox, input, label, okBox } from "../lib/ui";
+import { OfflineGate } from "../components/OfflineGate";
 
 /**
- * /register — admin-only account creation.
- *
- * The server's `POST /auth/register` is gated to Admin callers (or
- * `SECRET_KEY`, which is effective Admin) — there is no public sign-up.
- * So this screen is linked only when the active session's tier is Admin,
- * and the server re-enforces the check on every call. The new account is
- * not logged in here; the admin stays signed in, and the new user signs in
- * via the normal Login flow.
- *
- * Server validation: username non-empty, password ≥ 8 chars, username
- * unique. We mirror the ≥ 8-char rule client-side for a faster failure.
+ * /register — admin-only account creation. The server's register endpoint is
+ * gated to Admin callers (or `SECRET_KEY`); there is no public sign-up. The
+ * new account is not logged in here — the admin stays signed in.
  */
 const MIN_PASSWORD = 8;
 
@@ -35,20 +29,15 @@ export default function Register() {
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
 
-  // Gate the whole screen client-side; the server re-checks. A non-admin
-  // reaching here (e.g. stale tier) gets a clear message instead of a 403
-  // they'd have to decode.
   if (tier !== "admin") {
     return (
-      <section className="flex max-w-md flex-col gap-3">
-        <h1 className="text-2xl font-semibold">Create account</h1>
-        <p className="text-sm text-neutral-400">
-          Account creation is admin-only. Sign in with an admin account (or
-          a <code className="text-neutral-300">SECRET_KEY</code>) first.
+      <section className="flex max-w-md flex-col gap-3 p-6 md:p-8">
+        <h1 className="text-[27px] font-semibold tracking-tight">Create account</h1>
+        <p className="text-sm text-oct-subtle">
+          Account creation is admin-only. Sign in with an admin account (or a{" "}
+          <code className="font-mono text-oct-muted">SECRET_KEY</code>) first.
         </p>
-        <Link to="/login" className="text-sm text-blue-400 hover:underline">
-          → Sign in
-        </Link>
+        <Link to="/login" className="font-mono text-[11px] text-oct-accent hover:underline">→ Sign in</Link>
       </section>
     );
   }
@@ -56,10 +45,7 @@ export default function Register() {
   const passwordsDiffer = password !== confirm;
   const passwordTooShort = password.length > 0 && password.length < MIN_PASSWORD;
   const canSubmit =
-    username.trim().length > 0 &&
-    password.length >= MIN_PASSWORD &&
-    !passwordsDiffer &&
-    !busy;
+    username.trim().length > 0 && password.length >= MIN_PASSWORD && !passwordsDiffer && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -81,58 +67,38 @@ export default function Register() {
   }
 
   return (
-    <form onSubmit={submit} className="flex max-w-md flex-col gap-3">
-      <h1 className="text-2xl font-semibold">Create account</h1>
-      <p className="text-xs text-neutral-500">
-        Admin-only. The new account can sign in via the normal login screen.
-      </p>
+    <OfflineGate feature="Account creation">
+    <form onSubmit={submit} className="flex max-w-md flex-col gap-3.5 p-6 md:p-8">
+      <div>
+        <h1 className="text-[27px] font-semibold tracking-tight">Create account</h1>
+        <p className="mt-1 text-xs text-oct-subtle">Admin-only. The new account can sign in via the normal login screen.</p>
+      </div>
 
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Username</span>
-        <input
-          required
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-        />
+      <label className="flex flex-col gap-1.5">
+        <span className={label}>USERNAME</span>
+        <input required value={username} onChange={(e) => setUsername(e.target.value)} className={input} />
       </label>
 
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Password (≥ {MIN_PASSWORD} chars)</span>
-        <input
-          type="password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-        />
-        {passwordTooShort && (
-          <span className="text-xs text-amber-300">
-            Must be at least {MIN_PASSWORD} characters.
-          </span>
-        )}
+      <label className="flex flex-col gap-1.5">
+        <span className={label}>PASSWORD (≥ {MIN_PASSWORD} CHARS)</span>
+        <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
+        {passwordTooShort && <span className="text-xs text-oct-accent-bright">Must be at least {MIN_PASSWORD} characters.</span>}
       </label>
 
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Confirm password</span>
-        <input
-          type="password"
-          required
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-        />
-        {passwordsDiffer && (
-          <span className="text-xs text-amber-300">Passwords don't match.</span>
-        )}
+      <label className="flex flex-col gap-1.5">
+        <span className={label}>CONFIRM PASSWORD</span>
+        <input type="password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
+        {passwordsDiffer && <span className="text-xs text-oct-accent-bright">Passwords don't match.</span>}
       </label>
 
-      <fieldset className="flex flex-col gap-1 text-sm">
-        <legend className="text-neutral-400">Permission tier</legend>
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className={`${label} mb-1`}>PERMISSION TIER</legend>
         {TIERS.map((t) => (
           <label
             key={t.value}
-            className="flex items-center gap-2 rounded border border-neutral-800 px-2 py-1"
+            className={`flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors ${
+              newTier === t.value ? "border-oct-accent/50 bg-oct-accent/10" : "border-oct-border-strong hover:border-oct-line"
+            }`}
           >
             <input
               type="radio"
@@ -140,33 +106,25 @@ export default function Register() {
               value={t.value}
               checked={newTier === t.value}
               onChange={() => setNewTier(t.value)}
+              className="accent-oct-accent"
             />
-            <span className="font-medium">{t.label}</span>
-            <span className="text-xs text-neutral-500">— {t.hint}</span>
+            <span className="text-sm font-medium">{t.label}</span>
+            <span className="text-xs text-oct-faint">— {t.hint}</span>
           </label>
         ))}
       </fieldset>
 
-      {err && (
-        <p className="rounded border border-red-700 bg-red-900/30 p-2 text-sm text-red-200">
-          {err}
-        </p>
-      )}
+      {err && <p className={errorBox}>{err}</p>}
       {created && (
-        <p className="rounded border border-emerald-700 bg-emerald-900/30 p-2 text-sm text-emerald-200">
-          Account created. User id:{" "}
-          <code className="text-emerald-100">{created}</code>. The user can
-          now sign in.
+        <p className={okBox}>
+          Account created. User id: <code className="font-mono">{created}</code>. The user can now sign in.
         </p>
       )}
 
-      <button
-        type="submit"
-        disabled={!canSubmit}
-        className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      >
+      <button type="submit" disabled={!canSubmit} className={btnPrimary}>
         {busy ? "Creating…" : "Create account"}
       </button>
     </form>
+    </OfflineGate>
   );
 }

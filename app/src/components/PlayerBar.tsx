@@ -1,20 +1,29 @@
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "../player/store";
 import { formatDuration } from "../lib/format";
-import { coverUrl } from "../ipc";
+import { qualityLabel } from "../lib/visual";
+import { Thumb } from "./Cover";
+import { SavedPill } from "./SourceBadge";
+import {
+  NextIcon,
+  PauseIcon,
+  PlayIcon,
+  PrevIcon,
+  QueueIcon,
+  RepeatIcon,
+  RepeatOneIcon,
+  ShuffleIcon,
+  VolumeIcon,
+} from "./icons";
 
 /**
- * Persistent playback bar + hidden `<audio>` element.
+ * Persistent now-playing bar + hidden `<audio>` element (OCTAVE styling).
  *
  * One `<audio>` lives for the app's lifetime (mounted here, always in the
- * tree). The store owns its `src`/play/pause; this component only renders
- * the controls and mirrors state into the OS Media Session API
- * (`navigator.mediaSession`) so platform media keys / lock-screen /
+ * tree); the store owns its src/play/pause. This component renders the
+ * controls (full bar on md+, condensed mini-player on mobile) and mirrors
+ * state into the OS Media Session API so platform media keys / lock-screen /
  * Bluetooth controls drive the same store.
- *
- * Desktop-native integration (SMTC on Windows, MPRIS on Linux, macOS Now
- * Playing) is layered on top of Media Session in later polish — the
- * webview's Media Session hooks into those on most platforms already.
  */
 export default function PlayerBar() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -39,19 +48,16 @@ export default function PlayerBar() {
 
   const current = currentIndex >= 0 ? queue[currentIndex] : null;
 
-  // Bind the audio element once.
   useEffect(() => {
     if (!audioRef.current) return;
-    const unbind = bind(audioRef.current);
-    return unbind;
+    return bind(audioRef.current);
   }, [bind]);
 
-  // Mirror current track into the OS Media Session.
   useEffect(() => {
     if (!("mediaSession" in navigator) || !current) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: current.title,
-      artist: "", // enriched later when album/artist browse is cached
+      artist: "",
       album: "",
     });
     navigator.mediaSession.setActionHandler("play", () => togglePlay());
@@ -63,7 +69,6 @@ export default function PlayerBar() {
     });
   }, [current, togglePlay, next, prev, seekTo]);
 
-  // Reflect play state into Media Session (drives lock-screen "playing").
   useEffect(() => {
     if ("mediaSession" in navigator) {
       navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
@@ -72,89 +77,78 @@ export default function PlayerBar() {
 
   const dur = durationSec || (current ? current.duration_ms / 1000 : 0);
   const empty = queue.length === 0 && !current;
+  const pct = dur > 0 ? (Math.min(positionSec, dur) / dur) * 100 : 0;
 
-  // The `<audio>` element is mounted exactly ONCE and never conditionally
-  // unmounted — the store binds to it on mount (before any track is
-  // queued), so `loadAndPlay` always has a live element. We only toggle
-  // the *visible* bar chrome based on whether anything is queued.
+  // The <audio> is mounted exactly once and never conditionally unmounted —
+  // the store binds to it on mount (before any track is queued). Only the
+  // visible chrome toggles on whether something is queued.
+  if (empty) return <audio ref={audioRef} preload="auto" className="hidden" />;
+
   return (
-    <>
+    <div className="shrink-0 border-t border-oct-border bg-oct-surface">
       <audio ref={audioRef} preload="auto" className="hidden" />
-      {empty ? null : (
-        <div className="fixed inset-x-0 bottom-0 z-50 border-t border-neutral-800 bg-neutral-950/95 backdrop-blur">
-          {error && (
-            <p className="border-b border-red-900/50 bg-red-950/40 px-4 py-1 text-xs text-red-200">
-              {error}
-            </p>
-          )}
-          <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-2">
-        {/* Now-playing */}
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          {current ? (
-            <img
-              src={coverUrl(current.album_id)}
-              alt="cover"
-              className="h-10 w-10 shrink-0 rounded bg-neutral-800 object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
-              }}
-            />
-          ) : (
-            <div className="h-10 w-10 shrink-0 rounded bg-neutral-800" />
-          )}
+      {error && (
+        <p className="border-b border-oct-offline/40 bg-oct-offline/15 px-4 py-1 text-center text-xs text-oct-danger">
+          {error}
+        </p>
+      )}
+
+      {/* mobile progress hairline */}
+      <div className="h-[2px] bg-oct-line md:hidden">
+        <div className="h-full bg-oct-accent" style={{ width: `${pct}%` }} />
+      </div>
+
+      {/* ───────── desktop / wide bar ───────── */}
+      <div className="hidden h-[90px] grid-cols-[1fr_auto_1fr] items-center gap-6 px-5 md:grid">
+        {/* now-playing */}
+        <div className="flex min-w-0 items-center gap-3">
+          <Thumb album={current ? { id: current.album_id } : null} size={52} tryCover />
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium">
-              {current?.title ?? "—"}
-            </p>
-            <p className="truncate text-xs text-neutral-500">
-              {current?.codec ?? ""}
-              {current?.bitrate_kbps ? ` · ${current.bitrate_kbps} kbps` : ""}
-              {current?.downloaded ? " · offline" : " · streaming"}
-            </p>
+            <div className="flex items-center gap-2">
+              <span className="truncate text-[13.5px] font-medium">{current?.title ?? "—"}</span>
+              {current?.downloaded && <SavedPill />}
+            </div>
+            <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
+              {current ? qualityLabel(current) : ""}
+            </div>
           </div>
         </div>
 
-        {/* Transport */}
-        <div className="flex flex-col items-center gap-1">
-          <div className="flex items-center gap-2">
+        {/* transport + progress */}
+        <div className="flex w-[440px] flex-col items-center gap-2">
+          <div className="flex items-center gap-6 text-oct-text">
             <button
               onClick={toggleShuffle}
-              className={`rounded px-1.5 py-1 text-sm ${shuffle ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200"}`}
               title="Shuffle"
+              className={shuffle ? "text-oct-accent" : "text-oct-dim hover:text-oct-text"}
             >
-              ⤮
+              <ShuffleIcon size={16} />
             </button>
-            <button
-              onClick={prev}
-              className="rounded px-1.5 py-1 text-neutral-300 hover:text-white"
-              title="Previous"
-            >
-              ⏮
+            <button onClick={prev} title="Previous" className="text-oct-text hover:text-white">
+              <PrevIcon size={17} />
             </button>
             <button
               onClick={togglePlay}
-              className="rounded-full bg-white px-3 py-1 text-sm text-black hover:bg-neutral-200"
               title={isPlaying ? "Pause" : "Play"}
+              className="grid h-[42px] w-[42px] place-items-center rounded-full bg-oct-text text-oct-bg transition-transform hover:scale-105"
             >
-              {isPlaying ? "⏸" : "▶"}
+              {isPlaying ? <PauseIcon size={15} /> : <PlayIcon size={15} />}
             </button>
-            <button
-              onClick={next}
-              className="rounded px-1.5 py-1 text-neutral-300 hover:text-white"
-              title="Next"
-            >
-              ⏭
+            <button onClick={next} title="Next" className="text-oct-text hover:text-white">
+              <NextIcon size={17} />
             </button>
             <button
               onClick={cycleRepeat}
-              className={`rounded px-1.5 py-1 text-sm ${repeat !== "off" ? "text-blue-400" : "text-neutral-400 hover:text-neutral-200"}`}
               title={`Repeat: ${repeat}`}
+              className={repeat !== "off" ? "text-oct-accent" : "text-oct-dim hover:text-oct-text"}
             >
-              {repeat === "one" ? "🔁¹" : "🔁"}
+              {repeat === "one" ? <RepeatOneIcon size={16} /> : <RepeatIcon size={16} />}
             </button>
           </div>
-          <div className="flex items-center gap-2 text-xs tabular-nums text-neutral-500">
-            <span className="w-10 text-right">{formatDuration(positionSec * 1000)}</span>
+          <div className="flex w-full items-center gap-3">
+            <span className="w-9 text-right font-mono text-[11px] text-oct-subtle">
+              {formatDuration(positionSec * 1000)}
+            </span>
             <input
               type="range"
               min={0}
@@ -162,32 +156,71 @@ export default function PlayerBar() {
               step={0.1}
               value={Math.min(positionSec, dur || 0)}
               onChange={(e) => seekTo(Number(e.target.value))}
-              className="w-64 accent-blue-500"
               disabled={!dur}
+              className="oct-range flex-1"
             />
-            <span className="w-10">{formatDuration(dur * 1000)}</span>
+            <span className="w-9 font-mono text-[11px] text-oct-subtle">
+              {formatDuration(dur * 1000)}
+            </span>
           </div>
         </div>
 
-        {/* Volume + queue count */}
-        <div className="flex flex-1 items-center justify-end gap-3">
-          <span className="text-xs text-neutral-500">
+        {/* meta + volume */}
+        <div className="flex items-center justify-end gap-4 text-oct-dim">
+          {current && (
+            <span className="rounded-md border border-oct-line px-2 py-1 font-mono text-[10.5px] tracking-wide text-oct-muted">
+              {qualityLabel(current)}
+              {current.downloaded ? " · OFFLINE" : " · STREAM"}
+            </span>
+          )}
+          <span className="font-mono text-[10.5px] text-oct-faint">
             {currentIndex + 1}/{queue.length}
           </span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            onChange={(e) => setVolume(Number(e.target.value))}
-            className="w-24 accent-blue-500"
-            title="Volume"
-          />
-          </div>
+          <span title="Queue" className="text-oct-dim">
+            <QueueIcon size={16} />
+          </span>
+          <div className="flex items-center gap-2">
+            <VolumeIcon size={16} />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              title="Volume"
+              className="oct-range w-[72px]"
+            />
           </div>
         </div>
-      )}
-    </>
+      </div>
+
+      {/* ───────── mobile mini-player ───────── */}
+      <div className="flex items-center gap-3 px-3.5 py-2 md:hidden">
+        <Thumb album={current ? { id: current.album_id } : null} size={44} tryCover />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-medium">{current?.title ?? "—"}</span>
+            {current?.downloaded && <SavedPill />}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
+            {current ? qualityLabel(current) : ""}
+          </div>
+        </div>
+        <button onClick={prev} title="Previous" className="text-oct-text">
+          <PrevIcon size={18} />
+        </button>
+        <button
+          onClick={togglePlay}
+          title={isPlaying ? "Pause" : "Play"}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-oct-accent text-oct-bg"
+        >
+          {isPlaying ? <PauseIcon size={15} /> : <PlayIcon size={15} />}
+        </button>
+        <button onClick={next} title="Next" className="text-oct-text">
+          <NextIcon size={18} />
+        </button>
+      </div>
+    </div>
   );
 }

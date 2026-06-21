@@ -13,20 +13,30 @@ import {
   type MergedPlaylistEntry,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
+import { EqBars } from "../components/EqBars";
+import {
+  DownloadIcon,
+  PlaylistIcon,
+  PlayIcon,
+  PlusIcon,
+  ShuffleIcon,
+} from "../components/icons";
 import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
+import { gradientFor } from "../lib/visual";
 import { usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
+import { btnDanger, btnGhost, btnGhostSm, btnPrimary, card, errorBox, input } from "../lib/ui";
+import { offlineAttrs } from "../components/OfflineGate";
+import { SkeletonHero, SkeletonTracks } from "../components/Skeleton";
 
 /**
- * /playlists/:id — one playlist with its ordered entries. Reorder via ↑/↓
- * (drag-and-drop is a deferred polish — the reorder RPC is by position so
- * either UI maps onto it). Add tracks via an inline search backed by the
- * library search. Remove / rename / delete are one click each. The whole
- * list is queueable; offline + uncached entries surface a stub the player
- * resolves (and fails gracefully) via `media://`.
+ * /playlists/:id — one playlist with its ordered entries. Reorder via ↑/↓.
+ * Add tracks via an inline library search. Remove / rename / delete are one
+ * click each. The whole list is queueable; offline + uncached entries surface
+ * a stub the player resolves (and fails gracefully) via `media://`.
  */
 export default function PlaylistDetail() {
   const { id = "" } = useParams();
@@ -35,6 +45,10 @@ export default function PlaylistDetail() {
   const session = useAppStore((s) => s.session);
   const tier = useAppStore((s) => s.tier);
   const playQueue = usePlayerStore((s) => s.playQueue);
+  const queue = usePlayerStore((s) => s.queue);
+  const currentIndex = usePlayerStore((s) => s.currentIndex);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const currentId = currentIndex >= 0 ? queue[currentIndex]?.id : undefined;
   const refreshStorage = useDownloadsStore((s) => s.refreshStorage);
 
   const [renaming, setRenaming] = useState(false);
@@ -48,7 +62,6 @@ export default function PlaylistDetail() {
     queryFn: () => playlistGet(id),
     enabled: !!id,
   });
-
   const search = useQuery({
     queryKey: ["library", "search-tracks", addQuery],
     queryFn: () => librarySearchTracks(addQuery, {}),
@@ -60,109 +73,71 @@ export default function PlaylistDetail() {
   const entries = detail?.entries ?? [];
   const isOwnerOrManager =
     !!session &&
-    (playlist?.owner_id === session.user_id ||
-      tier === "manager" ||
-      tier === "admin");
-  // Local-id playlists are always editable (they're the user's own offline
-  // draft) and never server-deletable until synced.
+    (playlist?.owner_id === session.user_id || tier === "manager" || tier === "admin");
   const canEdit = isOwnerOrManager || !!playlist?.local;
 
   function refresh() {
     broadcastInvalidate(["playlists", "detail", id]);
     return qc.invalidateQueries({ queryKey: ["playlists", "detail", id] });
   }
-
   async function guard<T>(fn: () => Promise<T>): Promise<T | null> {
     setErr(null);
-    try {
-      return await fn();
-    } catch (e) {
-      setErr(formatError(e));
-      return null;
-    }
+    try { return await fn(); } catch (e) { setErr(formatError(e)); return null; }
   }
-
   async function startRename() {
     if (!playlist) return;
     setRenameVal(playlist.name);
     setRenaming(true);
   }
-
   async function commitRename() {
     const trimmed = renameVal.trim();
-    if (!playlist || !trimmed || trimmed === playlist.name) {
-      setRenaming(false);
-      return;
-    }
+    if (!playlist || !trimmed || trimmed === playlist.name) { setRenaming(false); return; }
     setBusy(true);
     await guard(async () => {
       await playlistRename(playlist.id, trimmed);
       broadcastInvalidate(["playlists", "mine"]);
-      await Promise.all([
-        refresh(),
-        qc.invalidateQueries({ queryKey: ["playlists", "mine"] }),
-      ]);
+      await Promise.all([refresh(), qc.invalidateQueries({ queryKey: ["playlists", "mine"] })]);
     });
     setBusy(false);
     setRenaming(false);
   }
-
   async function remove() {
     if (!playlist) return;
     if (!confirm(`Delete playlist "${playlist.name}"?`)) return;
     setBusy(true);
-    const ok = await guard(async () => {
-      await playlistDelete(playlist.id);
-    });
+    const ok = await guard(async () => { await playlistDelete(playlist.id); });
     setBusy(false);
     if (ok !== null) {
       broadcastInvalidate(["playlists", "mine"]);
       await qc.invalidateQueries({ queryKey: ["playlists", "mine"] });
-      // Navigate back to the list via a full reload of the list query; the
-      // link below is the cheap way "back".
       window.history.back();
     }
   }
-
   async function addTrack(trackId: string) {
     if (!playlist) return;
     setBusy(true);
-    await guard(async () => {
-      await playlistAddTrack(playlist.id, trackId, 0); // append
-      await refresh();
-    });
+    await guard(async () => { await playlistAddTrack(playlist.id, trackId, 0); await refresh(); });
     setBusy(false);
     setAddQuery("");
   }
-
   async function removeAt(position: number) {
     if (!playlist) return;
     setBusy(true);
-    await guard(async () => {
-      await playlistRemoveTrack(playlist.id, position);
-      await refresh();
-    });
+    await guard(async () => { await playlistRemoveTrack(playlist.id, position); await refresh(); });
     setBusy(false);
   }
-
   async function move(from: number, to: number) {
     if (!playlist || from === to) return;
     setBusy(true);
-    await guard(async () => {
-      await playlistReorderTrack(playlist.id, from, to);
-      await refresh();
-    });
+    await guard(async () => { await playlistReorderTrack(playlist.id, from, to); await refresh(); });
     setBusy(false);
   }
-
-  async function playAll() {
+  function playAll(shuffle = false) {
     if (entries.length === 0) return;
-    playQueue(
-      entries.map((e) => e.track),
-      0,
-    );
+    const st = usePlayerStore.getState();
+    if (shuffle && !st.shuffle) st.toggleShuffle();
+    playQueue(entries.map((e) => e.track), 0);
   }
-
   async function dlPlaylist() {
     if (!playlist) return;
     setBusy(true);
@@ -179,138 +154,107 @@ export default function PlaylistDetail() {
     [entries, online],
   );
 
-  if (q.isLoading) return <p className="text-sm text-neutral-400">Loading…</p>;
-  if (q.isError)
+  if (q.isLoading)
     return (
-      <p className="rounded border border-red-700 bg-red-900/30 p-2 text-sm text-red-200">
-        {formatError(q.error)}
-      </p>
+      <section className="flex flex-col gap-6 p-6 md:p-8">
+        <Link to="/playlists" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">
+          ← PLAYLISTS
+        </Link>
+        <SkeletonHero />
+        <SkeletonTracks rows={9} cols={3} />
+      </section>
     );
+  if (q.isError)
+    return <p className="m-6 rounded-lg border border-oct-offline/50 bg-oct-offline/10 p-3 text-sm text-oct-danger md:m-8">{formatError(q.error)}</p>;
   if (!detail || !playlist)
     return (
-      <section className="flex flex-col gap-3">
-        <Link to="/playlists" className="text-sm text-blue-400 hover:underline">
-          ← Playlists
-        </Link>
-        <p className="text-sm text-neutral-500">Playlist not found.</p>
+      <section className="flex flex-col gap-3 p-6 md:p-8">
+        <Link to="/playlists" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">← PLAYLISTS</Link>
+        <p className="text-sm text-oct-subtle">Playlist not found.</p>
       </section>
     );
 
   return (
-    <section className="flex flex-col gap-4">
-      <header className="flex items-baseline justify-between">
-        <div className="min-w-0">
-          <Link to="/playlists" className="text-sm text-blue-400 hover:underline">
-            ← Playlists
-          </Link>
+    <section className="flex flex-col gap-6 p-6 md:p-8">
+      <Link to="/playlists" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">← PLAYLISTS</Link>
+
+      {/* hero */}
+      <header className="flex flex-col gap-5 sm:flex-row sm:items-end">
+        <div
+          className="grid aspect-square w-[120px] shrink-0 place-items-center rounded-xl shadow-[0_10px_24px_-10px_rgba(0,0,0,0.6)]"
+          style={{ background: gradientFor(playlist.id) }}
+        >
+          <PlaylistIcon size={36} className="text-white/85" />
+        </div>
+        <div className="flex min-w-0 flex-col">
+          <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">PLAYLIST</span>
           {renaming ? (
-            <div className="flex items-center gap-2">
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <input
                 value={renameVal}
                 onChange={(e) => setRenameVal(e.target.value)}
                 maxLength={200}
                 autoFocus
-                className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-2xl font-semibold focus:border-blue-500 focus:outline-none"
+                className={`${input} max-w-xs text-2xl font-semibold`}
               />
-              <button
-                onClick={commitRename}
-                disabled={busy}
-                className="rounded bg-blue-600 px-2 py-1 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
-              >
-                Save
-              </button>
-              <button
-                onClick={() => setRenaming(false)}
-                className="rounded border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-800"
-              >
-                Cancel
-              </button>
+              <button onClick={commitRename} disabled={busy} className={btnPrimary}>Save</button>
+              <button onClick={() => setRenaming(false)} className={btnGhost}>Cancel</button>
             </div>
           ) : (
-            <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <h1 className="mt-1.5 flex items-center gap-2 text-3xl font-semibold tracking-tight sm:text-[34px]">
               <span className="truncate">{playlist.name}</span>
               {playlist.local && (
-                <span
-                  className="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-200"
-                  title="Created offline; waiting to sync"
-                >
-                  unsynced
+                <span className="rounded-md bg-oct-accent/15 px-1.5 py-0.5 font-mono text-[10px] text-oct-accent-bright" title="Created offline; waiting to sync">
+                  UNSYNCED
                 </span>
               )}
             </h1>
           )}
-          <p className="text-xs text-neutral-500">
-            {entries.length} track{entries.length === 1 ? "" : "s"} ·{" "}
-            {playableCount} playable {online ? "" : "offline"}
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 text-[13px] text-oct-subtle">
+            <span className="font-mono">
+              {entries.length} track{entries.length === 1 ? "" : "s"} · {playableCount} playable {online ? "" : "offline"}
+            </span>
+            {detail && <SourceBadge source={detail.source} />}
           </p>
         </div>
-        {detail && <SourceBadge source={detail.source} />}
       </header>
 
+      {/* actions */}
       {canEdit && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={playAll}
-            disabled={entries.length === 0}
-            className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
-          >
-            ▶ Play
+        <div className="flex flex-wrap items-center gap-3">
+          <button onClick={() => playAll(false)} disabled={entries.length === 0} className={btnPrimary}>
+            <PlayIcon size={13} /> Play
           </button>
-          <button
-            onClick={dlPlaylist}
-            disabled={busy || entries.length === 0}
-            className="rounded border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800 disabled:opacity-50"
-            title="Download every track for offline"
-          >
-            ⬇ Download all
+          <button onClick={() => playAll(true)} disabled={entries.length === 0} className={btnGhost}>
+            <ShuffleIcon size={14} /> Shuffle
           </button>
-          {!renaming && (
-            <button
-              onClick={startRename}
-              className="rounded border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
-            >
-              Rename
-            </button>
-          )}
-          <button
-            onClick={remove}
-            disabled={busy}
-            className="rounded border border-red-800 px-3 py-1.5 text-sm text-red-300 hover:bg-red-900/30 disabled:opacity-50"
-          >
-            Delete
+          <button onClick={dlPlaylist} {...offlineAttrs(online, busy || entries.length === 0, "Download every track for offline")} className={btnGhost}>
+            <DownloadIcon size={14} /> Download all
           </button>
+          {!renaming && <button onClick={startRename} className={btnGhost}>Rename</button>}
+          <button onClick={remove} disabled={busy} className={`${btnDanger} ml-auto`}>Delete</button>
         </div>
       )}
 
-      {err && (
-        <p className="rounded border border-red-700 bg-red-900/30 p-2 text-sm text-red-200">
-          {err}
-        </p>
-      )}
+      {err && <p className={errorBox}>{err}</p>}
 
+      {/* add-track search */}
       {canEdit && (
-        <div className="rounded border border-neutral-800 p-2">
+        <div className={`${card} p-2.5`}>
           <input
             value={addQuery}
             onChange={(e) => setAddQuery(e.target.value)}
             placeholder="Search tracks to add…"
-            className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+            className={input}
           />
           {search.data && search.data.items.length > 0 && (
-            <ul className="mt-1 max-h-48 divide-y divide-neutral-800 overflow-auto">
+            <ul className="oct-scroll mt-2 max-h-52 divide-y divide-oct-border overflow-auto">
               {search.data.items.slice(0, 20).map((t) => (
-                <li
-                  key={t.id}
-                  className="flex items-center gap-2 p-1.5 text-sm hover:bg-neutral-800/50"
-                >
+                <li key={t.id} className="flex items-center gap-2 px-1.5 py-2 text-sm hover:bg-oct-elevated/50">
                   <DownloadedDot downloaded={t.downloaded} />
                   <span className="flex-1 truncate">{t.title}</span>
-                  <button
-                    onClick={() => addTrack(t.id)}
-                    disabled={busy}
-                    className="rounded border border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-800 disabled:opacity-50"
-                  >
-                    add
+                  <button onClick={() => addTrack(t.id)} disabled={busy} className={btnGhostSm}>
+                    <PlusIcon size={12} /> add
                   </button>
                 </li>
               ))}
@@ -319,42 +263,43 @@ export default function PlaylistDetail() {
         </div>
       )}
 
-      <ol className="divide-y divide-neutral-800 rounded border border-neutral-800">
+      {/* track table */}
+      <div className="flex flex-col">
         {entries.length === 0 ? (
-          <li className="p-3 text-sm text-neutral-500">No tracks yet.</li>
+          <p className="text-sm text-oct-subtle">No tracks yet.</p>
         ) : (
-          entries.map((e, i) => (
-            <PlaylistEntryRow
-              key={`${e.position}-${e.track.id}`}
-              entry={e}
-              index={i}
-              total={entries.length}
-              canEdit={canEdit}
-              busy={busy}
-              online={online}
-              onPlay={() => playQueue(entries.map((x) => x.track), i)}
-              onRemove={() => removeAt(e.position)}
-              onUp={() => move(e.position, e.position - 1)}
-              onDown={() => move(e.position, e.position + 1)}
-            />
-          ))
+          <>
+            <div className="grid grid-cols-[28px_1fr_56px] items-center gap-x-4 border-b border-oct-border px-2 pb-2.5 font-mono text-[10.5px] tracking-[0.1em] text-oct-faint">
+              <span>#</span>
+              <span>TITLE</span>
+              <span className="text-right">TIME</span>
+            </div>
+            {entries.map((e, i) => (
+              <PlaylistEntryRow
+                key={`${e.position}-${e.track.id}`}
+                entry={e}
+                index={i}
+                total={entries.length}
+                canEdit={canEdit}
+                busy={busy}
+                online={online}
+                active={e.track.id === currentId}
+                playing={isPlaying}
+                onPlay={() => playQueue(entries.map((x) => x.track), i)}
+                onRemove={() => removeAt(e.position)}
+                onUp={() => move(e.position, e.position - 1)}
+                onDown={() => move(e.position, e.position + 1)}
+              />
+            ))}
+          </>
         )}
-      </ol>
+      </div>
     </section>
   );
 }
 
 function PlaylistEntryRow({
-  entry,
-  index,
-  total,
-  canEdit,
-  busy,
-  online,
-  onPlay,
-  onRemove,
-  onUp,
-  onDown,
+  entry, index, total, canEdit, busy, online, active, playing, onPlay, onRemove, onUp, onDown,
 }: {
   entry: MergedPlaylistEntry;
   index: number;
@@ -362,6 +307,8 @@ function PlaylistEntryRow({
   canEdit: boolean;
   busy: boolean;
   online: boolean;
+  active: boolean;
+  playing: boolean;
   onPlay: () => void;
   onRemove: () => void;
   onUp: () => void;
@@ -370,53 +317,33 @@ function PlaylistEntryRow({
   const t = entry.track;
   const unavailable = !t.downloaded && !online;
   return (
-    <li
-      className="flex cursor-pointer items-center gap-3 p-3 text-sm hover:bg-neutral-800/50"
+    <div
       onClick={onPlay}
+      className={`group grid cursor-pointer grid-cols-[28px_1fr_56px] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] ${
+        active ? "bg-oct-elevated" : "hover:bg-oct-elevated/50"
+      }`}
     >
-      <span className="w-6 text-right text-neutral-500">{entry.position}</span>
-      <DownloadedDot downloaded={t.downloaded} />
-      <span className="flex-1 truncate">
-        {t.title || (
-          <span className="italic text-neutral-500">
-            {unavailable ? "not available offline" : "(unknown track)"}
+      <span className="flex justify-center">
+        {active ? <EqBars playing={playing} /> : <span className="font-mono text-xs text-oct-faint">{entry.position}</span>}
+      </span>
+      <span className="flex min-w-0 items-center gap-2">
+        <DownloadedDot downloaded={t.downloaded} />
+        <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
+          {t.title || <span className="italic text-oct-faint">{unavailable ? "not available offline" : "(unknown track)"}</span>}
+        </span>
+      </span>
+      <span className="flex items-center justify-end gap-2">
+        {canEdit && (
+          <span className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+            <button onClick={onUp} disabled={busy || index === 0} title="Move up" className="text-oct-dim hover:text-oct-text disabled:opacity-30">↑</button>
+            <button onClick={onDown} disabled={busy || index === total - 1} title="Move down" className="text-oct-dim hover:text-oct-text disabled:opacity-30">↓</button>
+            <button onClick={onRemove} disabled={busy} title="Remove" className="text-oct-dim hover:text-oct-danger disabled:opacity-40">✕</button>
           </span>
         )}
-      </span>
-      <span className="w-12 text-right tabular-nums text-neutral-500">
-        {t.duration_ms > 0 ? formatDuration(t.duration_ms) : ""}
-      </span>
-      {canEdit && (
-        <span
-          className="flex gap-0.5"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={onUp}
-            disabled={busy || index === 0}
-            className="rounded border border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-800 disabled:opacity-30"
-            title="Move up"
-          >
-            ↑
-          </button>
-          <button
-            onClick={onDown}
-            disabled={busy || index === total - 1}
-            className="rounded border border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-800 disabled:opacity-30"
-            title="Move down"
-          >
-            ↓
-          </button>
-          <button
-            onClick={onRemove}
-            disabled={busy}
-            className="rounded border border-neutral-700 px-1.5 py-0.5 text-xs hover:bg-neutral-800 disabled:opacity-50"
-            title="Remove from playlist"
-          >
-            ✕
-          </button>
+        <span className="w-9 text-right font-mono text-[11px] text-oct-subtle">
+          {t.duration_ms > 0 ? formatDuration(t.duration_ms) : ""}
         </span>
-      )}
-    </li>
+      </span>
+    </div>
   );
 }

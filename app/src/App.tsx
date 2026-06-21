@@ -14,6 +14,7 @@ import Register from "./routes/Register";
 import Account from "./routes/Account";
 import Upload from "./routes/Upload";
 import Sidebar from "./components/Sidebar";
+import MobileNav from "./components/MobileNav";
 import PlayerBar from "./components/PlayerBar";
 import { authSession } from "./ipc";
 import { useAppStore } from "./store";
@@ -115,14 +116,15 @@ function RootLayout() {
   }, [setSession]);
 
   return (
-    <div className="flex min-h-full">
-      <Sidebar />
-      <div className="flex min-h-full flex-1 flex-col">
-        <main className="flex-1 overflow-auto p-6 pb-28">
+    <div className="flex h-full flex-col overflow-hidden bg-oct-bg text-oct-text">
+      <div className="flex min-h-0 flex-1">
+        <Sidebar />
+        <main className="oct-scroll min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>
-        <PlayerBar />
       </div>
+      <PlayerBar />
+      <MobileNav />
     </div>
   );
 }
