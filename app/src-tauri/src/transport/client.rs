@@ -12,7 +12,8 @@ use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
     Album, Artist, Credential, PermissionTier, Playlist, PlaylistWithTracks, RescanReport,
-    ServerConfig, Track, UploadResult,
+    ServerConfig, Track, UploadChunkOutcome, UploadInitRequest, UploadInitResponse, UploadResult,
+    UploadStatus,
 };
 use crate::error::{AppError, AppResult};
 
@@ -487,13 +488,13 @@ impl ServerClient {
     pub async fn upload_file(
         &self,
         cred: &Credential,
-        filename: &str,
+        filename: String,
         data: Vec<u8>,
         cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         if let Some(grpc) = self.try_grpc().await {
             match grpc
-                .upload_file(cred, filename, data.clone(), cover.clone())
+                .upload_file(cred, filename.clone(), data.clone(), cover.clone())
                 .await
             {
                 Ok(r) => return Ok(r),
@@ -502,6 +503,30 @@ impl ServerClient {
             }
         }
         self.rest.upload_file(cred, filename, data, cover).await
+    }
+
+    // ----- Chunked / resumable upload (REST-only) -------------------------
+
+    pub async fn upload_init(
+        &self,
+        cred: &Credential,
+        body: &UploadInitRequest,
+    ) -> AppResult<UploadInitResponse> {
+        self.rest.upload_init(cred, body).await
+    }
+
+    pub async fn upload_chunk(
+        &self,
+        cred: &Credential,
+        id: &str,
+        index: u32,
+        data: Vec<u8>,
+    ) -> AppResult<UploadChunkOutcome> {
+        self.rest.upload_chunk(cred, id, index, data).await
+    }
+
+    pub async fn upload_status(&self, cred: &Credential, id: &str) -> AppResult<UploadStatus> {
+        self.rest.upload_status(cred, id).await
     }
 
     // ----- Rescan library (Phase 8+) ---------------------------------------

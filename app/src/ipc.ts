@@ -559,10 +559,10 @@ export const cacheGetSyncState = (entityType: SyncEntityType, entityId: string) 
 // stages into the app cache before passing them here as `UploadItem`s.
 // ---------------------------------------------------------------------------
 
-/** A resolved upload source. `name` hints a display name (for staged temp
- *  files whose path has no usable name); `cleanup` deletes the path after
- *  upload (Android temp files staged from a content URI). */
-export type UploadItem = { path: string; name?: string; cleanup?: boolean };
+/** A resolved upload source — a desktop path or an Android `content://` URI.
+ *  Bytes are read natively in Rust (never through the WebView), so large files
+ *  and archives upload without freezing/crashing the app. */
+export type UploadItem = { path: string };
 
 /** Start a background upload of resolved files. Returns the job id. */
 export const uploadFiles = (items: UploadItem[]) =>
@@ -575,11 +575,19 @@ export const uploadFolder = (dirPath: string) =>
 export type UploadProgressEvent = {
   jobId: string;
   phase: "scanning" | "uploading" | "done";
+  /** Files completed so far. */
   current: number;
+  /** Total files in the job. */
   total: number;
   file: string | null;
   ok: boolean | null;
   message: string | null;
+  /** Bytes of the current file uploaded so far (chunk-granular). */
+  received: number | null;
+  /** Size of the current file in bytes. */
+  bytesTotal: number | null;
+  /** Job-wide average upload speed in bytes/sec. */
+  bytesPerSec: number | null;
 };
 
 export type UploadCompleteEvent = {

@@ -113,6 +113,56 @@ pub enum UploadResult {
     Archive(ArchiveUploadResult),
 }
 
+// ── Chunked / resumable uploads (Phase 8+) ─────────────────────────────
+
+/// One chunk's `[start, end)` byte range within the file.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChunkRange {
+    pub index: u32,
+    pub start: u64,
+    pub end: u64,
+}
+
+/// `POST /upload/init` body — declares the file + its chunk layout. Keyed by
+/// `hash` server-side so any device with the same file resumes the same session.
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadInitRequest {
+    pub filename: String,
+    pub hash: String,
+    pub total_size: u64,
+    pub chunk_size: u64,
+    pub total_chunks: u32,
+    pub chunks: Vec<ChunkRange>,
+}
+
+/// `POST /upload/init` response — the id + which chunks are already present.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UploadInitResponse {
+    pub upload_id: String,
+    pub total_chunks: u32,
+    pub received_chunks: Vec<u32>,
+}
+
+/// Outcome of a single `POST /upload/chunk` — `result` is set on the chunk that
+/// completes the upload (server reassembled + ingested).
+#[derive(Debug, Clone)]
+pub struct UploadChunkOutcome {
+    pub received: u32,
+    pub total: u32,
+    pub complete: bool,
+    pub result: Option<UploadResult>,
+}
+
+/// `GET /upload/status/:id` — which chunks remain, and the result once done.
+#[derive(Debug, Clone)]
+pub struct UploadStatus {
+    pub total_chunks: u32,
+    pub received_chunks: Vec<u32>,
+    pub missing_chunks: Vec<u32>,
+    pub complete: bool,
+    pub result: Option<UploadResult>,
+}
+
 /// A playlist plus its ordered tracks — what `GetPlaylist` returns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaylistWithTracks {

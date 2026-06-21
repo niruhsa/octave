@@ -15,6 +15,7 @@ import Account from "./routes/Account";
 import Upload from "./routes/Upload";
 import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
+import MobileTopBar from "./components/MobileTopBar";
 import PlayerBar from "./components/PlayerBar";
 import { authSession } from "./ipc";
 import { useAppStore } from "./store";
@@ -117,6 +118,7 @@ function RootLayout() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-oct-bg text-oct-text">
+      <MobileTopBar />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <main className="oct-scroll min-w-0 flex-1 overflow-y-auto">

@@ -542,7 +542,7 @@ impl GrpcClient {
     pub async fn upload_file(
         &self,
         cred: &Credential,
-        filename: &str,
+        filename: String,
         data: Vec<u8>,
         cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
@@ -555,7 +555,7 @@ impl GrpcClient {
         };
         msgs.push(UploadRequest {
             payload: Some(pb::upload_request::Payload::Info(UploadInfo {
-                filename: filename.to_string(),
+                filename,
                 cover: cover_bytes,
                 cover_filename,
             })),
@@ -565,6 +565,7 @@ impl GrpcClient {
                 payload: Some(pb::upload_request::Payload::Chunk(chunk.to_vec())),
             });
         }
+
         let stream = futures_util::stream::iter(msgs);
 
         let mut req = Request::new(stream);

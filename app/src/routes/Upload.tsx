@@ -17,8 +17,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readFile, writeFile, mkdir, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { appCacheDir, join } from "@tauri-apps/api/path";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import {
   uploadFiles,
@@ -35,6 +33,7 @@ import { formatError } from "../lib/error";
 import { btnGhost, btnPrimary, card, errorBox, okBox } from "../lib/ui";
 import { CheckIcon, FolderIcon, UploadIcon } from "../components/icons";
 import { OfflineGate } from "../components/OfflineGate";
+import { formatBytes } from "../downloads/useDownloads";
 
 const EXTS = [
   "flac", "mp3", "ogg", "opus", "m4a", "wav", "aiff", "ape", "wv", "aac", "mp4",
@@ -43,23 +42,6 @@ const EXTS = [
 ];
 
 const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
-
-/**
- * Read an Android `content://` URI via the fs plugin and stage it into the app
- * cache, returning a temp filesystem path for the Rust job (deleted after
- * upload via `cleanup`). Content-URI names are unreliable, so the name is a
- * best-effort hint — Rust sniffs the real format from the bytes.
- */
-async function stageUri(uri: string, index: number): Promise<UploadItem> {
-  const bytes = await readFile(uri);
-  const raw = decodeURIComponent((uri.split("/").pop() ?? "").split("?")[0] ?? "");
-  const safe = raw.replace(/[^\w.\-]+/g, "_").replace(/^_+|_+$/g, "") || `upload-${index + 1}`;
-  const rel = `octave-uploads/${Date.now()}-${index}-${safe}`;
-  await mkdir("octave-uploads", { baseDir: BaseDirectory.AppCache, recursive: true });
-  await writeFile(rel, bytes, { baseDir: BaseDirectory.AppCache });
-  const abs = await join(await appCacheDir(), rel);
-  return { path: abs, name: safe, cleanup: true };
-}
 
 async function ensureNotifyPermission(): Promise<void> {
   try {
@@ -112,7 +94,7 @@ export default function Upload() {
       if (jobId) {
         jobIdRef.current = jobId;
         setResult(null);
-        setProgress({ jobId, phase: "scanning", current: 0, total: 0, file: null, ok: null, message: null });
+        setProgress({ jobId, phase: "scanning", current: 0, total: 0, file: null, ok: null, message: null, received: null, bytesTotal: null, bytesPerSec: null });
       }
     } catch (e) {
       setErr(formatError(e));
@@ -126,14 +108,9 @@ export default function Upload() {
       const sel = await open({ multiple: true, filters: [{ name: "Audio & Archives", extensions: EXTS }] });
       if (!sel) return null;
       const list = Array.isArray(sel) ? sel : [sel];
-      let items: UploadItem[];
-      if (isAndroid) {
-        // Stage sequentially so we never hold more than one file in memory.
-        items = [];
-        for (let i = 0; i < list.length; i++) items.push(await stageUri(list[i], i));
-      } else {
-        items = list.map((p) => ({ path: p }));
-      }
+      // Pass paths/URIs straight to Rust — bytes are read natively there, so a
+      // large file or archive never goes through (and crashes) the WebView.
+      const items: UploadItem[] = list.map((p) => ({ path: p }));
       return uploadFiles(items);
     });
   }
@@ -160,8 +137,18 @@ export default function Upload() {
   const busy = starting || progress !== null;
   const total = progress?.total ?? 0;
   const current = progress?.current ?? 0;
-  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-  const scanning = progress?.phase === "scanning" || (busy && total === 0);
+  const received = progress?.received ?? 0;
+  const bytesTotal = progress?.bytesTotal ?? 0;
+  // Chunk-granular per-file fraction folded into the overall files progress.
+  const fileFrac = bytesTotal > 0 ? Math.min(received / bytesTotal, 1) : 0;
+  const overallPct = total > 0 ? Math.round(Math.min((current + fileFrac) / total, 1) * 100) : 0;
+  const speed = progress?.bytesPerSec ?? 0;
+  const scanning = progress?.phase === "scanning" || (progress !== null && total === 0);
+  const indeterminate = scanning;
+  const fileLabel =
+    progress?.file && progress.file.includes(".")
+      ? progress.file
+      : `File ${Math.min(current + 1, total || 1)} of ${total || 1}`;
 
   return (
     <OfflineGate feature="Uploads">
@@ -198,18 +185,18 @@ export default function Upload() {
         {progress && (
           <div className={`${card} mb-4 p-4`}>
             <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-oct-subtle">
-              <span>{scanning ? "Scanning…" : `Uploading ${current} / ${total}`}</span>
-              <span>{scanning ? "" : `${pct}%`}</span>
+              <span className="truncate">{scanning ? "Scanning…" : `Uploading ${fileLabel}`}</span>
+              <span className="whitespace-nowrap">
+                {indeterminate ? "" : `${overallPct}%`}
+                {speed > 0 ? `  ·  ${formatBytes(speed)}/s` : ""}
+              </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-oct-line">
               <div
-                className={`h-full rounded-full bg-oct-accent ${scanning ? "w-1/3 animate-octpulse" : "transition-all duration-300"}`}
-                style={scanning ? undefined : { width: `${pct}%` }}
+                className={`h-full rounded-full bg-oct-accent ${indeterminate ? "w-1/3 animate-octpulse" : "transition-all duration-300"}`}
+                style={indeterminate ? undefined : { width: `${overallPct}%` }}
               />
             </div>
-            {progress.file && !scanning && (
-              <p className="mt-2 truncate font-mono text-[11px] text-oct-muted">{progress.file}</p>
-            )}
             <p className="mt-2 text-[11px] text-oct-faint">
               Running in the background — you can keep using the app; the notification shows progress.
             </p>

@@ -1,0 +1,14 @@
+version: "3"
+agent:
+  authtoken: 3FRVQeebUI8TzCatkLscG37tljf_5YFQRxYEfkvabUVPNYDtS
+
+endpoints:
+  - name: octave-http
+    upstream:
+      url: 8080
+
+tunnels:
+  octave-grpc:
+    proto: http
+    addr: 50051
+    app_protocol: http2

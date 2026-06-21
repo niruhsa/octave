@@ -11,6 +11,7 @@ import {
   PlaylistIcon,
   SearchIcon,
   SyncIcon,
+  UploadIcon,
   type IconProps,
 } from "../components/icons";
 
@@ -126,6 +127,9 @@ export default function Home() {
           <QuickTile to="/search" Icon={SearchIcon} title="Search" sub="Find anything" />
           <QuickTile to="/playlists" Icon={PlaylistIcon} title="Playlists" sub="Your collections" />
           <QuickTile to="/downloads" Icon={DownloadIcon} title="Downloads" sub="Offline content" />
+          {(tier === "admin" || tier === "manager") && (
+            <QuickTile to="/upload" Icon={UploadIcon} title="Upload" sub="Add music to the server" />
+          )}
         </div>
       </div>
     </section>

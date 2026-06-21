@@ -8,6 +8,7 @@ pub mod library;
 pub mod playlist;
 pub mod range;
 pub mod streaming;
+pub mod upload;
 
 use std::net::SocketAddr;
 
@@ -64,6 +65,7 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
         .merge(playlist::router())
         .merge(streaming::router())
         .merge(ingest::router())
+        .merge(upload::router())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

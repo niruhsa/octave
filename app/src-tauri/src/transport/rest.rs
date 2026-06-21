@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
-    PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track, UploadResult,
+    PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track,
+    UploadChunkOutcome, UploadInitRequest, UploadInitResponse, UploadResult, UploadStatus,
 };
 use crate::error::{AppError, AppResult};
 
@@ -545,12 +546,12 @@ impl RestClient {
     pub async fn upload_file(
         &self,
         cred: &Credential,
-        filename: &str,
+        filename: String,
         data: Vec<u8>,
         cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         let part = reqwest::multipart::Part::bytes(data)
-            .file_name(filename.to_string())
+            .file_name(filename)
             .mime_str("application/octet-stream")
             .map_err(|e| AppError::Transport(format!("mime: {e}")))?;
         let mut form = reqwest::multipart::Form::new().part("file", part);
@@ -582,6 +583,64 @@ impl RestClient {
             .await
             .map_err(rest_err("upload body"))?;
         parse_upload_response(&text)
+    }
+
+    // ----- Chunked / resumable upload (Phase 8+) --------------------------
+
+    pub async fn upload_init(
+        &self,
+        cred: &Credential,
+        body: &UploadInitRequest,
+    ) -> AppResult<UploadInitResponse> {
+        let url = format!("{}/upload/init", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(body)
+            .send()
+            .await
+            .map_err(rest_err("upload_init"))?;
+        let resp = check_status(resp).await?;
+        resp.json::<UploadInitResponse>()
+            .await
+            .map_err(rest_err("upload_init decode"))
+    }
+
+    pub async fn upload_chunk(
+        &self,
+        cred: &Credential,
+        id: &str,
+        index: u32,
+        data: Vec<u8>,
+    ) -> AppResult<UploadChunkOutcome> {
+        let url = format!("{}/upload/chunk/{id}/{index}", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .header("content-type", "application/octet-stream")
+            .body(data)
+            .send()
+            .await
+            .map_err(rest_err("upload_chunk"))?;
+        let resp = check_status(resp).await?;
+        let text = resp.text().await.map_err(rest_err("upload_chunk body"))?;
+        parse_chunk_response(&text)
+    }
+
+    pub async fn upload_status(&self, cred: &Credential, id: &str) -> AppResult<UploadStatus> {
+        let url = format!("{}/upload/status/{id}", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("upload_status"))?;
+        let resp = check_status(resp).await?;
+        let text = resp.text().await.map_err(rest_err("upload_status body"))?;
+        parse_status_response(&text)
     }
 }
 
@@ -743,6 +802,42 @@ fn parse_upload_response(text: &str) -> AppResult<UploadResult> {
         track_id: single.track_id,
         path: single.path,
     }))
+}
+
+fn parse_chunk_response(text: &str) -> AppResult<UploadChunkOutcome> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| AppError::Transport(format!("chunk decode: {e}")))?;
+    Ok(UploadChunkOutcome {
+        received: v.get("received").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        total: v.get("total").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        complete: v.get("complete").and_then(|x| x.as_bool()).unwrap_or(false),
+        result: parse_optional_result(v.get("result"))?,
+    })
+}
+
+fn parse_status_response(text: &str) -> AppResult<UploadStatus> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| AppError::Transport(format!("status decode: {e}")))?;
+    Ok(UploadStatus {
+        total_chunks: v.get("total_chunks").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        received_chunks: json_u32_vec(v.get("received_chunks")),
+        missing_chunks: json_u32_vec(v.get("missing_chunks")),
+        complete: v.get("complete").and_then(|x| x.as_bool()).unwrap_or(false),
+        result: parse_optional_result(v.get("result"))?,
+    })
+}
+
+fn parse_optional_result(v: Option<&serde_json::Value>) -> AppResult<Option<UploadResult>> {
+    match v {
+        Some(r) if !r.is_null() => Ok(Some(parse_upload_response(&r.to_string())?)),
+        _ => Ok(None),
+    }
+}
+
+fn json_u32_vec(v: Option<&serde_json::Value>) -> Vec<u32> {
+    v.and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|n| n.as_u64().map(|n| n as u32)).collect())
+        .unwrap_or_default()
 }
 
 #[derive(Deserialize)]

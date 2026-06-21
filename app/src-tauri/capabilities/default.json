@@ -7,9 +7,6 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "notification:default",
-    "fs:read-files",
-    "fs:allow-appcache-write-recursive",
-    "fs:allow-appcache-read-recursive"
+    "notification:default"
   ]
 }

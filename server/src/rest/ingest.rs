@@ -34,14 +34,14 @@ pub fn router() -> Router<crate::rest::RestState> {
 // Upload (multipart)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct UploadResponse {
     pub track_id: String,
     pub path: String,
 }
 
 /// Response for an archive upload (zip/tarball) — multiple tracks ingested.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ArchiveUploadResponse {
     pub kind: String,
     pub ingested: u64,
@@ -52,7 +52,7 @@ pub struct ArchiveUploadResponse {
 }
 
 /// Either a single-file or an archive upload result.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum UploadResult {
     Single(UploadResponse),

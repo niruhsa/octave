@@ -242,6 +242,12 @@ export const FolderIcon = (p: IconProps) => (
   </Line>
 );
 
+export const MenuIcon = (p: IconProps) => (
+  <Line sw={1.5} {...p}>
+    <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+  </Line>
+);
+
 export const KeyIcon = (p: IconProps) => (
   <Line {...p}>
     <circle cx="5.5" cy="6" r="2.5" />

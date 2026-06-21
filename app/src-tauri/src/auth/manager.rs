@@ -11,7 +11,10 @@ use tokio::sync::RwLock;
 
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
-use crate::transport::{Credential, PermissionTier, RescanReport, ServerClient, ServerConfig, UploadResult};
+use crate::transport::{
+    Credential, PermissionTier, RescanReport, ServerClient, ServerConfig, UploadChunkOutcome,
+    UploadInitRequest, UploadInitResponse, UploadResult, UploadStatus,
+};
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
 /// `StoredCredential` minus the secret material.
@@ -202,7 +205,7 @@ impl AuthManager {
     /// file — the command handler reads it before calling this method.
     pub async fn upload_file(
         &self,
-        filename: &str,
+        filename: String,
         data: Vec<u8>,
         cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
@@ -210,6 +213,28 @@ impl AuthManager {
         self.server
             .upload_file(&cred, filename, data, cover)
             .await
+    }
+
+    // ----- Chunked / resumable upload (Phase 8+) --------------------------
+
+    pub async fn upload_init(&self, req: UploadInitRequest) -> AppResult<UploadInitResponse> {
+        let cred = self.credential().await?;
+        self.server.upload_init(&cred, &req).await
+    }
+
+    pub async fn upload_chunk(
+        &self,
+        id: String,
+        index: u32,
+        data: Vec<u8>,
+    ) -> AppResult<UploadChunkOutcome> {
+        let cred = self.credential().await?;
+        self.server.upload_chunk(&cred, &id, index, data).await
+    }
+
+    pub async fn upload_status(&self, id: String) -> AppResult<UploadStatus> {
+        let cred = self.credential().await?;
+        self.server.upload_status(&cred, &id).await
     }
 
     /// Delete an artist, album, or track. Manager+ gated server-side.
