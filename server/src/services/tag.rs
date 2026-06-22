@@ -499,7 +499,25 @@ pub fn read_embedded_cover(path: &Path) -> crate::error::Result<Option<(Vec<u8>,
 
 /// Returns `true` when the file extension (case-insensitive) is a recognised
 /// audio format.
+/// macOS AppleDouble sidecar files (`._name`) store resource-fork / Finder
+/// metadata, **not** audio — even when the shadowed file had an audio
+/// extension (e.g. `._song.flac`). They ride along inside macOS-created
+/// zips/tarballs (typically under a `__MACOSX/` directory). Detecting them by
+/// the `._` filename prefix lets every ingest path skip them instead of
+/// mis-reading them as tagless audio and minting ghost "Unknown Artist" tracks.
+pub fn is_apple_double(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("._"))
+        .unwrap_or(false)
+}
+
 pub fn is_audio_file(path: &Path) -> bool {
+    // AppleDouble sidecars (`._song.flac`) share the audio extension but carry
+    // no audio — never treat them as ingestable files.
+    if is_apple_double(path) {
+        return false;
+    }
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
@@ -525,6 +543,20 @@ mod tests {
         assert!(!is_audio_file(Path::new("noext")));
         assert!(!is_audio_file(Path::new(".")));
         assert!(!is_audio_file(Path::new("")));
+    }
+
+    #[test]
+    fn apple_double_sidecars_are_not_audio() {
+        // macOS zip/tar cruft: AppleDouble files shadow real audio but hold
+        // only resource-fork metadata, so they must never reach ingest.
+        assert!(is_apple_double(Path::new("__MACOSX/Album/._01 - Song.flac")));
+        assert!(is_apple_double(Path::new("._track.mp3")));
+        assert!(!is_apple_double(Path::new("track.mp3")));
+        // The audio gate rejects them despite the audio extension...
+        assert!(!is_audio_file(Path::new("._01 - Song.flac")));
+        assert!(!is_audio_file(Path::new("__MACOSX/Album/._01 - Song.flac")));
+        // ...while the real file still passes.
+        assert!(is_audio_file(Path::new("01 - Song.flac")));
     }
 
     #[test]

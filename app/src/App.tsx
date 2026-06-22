@@ -13,6 +13,7 @@ import PlaylistDetail from "./routes/PlaylistDetail";
 import Register from "./routes/Register";
 import Account from "./routes/Account";
 import Upload from "./routes/Upload";
+import Uploads from "./routes/Uploads";
 import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
 import MobileTopBar from "./components/MobileTopBar";
@@ -21,6 +22,7 @@ import { authSession } from "./ipc";
 import { useAppStore } from "./store";
 import { useSyncScheduler } from "./sync/useSync";
 import { useDownloadListener } from "./downloads/useDownloads";
+import { useUploadEvents } from "./uploads/useUploads";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -87,6 +89,10 @@ function RootLayout() {
   // Phase 5: schedule reconcile on online-regain / focus.
   useSyncScheduler();
 
+  // Uploads v2: keep active-upload state alive across tab navigation and
+  // refresh the library/reports on completion (global, not tab-local).
+  useUploadEvents();
+
   // Phase 6: aggregate download-progress events + read storage usage.
   // When a download finishes (done/error), invalidate all library and
   // downloads queries so every page picks up the change automatically.
@@ -148,6 +154,7 @@ const router = createBrowserRouter([
       { path: "register", element: <Register /> },
       { path: "account", element: <Account /> },
       { path: "upload", element: <Upload /> },
+      { path: "uploads", element: <Uploads /> },
     ],
   },
 ]);

@@ -44,6 +44,28 @@ export type AuthSession = {
 export const authConfigureServer = (restUrl: string, grpcUrl?: string) =>
   invoke<void>("auth_configure_server", { restUrl, grpcUrl: grpcUrl ?? null });
 
+/** The server URLs the client is currently pointed at (null if unconfigured).
+ *  `grpc_explicit` is true when the gRPC URL is a user override (vs derived
+ *  from REST) — the UI only prefills/reveals the gRPC field when so. */
+export type ServerInfo = {
+  rest_url: string;
+  grpc_url: string;
+  grpc_explicit: boolean;
+};
+
+/** Read the active server config — used to pre-fill the change-server form. */
+export const authServerConfig = () =>
+  invoke<ServerInfo | null>("auth_server_config");
+
+/**
+ * Re-point the app at a (possibly different) server while signed in. Persists
+ * the new URLs. Returns the live session when the current credential is still
+ * valid on the new server, or `null` when it was rejected (re-login required).
+ * Works offline (the session is kept optimistically until the server answers).
+ */
+export const authChangeServer = (restUrl: string, grpcUrl?: string) =>
+  invoke<AuthSession | null>("auth_change_server", { restUrl, grpcUrl: grpcUrl ?? null });
+
 /** Username/password login. Stores the bearer token securely. */
 export const authLogin = (username: string, password: string) =>
   invoke<AuthSession>("auth_login", { username, password });
@@ -63,6 +85,14 @@ export const authLogout = () => invoke<void>("auth_logout");
 
 /** `/health` ping. Drives the online/offline indicator. */
 export const authRefreshOnline = () => invoke<boolean>("auth_refresh_online");
+
+/** Per-transport reachability — gRPC (primary) and REST (fallback). The app is
+ *  "online" when either is up (calls fall back gRPC → REST automatically). */
+export type TransportHealth = { rest: boolean; grpc: boolean };
+
+/** Probe both transports; drives the per-transport status indicator. */
+export const authRefreshTransports = () =>
+  invoke<TransportHealth>("auth_refresh_transports");
 
 /**
  * Register a new account. Server-gated to Admin callers (or `SECRET_KEY`,
@@ -549,57 +579,154 @@ export const cacheGetSyncState = (entityType: SyncEntityType, entityId: string) 
   invoke<SyncState | null>("cache_get_sync_state", { entityType, entityId });
 
 // ---------------------------------------------------------------------------
-// uploads (Phase 8) — background jobs + notifications
+// uploads (v2) — session-oriented uploads + reports + live stream
 //
-// `uploadFiles` / `uploadFolder` start a background job in Rust and return a
-// jobId immediately (the UI never blocks). Progress arrives via the
-// `upload-progress` event + an OS notification; a final `upload-complete`
-// event carries the tally, and the notification is replaced with a summary.
-// On Android the picker returns `content://` URIs which the Upload route
-// stages into the app cache before passing them here as `UploadItem`s.
+// `uploadFiles` / `uploadFolder` start a background job in Rust that bundles
+// every picked file into ONE upload session, computing a per-chunk SHA-256 the
+// server verifies on arrival. Progress arrives via `upload-progress` and a
+// final `upload-complete` event (+ an OS notification). Reports are queryable
+// (`uploadsList` / `uploadsGet`), cancellable (`uploadsCancel`), and broadcast
+// live to admins/owners over `upload-event` (`uploadsSubscribe`).
+//
+// On Android the picker returns `content://` URIs which the Upload route hands
+// here as `UploadItem`s; bytes are read natively in Rust (never the WebView).
 // ---------------------------------------------------------------------------
 
-/** A resolved upload source — a desktop path or an Android `content://` URI.
- *  Bytes are read natively in Rust (never through the WebView), so large files
- *  and archives upload without freezing/crashing the app. */
+export type UploadLifecycle =
+  | "initialized"
+  | "uploading"
+  | "completed"
+  | "cancelled";
+
+/** A resolved upload source — a desktop path or an Android `content://` URI. */
 export type UploadItem = { path: string };
 
-/** Start a background upload of resolved files. Returns the job id. */
+/** Start a background upload of resolved files (one session). Returns the job id. */
 export const uploadFiles = (items: UploadItem[]) =>
   invoke<string>("upload_files", { items });
 
-/** Start a background folder upload (desktop). Returns the job id. */
+/** Start a background folder upload (desktop, one session). Returns the job id. */
 export const uploadFolder = (dirPath: string) =>
   invoke<string>("upload_folder", { dirPath });
 
+// ----- Reports -----
+
+export type UploadChunkView = {
+  index: number;
+  start: number;
+  end: number;
+  hash: string;
+  received: boolean;
+};
+
+export type UploadFileView = {
+  file_index: number;
+  filename: string;
+  file_hash: string;
+  total_size: number;
+  chunk_size: number;
+  total_chunks: number;
+  received_chunks: number;
+  state: string;
+  error: string | null;
+  chunks: UploadChunkView[];
+};
+
+export type UploadReport = {
+  id: string;
+  user_id: string | null;
+  state: UploadLifecycle;
+  total_files: number;
+  total_bytes: number;
+  bytes_received: number;
+  created_at: string;
+  updated_at: string;
+  error: string | null;
+  // Aggregated ingest report once completed: { files, tracks_ingested, files_failed }.
+  report: Record<string, unknown> | null;
+  files: UploadFileView[];
+};
+
+export type UploadSummary = {
+  id: string;
+  user_id: string | null;
+  state: UploadLifecycle;
+  total_files: number;
+  total_bytes: number;
+  created_at: string;
+  updated_at: string;
+  error: string | null;
+};
+
+export type UploadListFilter = {
+  user_id?: string | null;
+  state?: string | null;
+  limit?: number | null;
+  offset?: number | null;
+};
+
+/** List upload reports (own by default; admins may pass `user_id`). */
+export const uploadsList = (filter?: UploadListFilter) =>
+  invoke<UploadSummary[]>("uploads_list", { filter: filter ?? null });
+
+/** Fetch one upload report with per-file/per-chunk detail. */
+export const uploadsGet = (id: string) =>
+  invoke<UploadReport>("uploads_get", { id });
+
+/** Cancel an in-flight upload (owner/admin); staged chunks are cleaned up. */
+export const uploadsCancel = (id: string) =>
+  invoke<UploadReport>("uploads_cancel", { id });
+
+/** Open the live `uploads` channel; events arrive via `onUploadEvent`. */
+export const uploadsSubscribe = () => invoke<void>("uploads_subscribe");
+
+// ----- Live events -----
+
+/** A live event broadcast over the `uploads` channel (gRPC stream / WS). */
+export type UploadLiveEvent = {
+  kind: "initialized" | "progress" | "completed" | "cancelled";
+  upload_id: string;
+  owner_id: string | null;
+  state: UploadLifecycle;
+  file_index: number | null;
+  total_files: number;
+  bytes_received: number;
+  total_bytes: number;
+  chunks_received: number;
+  total_chunks: number;
+  bytes_per_sec: number | null;
+  report: Record<string, unknown> | null;
+};
+
+/** The active uploader's own per-chunk progress (local job events). */
 export type UploadProgressEvent = {
   jobId: string;
-  phase: "scanning" | "uploading" | "done";
-  /** Files completed so far. */
+  uploadId: string | null;
+  phase: "scanning" | "uploading" | "finalizing" | "done";
   current: number;
-  /** Total files in the job. */
   total: number;
   file: string | null;
+  received: number | null;
+  bytesTotal: number | null;
+  sessionReceived: number | null;
+  sessionTotal: number | null;
+  bytesPerSec: number | null;
   ok: boolean | null;
   message: string | null;
-  /** Bytes of the current file uploaded so far (chunk-granular). */
-  received: number | null;
-  /** Size of the current file in bytes. */
-  bytesTotal: number | null;
-  /** Job-wide average upload speed in bytes/sec. */
-  bytesPerSec: number | null;
 };
 
 export type UploadCompleteEvent = {
   jobId: string;
-  total: number;
-  succeeded: number;
-  failed: number;
+  uploadId: string | null;
+  state: string;
+  totalFiles: number;
+  tracksIngested: number;
+  filesFailed: number;
   skipped: number;
   errors: string[];
 };
 
-/** Subscribe to per-file upload progress. Returns an unlisten fn. */
+/** Subscribe to the active job's per-chunk progress. Returns an unlisten fn. */
 export async function onUploadProgress(
   cb: (e: UploadProgressEvent) => void,
 ): Promise<() => void> {
@@ -607,10 +734,18 @@ export async function onUploadProgress(
   return listen<UploadProgressEvent>("upload-progress", (e) => cb(e.payload));
 }
 
-/** Subscribe to upload-job completion. Returns an unlisten fn. */
+/** Subscribe to the active job's completion. Returns an unlisten fn. */
 export async function onUploadComplete(
   cb: (e: UploadCompleteEvent) => void,
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<UploadCompleteEvent>("upload-complete", (e) => cb(e.payload));
+}
+
+/** Subscribe to the live `uploads` broadcast (other users / admins). */
+export async function onUploadEvent(
+  cb: (e: UploadLiveEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<UploadLiveEvent>("upload-event", (e) => cb(e.payload));
 }

@@ -1,13 +1,23 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { authChangePassword, authDeleteUser, authListUsers, authLogout } from "../ipc";
+import {
+  authChangePassword,
+  authChangeServer,
+  authDeleteUser,
+  authListUsers,
+  authLogout,
+  authRefreshTransports,
+  authServerConfig,
+} from "../ipc";
 import { formatError } from "../lib/error";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
 import { btnPrimary, errorBox, input, label, okBox } from "../lib/ui";
 import { OfflineGate } from "../components/OfflineGate";
+import { PowerIcon } from "../components/icons";
 import { Skeleton } from "../components/Skeleton";
+import { TransportStatus } from "../components/TransportStatus";
 
 /**
  * /account — change your own password, or (admin/secret-key) manage any user:
@@ -106,8 +116,10 @@ export default function Account() {
   }
 
   return (
-    <OfflineGate feature="Account management">
     <section className="flex max-w-md flex-col gap-8 p-6 md:p-8">
+      <ServerSession />
+      <OfflineGate feature="Account management">
+      <div className="flex flex-col gap-8">
       <form onSubmit={submitPassword} className="flex flex-col gap-3.5">
         <div>
           <h1 className="text-[27px] font-semibold tracking-tight">
@@ -226,7 +238,158 @@ export default function Account() {
           </div>
         </section>
       )}
+      </div>
+      </OfflineGate>
     </section>
-    </OfflineGate>
+  );
+}
+
+/**
+ * Server & session controls — always available (even offline), since you may
+ * need to switch servers precisely *because* the current one is unreachable,
+ * and sign-out must work regardless. Sits outside the OfflineGate.
+ */
+function ServerSession() {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const online = useAppStore((s) => s.online);
+  const transports = useAppStore((s) => s.transports);
+  const setSession = useAppStore((s) => s.setSession);
+  const setTransports = useAppStore((s) => s.setTransports);
+  const setServerConfigured = useAppStore((s) => s.setServerConfigured);
+
+  const [restUrl, setRestUrl] = useState("");
+  const [grpcUrl, setGrpcUrl] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  // Pre-fill with the server we're currently pointed at. Restore (and reveal)
+  // the gRPC URL only when it was an explicit override, so a derived one keeps
+  // tracking the REST URL.
+  useEffect(() => {
+    authServerConfig()
+      .then((c) => {
+        if (!c) return;
+        setRestUrl(c.rest_url);
+        if (c.grpc_explicit) {
+          setGrpcUrl(c.grpc_url);
+          setShowAdvanced(true);
+        }
+      })
+      .catch(() => {
+        /* no server configured yet */
+      });
+  }, []);
+
+  async function changeServer(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    setDone(null);
+    try {
+      // Send the gRPC URL whenever one is set (it's prefilled from the saved
+      // override), so collapsing the panel doesn't silently drop it. An empty
+      // field means "derive from the REST URL".
+      const grpc = grpcUrl.trim() || undefined;
+      const session = await authChangeServer(restUrl.trim(), grpc);
+      setServerConfigured(true);
+      setTransports(await authRefreshTransports());
+      qc.clear(); // drop caches tied to the previous server
+      if (session) {
+        setSession(session);
+        setDone("Connected to the new server.");
+      } else {
+        // The saved credential isn't valid on the new server — re-authenticate.
+        setSession(null);
+        navigate("/login");
+      }
+    } catch (caught) {
+      setErr(formatError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    setSigningOut(true);
+    try {
+      await authLogout();
+    } catch {
+      /* best-effort server revocation; clear locally regardless */
+    } finally {
+      setSession(null);
+      navigate("/login");
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3.5">
+      <div>
+        <h2 className="text-lg font-semibold">Server &amp; session</h2>
+        <p className="mt-1 text-xs text-oct-subtle">
+          Point the app at a different server, or sign out. Available even while offline.
+        </p>
+      </div>
+
+      <form onSubmit={changeServer} className="flex flex-col gap-3.5">
+        <label className="flex flex-col gap-1.5">
+          <span className={label}>SERVER URL (REST)</span>
+          <input
+            type="url"
+            required
+            value={restUrl}
+            onChange={(e) => setRestUrl(e.target.value)}
+            className={input}
+          />
+        </label>
+
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="self-start text-[11px] text-oct-subtle underline decoration-oct-border-strong hover:text-oct-muted"
+        >
+          {showAdvanced ? "Hide" : "Show"} advanced
+        </button>
+        {showAdvanced && (
+          <label className="flex flex-col gap-1.5">
+            <span className={label}>GRPC URL (OPTIONAL)</span>
+            <input
+              type="url"
+              value={grpcUrl}
+              placeholder="auto-derived from REST URL"
+              onChange={(e) => setGrpcUrl(e.target.value)}
+              className={input}
+            />
+          </label>
+        )}
+
+        {err && <p className={errorBox}>{err}</p>}
+        {done && <p className={okBox}>{done}</p>}
+
+        <button type="submit" disabled={busy} className={btnPrimary}>
+          {busy ? "Connecting…" : "Change server"}
+        </button>
+      </form>
+
+      <div className="mt-1 flex items-center justify-between border-t border-oct-border pt-4">
+        <div className="flex flex-col gap-2">
+          <span className="text-[13px] text-oct-subtle">
+            Signed in{online ? "" : " · offline"}
+          </span>
+          <TransportStatus transports={transports} />
+        </div>
+        <button
+          onClick={signOut}
+          disabled={signingOut}
+          className="inline-flex items-center gap-2 rounded-full border border-oct-border-strong px-4 py-2 text-[13px] text-oct-danger transition-colors hover:bg-oct-offline/15 disabled:opacity-50"
+        >
+          <PowerIcon size={14} />
+          {signingOut ? "Signing out…" : "Sign out"}
+        </button>
+      </div>
+    </section>
   );
 }

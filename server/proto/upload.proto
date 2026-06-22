@@ -10,8 +10,143 @@ package music.upload.v1;
 // bytes to a temp file under the ingest area, then runs the same
 // copy-only organise+index pipeline as REST and the folder watcher.
 service UploadService {
+  // Legacy single-shot client-streaming upload (kept for back-compat).
   // Stream a file up in chunks; server replies once after ingest completes.
   rpc Upload(stream UploadRequest) returns (UploadResponse);
+
+  // ---- Uploads v2: DB-backed, session-oriented, per-chunk-verified. ----
+  // A session carries one or more files. Mirrors the REST `/uploads/*` tree.
+
+  // Declare a session (list of files, each with its chunk map + hashes).
+  rpc InitUpload(InitUploadRequest) returns (UploadView);
+  // Upload one verified chunk. Server checks size + content hash.
+  rpc PutChunk(PutChunkRequest) returns (ChunkAck);
+  // Fetch one session report (per-file/per-chunk detail).
+  rpc GetUpload(GetUploadRequest) returns (UploadView);
+  // List session reports (own by default; admin sees all + can filter).
+  rpc ListUploads(ListUploadsRequest) returns (ListUploadsResponse);
+  // Cancel an in-flight session; staged chunks are cleaned off disk.
+  rpc CancelUpload(CancelUploadRequest) returns (UploadView);
+  // Live progress stream (gRPC clone of the WebSocket `uploads` channel).
+  rpc StreamUploads(StreamUploadsRequest) returns (stream UploadEvent);
+}
+
+// ---- v2 messages ----------------------------------------------------------
+
+// One chunk's declared [start, end) range + expected content hash.
+message ChunkInit {
+  uint32 index = 1;
+  uint64 start = 2;
+  uint64 end = 3;
+  string hash = 4; // SHA-256 (lowercase hex) of this chunk's bytes
+}
+
+// One file in a session.
+message FileInit {
+  string filename = 1;
+  string hash = 2;          // SHA-256 (lowercase hex) of the reassembled file
+  uint64 total_size = 3;
+  uint64 chunk_size = 4;
+  uint32 total_chunks = 5;
+  repeated ChunkInit chunks = 6;
+}
+
+message InitUploadRequest {
+  repeated FileInit files = 1;
+}
+
+message PutChunkRequest {
+  string upload_id = 1;
+  uint32 file_index = 2;
+  uint32 chunk_index = 3;
+  bytes data = 4;
+}
+
+message ChunkAck {
+  uint32 file_index = 1;
+  uint32 chunk_index = 2;
+  uint32 received_chunks = 3;
+  uint32 total_chunks = 4;
+  bool file_complete = 5;
+  bool upload_complete = 6;
+  string state = 7; // initialized | uploading | completed | cancelled
+}
+
+message GetUploadRequest { string upload_id = 1; }
+message CancelUploadRequest { string upload_id = 1; }
+
+message ListUploadsRequest {
+  string user_id = 1; // empty = caller's own (admins: all)
+  string state = 2;   // empty = any
+  int64 limit = 3;
+  int64 offset = 4;
+}
+
+message UploadSummary {
+  string id = 1;
+  string user_id = 2;  // empty when SECRET_KEY-owned
+  string state = 3;
+  uint32 total_files = 4;
+  uint64 total_bytes = 5;
+  string created_at = 6;
+  string updated_at = 7;
+  string error = 8;    // empty when none
+}
+
+message ListUploadsResponse {
+  repeated UploadSummary uploads = 1;
+}
+
+message ChunkView {
+  uint32 index = 1;
+  uint64 start = 2;
+  uint64 end = 3;
+  string hash = 4;
+  bool received = 5;
+}
+
+message UploadFileView {
+  uint32 file_index = 1;
+  string filename = 2;
+  string file_hash = 3;
+  uint64 total_size = 4;
+  uint64 chunk_size = 5;
+  uint32 total_chunks = 6;
+  uint32 received_chunks = 7;
+  string state = 8; // pending | uploading | complete | failed
+  string error = 9;
+  repeated ChunkView chunks = 10;
+}
+
+message UploadView {
+  string id = 1;
+  string user_id = 2;
+  string state = 3;
+  uint32 total_files = 4;
+  uint64 total_bytes = 5;
+  uint64 bytes_received = 6;
+  string created_at = 7;
+  string updated_at = 8;
+  string error = 9;
+  string report_json = 10; // aggregated report JSON (empty until completed)
+  repeated UploadFileView files = 11;
+}
+
+message StreamUploadsRequest {}
+
+message UploadEvent {
+  string kind = 1;        // initialized | progress | completed | cancelled
+  string upload_id = 2;
+  string owner_id = 3;    // empty when SECRET_KEY-owned
+  string state = 4;
+  int32 file_index = 5;   // -1 when not file-specific
+  uint32 total_files = 6;
+  uint64 bytes_received = 7;
+  uint64 total_bytes = 8;
+  uint32 chunks_received = 9;
+  uint32 total_chunks = 10;
+  double bytes_per_sec = 11;
+  string report_json = 12; // only populated on "completed"
 }
 
 message UploadRequest {

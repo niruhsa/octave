@@ -22,7 +22,7 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import {
-  authRefreshOnline,
+  authRefreshTransports,
   syncNow,
   syncPendingCount,
   type SyncReport,
@@ -106,7 +106,7 @@ const RECONNECT_INTERVAL_MS = 1000;
 
 function useReconnect() {
   const session = useAppStore((s) => s.session);
-  const setOnline = useAppStore((s) => s.setOnline);
+  const setTransports = useAppStore((s) => s.setTransports);
 
   useEffect(() => {
     if (!session) return;
@@ -115,10 +115,10 @@ function useReconnect() {
     const tick = async () => {
       if (cancelled) return;
       try {
-        const ok = await authRefreshOnline();
-        if (!cancelled) setOnline(ok);
+        const t = await authRefreshTransports();
+        if (!cancelled) setTransports(t);
       } catch {
-        // AuthNotConfigured / no manager — leave the flag as-is.
+        // AuthNotConfigured / no manager — leave the flags as-is.
       }
     };
 
@@ -129,7 +129,7 @@ function useReconnect() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [session, setOnline]);
+  }, [session, setTransports]);
 }
 
 /**

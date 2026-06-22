@@ -5,15 +5,17 @@ edition = "2024"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync"] }
+# Wrap a broadcast receiver as a Stream for the gRPC server-streaming uploads RPC.
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # gRPC (primary transport)
 tonic = "0.12"
 prost = "0.13"
 tonic-health = "0.12"
 
-# REST (fallback transport)
-axum = { version = "0.7", features = ["multipart"] }
+# REST (fallback transport) — `ws` powers the live uploads broadcast.
+axum = { version = "0.7", features = ["multipart", "ws"] }
 tower = "0.5"
 
 # Serde

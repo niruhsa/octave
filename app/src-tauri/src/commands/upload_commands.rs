@@ -1,28 +1,27 @@
-//! Upload commands (Phase 8 + background jobs).
+//! Upload commands (Uploads v2 + background jobs).
 //!
-//! Uploads run as **background jobs**: `upload_files` / `upload_folder` resolve
-//! auth, spawn a task on the async runtime, and return a `jobId` immediately so
-//! the UI never blocks. The job:
-//!   * emits `upload-progress` events (`{ jobId, phase, current, total,
-//!     received, bytesTotal, … }`) — `received`/`bytesTotal` drive a live
-//!     per-file byte bar (gRPC streams chunk-by-chunk; on REST they stay at 0
-//!     so the UI shows an indeterminate "uploading" state),
-//!   * drives a single OS notification that updates per file and is **replaced**
-//!     by a completion notification at the end,
-//!   * emits a final `upload-complete` event with the tally.
+//! A pick (one file, an archive, a multi-selection, or a folder) becomes **one
+//! upload session**. The job:
+//!   * reads every source natively (Rust), computes each file's whole-file
+//!     SHA-256 + a per-chunk SHA-256 map,
+//!   * `init`s a single session declaring all files,
+//!   * uploads each missing chunk (the server re-hashes + verifies it; a
+//!     corrupt chunk is retried),
+//!   * on the final chunk the server reassembles, verifies, ingests, and writes
+//!     the report — which the job fetches and emits.
 //!
-//! **File reading is always native (Rust), never the WebView** — the job reads
-//! each source via the fs plugin's Rust API (`app.fs().read`), which opens a
-//! normal path on desktop and resolves a SAF `content://` URI through the
-//! Android ContentResolver. Content-URI names are unreliable, so
-//! [`name_hint`]/[`determine_filename`] percent-decode the URI tail, sniff the
-//! real format from magic bytes, and sanitise the result.
+//! Progress is surfaced three ways: `upload-progress` / `upload-complete` Tauri
+//! events (the active uploader's own UI), a single OS notification, and the
+//! server's live `uploads` broadcast (other users / admins via
+//! [`uploads_subscribe`]).
 //!
-//! Manager+ is enforced server-side on every file.
+//! **File reading is always native (Rust), never the WebView.** Manager+ is
+//! enforced server-side.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -31,15 +30,23 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::auth::AuthManager;
 use crate::error::{AppError, AppResult};
+use crate::transport::{
+    ChunkAck, ChunkInit, UploadFileInit, UploadInitRequest, UploadListFilter, UploadSummary,
+    UploadView,
+};
 
 /// Audio extensions recognised by the server (matches `server/src/services/tag.rs::AUDIO_EXTS`).
 const AUDIO_EXTS: &[&str] = &[
     "flac", "mp3", "ogg", "opus", "m4a", "wav", "aiff", "ape", "wv", "aac", "mp4",
 ];
 
-/// Chunk size for resumable uploads (4 MiB). The server stores chunks keyed by
-/// the file hash so an interrupted upload resumes (even from another device).
+/// Chunk size for resumable uploads (4 MiB). Each chunk carries its own hash so
+/// the server can verify it on arrival.
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+/// How many times to re-send a chunk the server rejects (e.g. in-transit
+/// corruption → hash mismatch) before giving up on the session.
+const CHUNK_RETRIES: u32 = 3;
 
 /// Monotonic job id source (also seeds the per-job notification id).
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -57,27 +64,35 @@ pub struct UploadItem {
 #[serde(rename_all = "camelCase")]
 struct ProgressEvent {
     job_id: String,
-    phase: String, // "scanning" | "uploading" | "done"
-    current: u64,
-    total: u64,
+    upload_id: Option<String>,
+    phase: String, // "scanning" | "uploading" | "finalizing" | "done"
+    current: u64,  // current file index
+    total: u64,    // total files in the session
     file: Option<String>,
-    ok: Option<bool>,
-    message: Option<String>,
-    /// Bytes of the current file uploaded so far (chunk-granular).
+    /// Bytes of the current file uploaded so far.
     received: Option<u64>,
     /// Size of the current file in bytes.
     bytes_total: Option<u64>,
-    /// Job-wide average upload speed (bytes/sec) so far.
+    /// Bytes of the whole session uploaded so far.
+    session_received: Option<u64>,
+    /// Total bytes across the session.
+    session_total: Option<u64>,
+    /// Job-wide average upload speed (bytes/sec).
     bytes_per_sec: Option<f64>,
+    ok: Option<bool>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompleteEvent {
     job_id: String,
-    total: u64,
-    succeeded: u64,
-    failed: u64,
+    upload_id: Option<String>,
+    /// Final session state: "completed" | "cancelled" | "error".
+    state: String,
+    total_files: u64,
+    tracks_ingested: u64,
+    files_failed: u64,
     skipped: u64,
     errors: Vec<String>,
 }
@@ -186,9 +201,6 @@ fn is_uri(raw: &str) -> bool {
 }
 
 /// Best-effort display name for progress/notifications and as a filename hint.
-/// Content-URI tails are percent-decoded (the real display name needs a native
-/// ContentResolver query, which isn't available here — the UI falls back to
-/// "File N of M" when this still looks like an opaque id).
 fn name_hint(raw: &str) -> String {
     if is_uri(raw) {
         let tail = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
@@ -231,8 +243,7 @@ fn determine_filename(name: Option<&str>, path: &Path, bytes: &[u8]) -> String {
 }
 
 /// Read a source's bytes **natively** (desktop path or Android `content://`
-/// URI). Takes owned values (no borrowed args) so the enclosing spawned job
-/// future stays `Send`. Runs on a blocking thread since the fs read is sync.
+/// URI). Owned values keep the spawned job future `Send`.
 async fn read_source(app: AppHandle, raw: String) -> Result<Vec<u8>, String> {
     let fp: FilePath = raw.parse().expect("FilePath::from_str is infallible");
     tokio::task::spawn_blocking(move || app.fs().read(fp))
@@ -241,26 +252,7 @@ async fn read_source(app: AppHandle, raw: String) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Byte length of chunk `index` (the last chunk is short).
-fn chunk_bytes(index: u64, file_size: u64) -> u64 {
-    let start = index * CHUNK_SIZE;
-    (start + CHUNK_SIZE).min(file_size) - start
-}
-
-/// Average bytes/sec given total bytes sent this session and the job start.
-fn cur_speed(started: std::time::Instant, sent: u64) -> f64 {
-    sent as f64 / started.elapsed().as_secs_f64().max(0.001)
-}
-
-/// Job-wide fraction done: completed files + the current file's fraction, over
-/// the total file count (single file → just that file's fraction).
-fn overall_frac(idx_u: u64, uploaded: u64, file_size: u64, total_files: u64) -> f64 {
-    let file_frac = uploaded as f64 / file_size.max(1) as f64;
-    ((idx_u as f64 + file_frac) / total_files.max(1) as f64).clamp(0.0, 1.0)
-}
-
-/// SHA-256 of the file bytes, lowercase hex — the upload id (server keys
-/// resumable sessions by it, so the same file resumes across devices).
+/// SHA-256 of bytes, lowercase hex.
 fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -273,29 +265,83 @@ fn sha256_hex(data: &[u8]) -> String {
     s
 }
 
-/// Emit a per-file byte-progress event (chunk-granular) + job-wide speed.
-fn emit_chunk_progress(
-    app: &AppHandle,
-    job_id: &str,
-    idx_u: u64,
-    total_files: u64,
-    hint: &str,
-    received: u64,
-    file_size: u64,
-    speed_bps: f64,
-) {
-    let _ = app.emit("upload-progress", ProgressEvent {
-        job_id: job_id.to_string(),
-        phase: "uploading".into(),
-        current: idx_u,
-        total: total_files,
-        file: Some(hint.to_string()),
-        received: Some(received),
-        bytes_total: Some(file_size),
-        bytes_per_sec: if speed_bps.is_finite() && speed_bps > 0.0 { Some(speed_bps) } else { None },
-        ..Default::default()
-    });
+/// Build a file's chunk map (with per-chunk hashes) + whole-file hash.
+fn prepare_file(filename: String, data: &[u8]) -> UploadFileInit {
+    let size = data.len() as u64;
+    let total_chunks = size.div_ceil(CHUNK_SIZE).max(1);
+    let mut chunks = Vec::with_capacity(total_chunks as usize);
+    for i in 0..total_chunks {
+        let start = i * CHUNK_SIZE;
+        let end = (start + CHUNK_SIZE).min(size);
+        chunks.push(ChunkInit {
+            index: i as u32,
+            start,
+            end,
+            hash: sha256_hex(&data[start as usize..end as usize]),
+        });
+    }
+    UploadFileInit {
+        filename,
+        hash: sha256_hex(data),
+        total_size: size,
+        chunk_size: CHUNK_SIZE,
+        total_chunks: total_chunks as u32,
+        chunks,
+    }
 }
+
+/// Send one chunk, retrying a server-side rejection (corruption) a few times.
+async fn put_chunk_with_retry(
+    auth: &AuthManager,
+    upload_id: &str,
+    file_index: u32,
+    chunk_index: u32,
+    bytes: Vec<u8>,
+) -> AppResult<ChunkAck> {
+    let mut attempt = 0u32;
+    loop {
+        match auth
+            .put_chunk(upload_id.to_string(), file_index, chunk_index, bytes.clone())
+            .await
+        {
+            Ok(ack) => return Ok(ack),
+            Err(e) => {
+                attempt += 1;
+                if attempt >= CHUNK_RETRIES {
+                    return Err(e);
+                }
+                tokio::time::sleep(Duration::from_millis(150 * attempt as u64)).await;
+            }
+        }
+    }
+}
+
+// ── Notifications ────────────────────────────────────────────────────────────
+
+const PROGRESS_CHANNEL: &str = "octave-upload-progress";
+const COMPLETE_CHANNEL: &str = "octave-upload-complete";
+
+#[cfg(mobile)]
+fn ensure_channels(app: &AppHandle) {
+    use tauri_plugin_notification::{Channel, Importance, Visibility};
+    let _ = app.notification().create_channel(
+        Channel::builder(PROGRESS_CHANNEL, "Upload progress")
+            .description("Ongoing music upload progress")
+            .importance(Importance::Low)
+            .visibility(Visibility::Public)
+            .vibration(false)
+            .build(),
+    );
+    let _ = app.notification().create_channel(
+        Channel::builder(COMPLETE_CHANNEL, "Upload complete")
+            .description("Music upload finished")
+            .importance(Importance::Default)
+            .visibility(Visibility::Public)
+            .build(),
+    );
+}
+#[cfg(not(mobile))]
+fn ensure_channels(_app: &AppHandle) {}
 
 /// 10-cell text progress bar (the notification plugin has no native bar).
 fn text_bar(pct: u32) -> String {
@@ -322,8 +368,6 @@ fn format_speed(bps: f64) -> String {
     }
 }
 
-/// Update the silent progress notification with a text bar, overall %, files
-/// count (for batches), and average speed.
 fn notify_upload_progress(
     app: &AppHandle,
     id: i32,
@@ -343,147 +387,6 @@ fn notify_upload_progress(
     notify_progress(app, id, "Uploading music", &body);
 }
 
-/// Upload one file via the chunked, resumable protocol: hash → init (learn
-/// which chunks the server already has) → upload only the missing chunks →
-/// the completing chunk (or a status poll) yields the ingest result. Owned
-/// args keep the spawned job future `Send`.
-#[allow(clippy::too_many_arguments)]
-async fn upload_chunked(
-    app: AppHandle,
-    auth: Arc<AuthManager>,
-    job_id: String,
-    notif_id: i32,
-    idx_u: u64,
-    total_files: u64,
-    hint: String,
-    filename: String,
-    data: Vec<u8>,
-    started: std::time::Instant,
-    sent_before: u64,
-) -> AppResult<(crate::transport::UploadResult, u64)> {
-    use crate::transport::{ChunkRange, UploadInitRequest};
-
-    let file_size = data.len() as u64;
-    let total_chunks = file_size.div_ceil(CHUNK_SIZE).max(1);
-    let chunks: Vec<ChunkRange> = (0..total_chunks)
-        .map(|i| {
-            let start = i * CHUNK_SIZE;
-            let end = (start + CHUNK_SIZE).min(file_size);
-            ChunkRange { index: i as u32, start, end }
-        })
-        .collect();
-
-    let init = auth
-        .upload_init(UploadInitRequest {
-            filename,
-            hash: sha256_hex(&data),
-            total_size: file_size,
-            chunk_size: CHUNK_SIZE,
-            total_chunks: total_chunks as u32,
-            chunks,
-        })
-        .await?;
-    let id = init.upload_id;
-    let received: std::collections::HashSet<u32> = init.received_chunks.into_iter().collect();
-
-    // `uploaded` = bytes of this file the server now has (resumed + sent this
-    // session) → the progress bar; `sent` = bytes actually transmitted this
-    // session → the average-speed numerator.
-    let mut uploaded: u64 = received.iter().map(|&i| chunk_bytes(i as u64, file_size)).sum();
-    let mut sent: u64 = 0;
-
-    emit_chunk_progress(&app, &job_id, idx_u, total_files, &hint, uploaded, file_size, cur_speed(started, sent_before + sent));
-    notify_upload_progress(&app, notif_id, overall_frac(idx_u, uploaded, file_size, total_files), idx_u + 1, total_files, cur_speed(started, sent_before + sent));
-    let mut last_notif = std::time::Instant::now();
-
-    let mut result: Option<crate::transport::UploadResult> = None;
-    for i in 0..total_chunks {
-        let index = i as u32;
-        if received.contains(&index) {
-            continue;
-        }
-        let sz = chunk_bytes(i, file_size);
-        let start = (i * CHUNK_SIZE) as usize;
-        let chunk = data[start..start + sz as usize].to_vec();
-        let outcome = auth.upload_chunk(id.clone(), index, chunk).await?;
-        uploaded += sz;
-        sent += sz;
-        if outcome.complete && outcome.result.is_some() {
-            result = outcome.result;
-        }
-        let speed = cur_speed(started, sent_before + sent);
-        emit_chunk_progress(&app, &job_id, idx_u, total_files, &hint, uploaded, file_size, speed);
-        // The progress channel is silent, but throttle notification updates
-        // anyway to avoid excessive IPC on fast links.
-        if last_notif.elapsed() >= std::time::Duration::from_millis(400) {
-            notify_upload_progress(&app, notif_id, overall_frac(idx_u, uploaded, file_size, total_files), idx_u + 1, total_files, speed);
-            last_notif = std::time::Instant::now();
-        }
-    }
-    // Always land a final tick for this file.
-    notify_upload_progress(&app, notif_id, overall_frac(idx_u, uploaded, file_size, total_files), idx_u + 1, total_files, cur_speed(started, sent_before + sent));
-
-    // Full resume (nothing to send) or a completing chunk that didn't carry the
-    // result → fetch it from status.
-    if result.is_none() {
-        let st = auth.upload_status(id.clone()).await?;
-        if st.result.is_some() {
-            result = st.result;
-        } else if st.complete {
-            // All chunks present but not yet reassembled (a prior session was
-            // interrupted between the final chunk write and reassembly) —
-            // re-send the last chunk to trigger it.
-            let last = total_chunks - 1;
-            let sz = chunk_bytes(last, file_size);
-            let start = (last * CHUNK_SIZE) as usize;
-            let chunk = data[start..start + sz as usize].to_vec();
-            result = auth.upload_chunk(id, last as u32, chunk).await?.result;
-        }
-    }
-
-    let result =
-        result.ok_or_else(|| AppError::Internal("upload finished but server returned no result".into()))?;
-    Ok((result, sent_before + sent))
-}
-
-// ── Notifications ────────────────────────────────────────────────────────────
-//
-// Two Android channels: progress is **Low importance** (no sound/vibration/
-// heads-up) so the per-file updates — same notification id, re-`show()`n — never
-// re-alert; completion is **Default importance** and posted as a *new*
-// notification id so it alerts exactly once. The progress builder is also
-// `.silent()` + `.ongoing()`. On desktop the channel/silent/ongoing calls are
-// no-ops, and completion just reuses the id (no vibration concern there).
-
-const PROGRESS_CHANNEL: &str = "octave-upload-progress";
-const COMPLETE_CHANNEL: &str = "octave-upload-complete";
-
-/// Create the notification channels (idempotent). Android API 26+ requires a
-/// channel before posting; importance is fixed at creation, which is exactly
-/// why progress (Low, silent) and completion (Default, alerting) are separate.
-#[cfg(mobile)]
-fn ensure_channels(app: &AppHandle) {
-    use tauri_plugin_notification::{Channel, Importance, Visibility};
-    let _ = app.notification().create_channel(
-        Channel::builder(PROGRESS_CHANNEL, "Upload progress")
-            .description("Ongoing music upload progress")
-            .importance(Importance::Low)
-            .visibility(Visibility::Public)
-            .vibration(false)
-            .build(),
-    );
-    let _ = app.notification().create_channel(
-        Channel::builder(COMPLETE_CHANNEL, "Upload complete")
-            .description("Music upload finished")
-            .importance(Importance::Default)
-            .visibility(Visibility::Public)
-            .build(),
-    );
-}
-#[cfg(not(mobile))]
-fn ensure_channels(_app: &AppHandle) {}
-
-/// Update the single, silent progress notification (best-effort).
 fn notify_progress(app: &AppHandle, id: i32, title: &str, body: &str) {
     let _ = app
         .notification()
@@ -497,14 +400,11 @@ fn notify_progress(app: &AppHandle, id: i32, title: &str, body: &str) {
         .show();
 }
 
-/// Post the completion notification. On mobile this clears the ongoing progress
-/// notification and posts a *new* id on the alerting channel (so it alerts
-/// once); on desktop it reuses the id (replace).
 fn notify_complete(app: &AppHandle, progress_id: i32, title: &str, body: &str) {
     #[cfg(mobile)]
     let id = {
         let _ = app.notification().remove_active(vec![progress_id]);
-        progress_id.wrapping_neg().wrapping_sub(1) // distinct from any progress id
+        progress_id.wrapping_neg().wrapping_sub(1)
     };
     #[cfg(not(mobile))]
     let id = progress_id;
@@ -530,129 +430,200 @@ async fn run_job(
     items: Vec<UploadItem>,
 ) {
     ensure_channels(&app);
-    let total = items.len() as u64;
     let started = std::time::Instant::now();
-    let mut sent_total: u64 = 0; // bytes actually transmitted this session (for speed)
-    let mut succeeded: u64 = 0;
-    let mut failed: u64 = 0;
+    let total_items = items.len() as u64;
+
+    // Phase 1: read every source natively + compute hashes/chunk maps.
+    emit(&app, ProgressEvent {
+        job_id: job_id.clone(),
+        phase: "scanning".into(),
+        total: total_items,
+        ..Default::default()
+    });
+    notify_progress(&app, notif_id, "Uploading music", "Preparing files…");
+
+    let mut files_init: Vec<UploadFileInit> = Vec::new();
+    let mut datas: Vec<(String, Vec<u8>)> = Vec::new(); // (hint, bytes), parallel to files_init
     let mut skipped: u64 = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    for (idx, item) in items.iter().enumerate() {
-        // Owned locals — nothing borrowed from `items` is held across an await,
-        // which keeps the spawned job future `Send`.
+    for item in &items {
         let raw = item.path.clone();
-        let path_buf = std::path::PathBuf::from(&raw);
         let hint = name_hint(&raw);
-        let idx_u = idx as u64;
-
-        emit(&app, ProgressEvent {
-            job_id: job_id.clone(),
-            phase: "uploading".into(),
-            current: idx_u,
-            total,
-            file: Some(hint.clone()),
-            ..Default::default()
-        });
-
         let data = match read_source(app.clone(), raw.clone()).await {
             Ok(d) => d,
             Err(e) => {
-                failed += 1;
                 errors.push(format!("{hint}: read error: {e}"));
-                emit(&app, ProgressEvent {
-                    job_id: job_id.clone(),
-                    phase: "uploading".into(),
-                    current: idx_u + 1,
-                    total,
-                    file: Some(hint.clone()),
-                    ok: Some(false),
-                    message: Some(format!("read error: {e}")),
-                    ..Default::default()
-                });
                 continue;
             }
         };
-
         if data.is_empty() {
             skipped += 1;
             continue;
         }
+        let filename = determine_filename(Some(&hint), &std::path::PathBuf::from(&raw), &data);
+        files_init.push(prepare_file(filename, &data));
+        datas.push((hint, data));
+    }
 
-        let filename = determine_filename(Some(&hint), &path_buf, &data);
+    if files_init.is_empty() {
+        emit_done(&app, &job_id, None, "completed", 0, 0, 0, skipped, errors);
+        notify_complete(&app, notif_id, "Upload complete", &format!("0 uploaded · {skipped} skipped"));
+        return;
+    }
 
-        match upload_chunked(
-            app.clone(),
-            auth.clone(),
-            job_id.clone(),
-            notif_id,
-            idx_u,
-            total,
-            hint.clone(),
-            filename,
-            data,
-            started,
-            sent_total,
-        )
-        .await
-        {
-            Ok((_, sent_after)) => {
-                sent_total = sent_after;
-                succeeded += 1;
-                emit(&app, ProgressEvent {
-                    job_id: job_id.clone(),
-                    phase: "uploading".into(),
-                    current: idx_u + 1,
-                    total,
-                    file: Some(hint.clone()),
-                    ok: Some(true),
-                    ..Default::default()
-                });
+    let total_files = files_init.len() as u64;
+    let session_total: u64 = files_init.iter().map(|f| f.total_size).sum();
+
+    // Phase 2: declare the session.
+    let view = match auth.init_upload(UploadInitRequest { files: files_init.clone() }).await {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = e.to_string();
+            errors.push(msg.clone());
+            emit_done(&app, &job_id, None, "error", total_files, 0, total_files, skipped, errors);
+            notify_complete(&app, notif_id, "Upload failed", &msg);
+            return;
+        }
+    };
+    let upload_id = view.id.clone();
+
+    // Phase 3: upload missing chunks.
+    let mut sent_total: u64 = 0; // bytes transmitted this run (drives speed)
+    let mut session_received: u64 = 0;
+    let mut last_notif = std::time::Instant::now();
+
+    'outer: for (fi, (hint, data)) in datas.iter().enumerate() {
+        let file_init = &files_init[fi];
+        // Chunks the server already holds (resume within a session).
+        let already: std::collections::HashSet<u32> = view
+            .files
+            .get(fi)
+            .map(|f| f.chunks.iter().filter(|c| c.received).map(|c| c.index).collect())
+            .unwrap_or_default();
+        let mut file_received: u64 = 0;
+
+        for chunk in &file_init.chunks {
+            let len = chunk.end - chunk.start;
+            if already.contains(&chunk.index) {
+                file_received += len;
+                session_received += len;
+                continue;
             }
-            Err(e) => {
-                failed += 1;
-                let msg = e.to_string();
-                errors.push(format!("{hint}: {msg}"));
-                emit(&app, ProgressEvent {
-                    job_id: job_id.clone(),
-                    phase: "uploading".into(),
-                    current: idx_u + 1,
-                    total,
-                    file: Some(hint.clone()),
-                    ok: Some(false),
-                    message: Some(msg),
-                    ..Default::default()
-                });
+            let bytes = data[chunk.start as usize..chunk.end as usize].to_vec();
+            match put_chunk_with_retry(&auth, &upload_id, fi as u32, chunk.index, bytes).await {
+                Ok(ack) => {
+                    sent_total += len;
+                    file_received += len;
+                    session_received += len;
+                    let speed = sent_total as f64 / started.elapsed().as_secs_f64().max(0.001);
+                    emit(&app, ProgressEvent {
+                        job_id: job_id.clone(),
+                        upload_id: Some(upload_id.clone()),
+                        phase: "uploading".into(),
+                        current: fi as u64,
+                        total: total_files,
+                        file: Some(hint.clone()),
+                        received: Some(file_received),
+                        bytes_total: Some(file_init.total_size),
+                        session_received: Some(session_received),
+                        session_total: Some(session_total),
+                        bytes_per_sec: Some(speed),
+                        ..Default::default()
+                    });
+                    if last_notif.elapsed() >= Duration::from_millis(400) {
+                        let frac = session_received as f64 / session_total.max(1) as f64;
+                        notify_upload_progress(&app, notif_id, frac, fi as u64 + 1, total_files, speed);
+                        last_notif = std::time::Instant::now();
+                    }
+                    if ack.upload_complete {
+                        break 'outer;
+                    }
+                }
+                Err(e) => {
+                    // Unrecoverable: cancel so the one-active-upload slot frees up.
+                    errors.push(format!("{hint}: {e}"));
+                    let _ = auth.cancel_upload(upload_id.clone()).await;
+                    emit_done(&app, &job_id, Some(&upload_id), "cancelled", total_files, 0, total_files, skipped, errors);
+                    notify_complete(&app, notif_id, "Upload failed", &e.to_string());
+                    return;
+                }
             }
         }
     }
 
+    // Phase 4: fetch the final report + announce.
     emit(&app, ProgressEvent {
         job_id: job_id.clone(),
-        phase: "done".into(),
-        current: total,
-        total,
+        upload_id: Some(upload_id.clone()),
+        phase: "finalizing".into(),
+        current: total_files,
+        total: total_files,
+        session_received: Some(session_received),
+        session_total: Some(session_total),
         ..Default::default()
     });
 
-    let _ = app.emit("upload-complete", CompleteEvent {
-        job_id: job_id.clone(),
-        total,
-        succeeded,
-        failed,
-        skipped,
-        errors: errors.clone(),
-    });
+    let report_view = auth.get_upload(upload_id.clone()).await.ok();
+    let (tracks, files_failed, state) = match &report_view {
+        Some(v) => (
+            report_u64(v, "tracks_ingested"),
+            report_u64(v, "files_failed"),
+            v.state.clone(),
+        ),
+        None => (0, 0, "completed".to_string()),
+    };
+    emit_done(&app, &job_id, Some(&upload_id), &state, total_files, tracks, files_failed, skipped, errors);
 
-    let title = if failed > 0 { "Upload finished with errors" } else { "Upload complete" };
-    let mut body = format!("{succeeded} uploaded");
-    if failed > 0 {
-        body.push_str(&format!(" · {failed} failed"));
+    let title = if files_failed > 0 { "Upload finished with errors" } else { "Upload complete" };
+    let mut body = format!("{tracks} track(s) ingested");
+    if files_failed > 0 {
+        body.push_str(&format!(" · {files_failed} failed"));
     }
     if skipped > 0 {
         body.push_str(&format!(" · {skipped} skipped"));
     }
     notify_complete(&app, notif_id, title, &body);
+}
+
+fn report_u64(v: &UploadView, key: &str) -> u64 {
+    v.report
+        .as_ref()
+        .and_then(|r| r.get(key))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_done(
+    app: &AppHandle,
+    job_id: &str,
+    upload_id: Option<&str>,
+    state: &str,
+    total_files: u64,
+    tracks_ingested: u64,
+    files_failed: u64,
+    skipped: u64,
+    errors: Vec<String>,
+) {
+    let _ = app.emit("upload-complete", CompleteEvent {
+        job_id: job_id.to_string(),
+        upload_id: upload_id.map(|s| s.to_string()),
+        state: state.to_string(),
+        total_files,
+        tracks_ingested,
+        files_failed,
+        skipped,
+        errors,
+    });
+    let _ = app.emit("upload-progress", ProgressEvent {
+        job_id: job_id.to_string(),
+        upload_id: upload_id.map(|s| s.to_string()),
+        phase: "done".into(),
+        current: total_files,
+        total: total_files,
+        ..Default::default()
+    });
 }
 
 fn emit(app: &AppHandle, ev: ProgressEvent) {
@@ -673,10 +644,8 @@ async fn resolve_auth(state: &tauri::State<'_, crate::AppStateHandle>) -> AppRes
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
-/// Upload a set of picked files in the background. Returns the job id; progress
-/// arrives via `upload-progress` / `upload-complete` events + an OS
-/// notification. `items[].path` may be a desktop path or an Android
-/// `content://` URI — both are read natively (never through the WebView).
+/// Upload a set of picked files as a single session. Returns the job id;
+/// progress arrives via `upload-progress` / `upload-complete` + a notification.
 #[tauri::command]
 pub async fn upload_files(
     items: Vec<UploadItem>,
@@ -695,9 +664,8 @@ pub async fn upload_files(
     Ok(job_id)
 }
 
-/// Upload every audio/archive file in a directory tree in the background
-/// (desktop — Android uses multi-file selection via `upload_files`). Returns the
-/// job id; the scan + per-file progress arrive via events + a notification.
+/// Upload every audio/archive file in a directory tree as a single session
+/// (desktop). Returns the job id.
 #[tauri::command]
 pub async fn upload_folder(
     dir_path: String,
@@ -734,6 +702,56 @@ pub async fn upload_folder(
     Ok(job_id)
 }
 
+/// List upload reports. Defaults to the caller's own; admins may filter by
+/// `user_id`. `state` filters by lifecycle (`initialized`/`uploading`/
+/// `completed`/`cancelled`).
+#[tauri::command]
+pub async fn uploads_list(
+    filter: Option<UploadListFilter>,
+    state: tauri::State<'_, crate::AppStateHandle>,
+) -> AppResult<Vec<UploadSummary>> {
+    let auth = resolve_auth(&state).await?;
+    auth.list_uploads(filter.unwrap_or_default()).await
+}
+
+/// Fetch one upload report (per-file/per-chunk detail + completion report).
+#[tauri::command]
+pub async fn uploads_get(
+    id: String,
+    state: tauri::State<'_, crate::AppStateHandle>,
+) -> AppResult<UploadView> {
+    let auth = resolve_auth(&state).await?;
+    auth.get_upload(id).await
+}
+
+/// Cancel an in-flight upload (owner or admin). Staged chunks are cleaned off
+/// the server's disk.
+#[tauri::command]
+pub async fn uploads_cancel(
+    id: String,
+    state: tauri::State<'_, crate::AppStateHandle>,
+) -> AppResult<UploadView> {
+    let auth = resolve_auth(&state).await?;
+    auth.cancel_upload(id).await
+}
+
+/// Subscribe to the live `uploads` channel (gRPC stream primary, WS fallback).
+/// Spawns a reader that re-emits each event as a Tauri `upload-event`.
+#[tauri::command]
+pub async fn uploads_subscribe(
+    state: tauri::State<'_, crate::AppStateHandle>,
+    app: AppHandle,
+) -> AppResult<()> {
+    let auth = resolve_auth(&state).await?;
+    let mut rx = auth.subscribe_uploads().await?;
+    tauri::async_runtime::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            let _ = app.emit("upload-event", ev);
+        }
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -752,7 +770,6 @@ mod tests {
     #[test]
     fn filename_decodes_sniffs_and_sanitises() {
         assert_eq!(determine_filename(Some("Song.flac"), Path::new("/tmp/x"), b""), "Song.flac");
-        // Decoded opaque content-URI id + sniff → sanitised name + real ext.
         assert_eq!(
             determine_filename(Some("msf:13974"), Path::new("/tmp/x"), b"fLaC\0\0\0\0"),
             "msf_13974.flac"
@@ -771,23 +788,18 @@ mod tests {
     }
 
     #[test]
-    fn overall_frac_blends_files_and_bytes() {
-        // file 1 of 2, half done → 25% overall.
-        assert!((overall_frac(0, 50, 100, 2) - 0.25).abs() < 1e-9);
-        // last file fully done → 100%.
-        assert!((overall_frac(1, 100, 100, 2) - 1.0).abs() < 1e-9);
-        // single file, 30% → 0.30.
-        assert!((overall_frac(0, 30, 100, 1) - 0.30).abs() < 1e-9);
-    }
-
-    #[test]
-    fn chunk_bytes_handles_last_short_chunk() {
-        let fs = CHUNK_SIZE * 2 + 123;
-        assert_eq!(chunk_bytes(0, fs), CHUNK_SIZE);
-        assert_eq!(chunk_bytes(1, fs), CHUNK_SIZE);
-        assert_eq!(chunk_bytes(2, fs), 123); // last chunk is short
-        assert_eq!(chunk_bytes(1, CHUNK_SIZE * 2), CHUNK_SIZE); // exact multiple
-        assert_eq!(chunk_bytes(0, 10), 10); // smaller than one chunk
+    fn prepare_file_builds_contiguous_chunk_map() {
+        let data = vec![7u8; (CHUNK_SIZE + 100) as usize];
+        let f = prepare_file("x.flac".into(), &data);
+        assert_eq!(f.total_chunks, 2);
+        assert_eq!(f.total_size, CHUNK_SIZE + 100);
+        assert_eq!(f.chunks[0].start, 0);
+        assert_eq!(f.chunks[0].end, CHUNK_SIZE);
+        assert_eq!(f.chunks[1].start, CHUNK_SIZE);
+        assert_eq!(f.chunks[1].end, CHUNK_SIZE + 100);
+        // Each chunk hash is the sha256 of its slice.
+        assert_eq!(f.chunks[1].hash, sha256_hex(&data[CHUNK_SIZE as usize..]));
+        assert_eq!(f.hash, sha256_hex(&data));
     }
 
     #[test]

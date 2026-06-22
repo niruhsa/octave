@@ -198,3 +198,132 @@ pub struct NewSession {
     pub user_id: Uuid,
     pub expires_at: OffsetDateTime,
 }
+
+// ---------------------------------------------------------------------------
+// Uploads (v2): DB-backed, session-oriented, per-chunk-verified uploads.
+// ---------------------------------------------------------------------------
+
+/// Lifecycle of an upload session. Stored as TEXT (portable to SQLite).
+///
+/// `initialized` → `uploading` → `completed`, or `cancelled` from either
+/// active state. Per-chunk hash failures don't advance state (the chunk POST
+/// just fails); whole-file/ingest errors are captured in the completion report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum UploadState {
+    Initialized,
+    Uploading,
+    Completed,
+    Cancelled,
+}
+
+impl UploadState {
+    /// The two states in which an upload is still in flight (counts toward the
+    /// one-active-upload-per-user limit; cancellable).
+    pub fn is_active(self) -> bool {
+        matches!(self, UploadState::Initialized | UploadState::Uploading)
+    }
+
+    /// Parse a wire/query string into a state, for `?state=` filters.
+    pub fn parse(s: &str) -> Option<UploadState> {
+        match s.to_ascii_lowercase().as_str() {
+            "initialized" => Some(UploadState::Initialized),
+            "uploading" => Some(UploadState::Uploading),
+            "completed" => Some(UploadState::Completed),
+            "cancelled" => Some(UploadState::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+/// Per-file progress within a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum UploadFileState {
+    Pending,
+    Uploading,
+    Complete,
+    Failed,
+}
+
+/// An upload session row (the report's top level).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct Upload {
+    pub id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub state: UploadState,
+    pub total_files: i32,
+    pub total_bytes: i64,
+    pub report_json: Option<String>,
+    pub error: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+/// One file within an upload session.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct UploadFile {
+    pub id: Uuid,
+    pub upload_id: Uuid,
+    pub file_index: i32,
+    pub filename: String,
+    pub file_hash: String,
+    pub total_size: i64,
+    pub chunk_size: i64,
+    pub total_chunks: i32,
+    pub received_chunks: i32,
+    pub state: UploadFileState,
+    pub error: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+/// One chunk of one file. Presence (`received`) + `hash` give resumability and
+/// integrity. The bytes live on disk; this row is the metadata/state authority.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct UploadChunk {
+    pub upload_file_id: Uuid,
+    pub chunk_index: i32,
+    pub start_byte: i64,
+    pub end_byte: i64,
+    pub hash: String,
+    pub received: bool,
+    pub received_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewUpload {
+    pub user_id: Option<Uuid>,
+    pub total_files: i32,
+    pub total_bytes: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewUploadFile {
+    pub upload_id: Uuid,
+    pub file_index: i32,
+    pub filename: String,
+    pub file_hash: String,
+    pub total_size: i64,
+    pub chunk_size: i64,
+    pub total_chunks: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewUploadChunk {
+    pub upload_file_id: Uuid,
+    pub chunk_index: i32,
+    pub start_byte: i64,
+    pub end_byte: i64,
+    pub hash: String,
+}
+
+/// Filter for `UploadRepo::list_uploads`.
+#[derive(Debug, Clone, Default)]
+pub struct UploadFilter {
+    /// Restrict to a single owner. `None` = no owner filter (admin: all users).
+    pub user_id: Option<Uuid>,
+    /// Restrict to a single state.
+    pub state: Option<UploadState>,
+}

@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, Credential, PermissionTier, Playlist, PlaylistWithTracks, RescanReport,
-    ServerConfig, Track, UploadChunkOutcome, UploadInitRequest, UploadInitResponse, UploadResult,
-    UploadStatus,
+    Album, Artist, ChunkAck, Credential, PermissionTier, Playlist, PlaylistWithTracks,
+    RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter,
+    UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -188,6 +188,19 @@ impl ServerClient {
     /// would require a separate proto wiring for marginal benefit.
     pub async fn health(&self) -> AppResult<bool> {
         self.rest.health().await
+    }
+
+    /// Probe **both** transports so the UI can show which are actually working,
+    /// not just a single online bit. REST is the cheap `/health` GET; gRPC is
+    /// the same channel handshake the per-call fallback uses (`try_grpc`), so
+    /// this reports gRPC up exactly when real gRPC calls would succeed. Both
+    /// probes run concurrently.
+    pub async fn transport_health(&self) -> TransportHealth {
+        let (rest, grpc) = tokio::join!(self.rest.health(), GrpcClient::connect(&self.config));
+        TransportHealth {
+            rest: rest.unwrap_or(false),
+            grpc: grpc.is_ok(),
+        }
     }
 
     // ----- Library reads -------------------------------------------------
@@ -505,28 +518,112 @@ impl ServerClient {
         self.rest.upload_file(cred, filename, data, cover).await
     }
 
-    // ----- Chunked / resumable upload (REST-only) -------------------------
+    // ----- Uploads v2 (gRPC primary, REST + WS fallback) ------------------
 
-    pub async fn upload_init(
+    pub async fn init_upload(
         &self,
         cred: &Credential,
         body: &UploadInitRequest,
-    ) -> AppResult<UploadInitResponse> {
-        self.rest.upload_init(cred, body).await
+    ) -> AppResult<UploadView> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.init_upload(cred, body).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("init_upload", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.init_upload(cred, body).await
     }
 
-    pub async fn upload_chunk(
+    pub async fn put_chunk(
         &self,
         cred: &Credential,
-        id: &str,
-        index: u32,
+        upload_id: &str,
+        file_index: u32,
+        chunk_index: u32,
         data: Vec<u8>,
-    ) -> AppResult<UploadChunkOutcome> {
-        self.rest.upload_chunk(cred, id, index, data).await
+    ) -> AppResult<ChunkAck> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .put_chunk(cred, upload_id, file_index, chunk_index, data.clone())
+                .await
+            {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("put_chunk", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest
+            .put_chunk(cred, upload_id, file_index, chunk_index, data)
+            .await
     }
 
-    pub async fn upload_status(&self, cred: &Credential, id: &str) -> AppResult<UploadStatus> {
-        self.rest.upload_status(cred, id).await
+    pub async fn get_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_upload(cred, id).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("get_upload", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_upload(cred, id).await
+    }
+
+    pub async fn list_uploads(
+        &self,
+        cred: &Credential,
+        filter: &UploadListFilter,
+    ) -> AppResult<Vec<UploadSummary>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_uploads(cred, filter).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("list_uploads", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_uploads(cred, filter).await
+    }
+
+    pub async fn cancel_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.cancel_upload(cred, id).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("cancel_upload", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.cancel_upload(cred, id).await
+    }
+
+    /// Subscribe to the live `uploads` channel — gRPC server-stream primary,
+    /// WebSocket fallback. Returns a receiver the caller drains for events.
+    pub async fn subscribe_uploads(
+        &self,
+        cred: &Credential,
+    ) -> AppResult<tokio::sync::mpsc::Receiver<UploadEvent>> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<UploadEvent>(128);
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.stream_uploads(cred).await {
+                Ok(stream) => {
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        use futures_util::StreamExt;
+                        futures_util::pin_mut!(stream);
+                        while let Some(ev) = stream.next().await {
+                            if tx.send(ev).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                    return Ok(rx);
+                }
+                Err(e) if is_transport_error(&e) => fallback_log("stream_uploads", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        // WS fallback spawns its own reader into `tx`.
+        self.rest.stream_uploads(cred, tx).await?;
+        Ok(rx)
     }
 
     // ----- Rescan library (Phase 8+) ---------------------------------------
@@ -576,6 +673,23 @@ fn is_transport_error(err: &AppError) -> bool {
 pub enum TransportUsed {
     Grpc,
     Rest,
+}
+
+/// Reachability of each server transport. Surfaced to the UI so the user can
+/// see whether gRPC (primary) and REST (fallback) are each working — not just
+/// a single online/offline bit. The app is [`online`](Self::online) when
+/// *either* transport is up, since calls fall back gRPC → REST automatically.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct TransportHealth {
+    pub rest: bool,
+    pub grpc: bool,
+}
+
+impl TransportHealth {
+    /// Can we reach the server at all? True when either transport is up.
+    pub fn online(&self) -> bool {
+        self.rest || self.grpc
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

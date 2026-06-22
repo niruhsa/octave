@@ -23,7 +23,7 @@ pub mod grpc;
 pub mod proto;
 pub mod rest;
 
-pub use client::{LoginOutcome, ServerClient, WhoAmI};
+pub use client::{LoginOutcome, ServerClient, TransportHealth, TransportUsed, WhoAmI};
 pub use config::ServerConfig;
 
 use serde::{Deserialize, Serialize};
@@ -113,54 +113,126 @@ pub enum UploadResult {
     Archive(ArchiveUploadResult),
 }
 
-// ── Chunked / resumable uploads (Phase 8+) ─────────────────────────────
+// ── Uploads v2: session-oriented, per-chunk-verified ───────────────────
 
-/// One chunk's `[start, end)` byte range within the file.
+/// One chunk's declared `[start, end)` range + expected content hash.
 #[derive(Debug, Clone, Serialize)]
-pub struct ChunkRange {
+pub struct ChunkInit {
     pub index: u32,
     pub start: u64,
     pub end: u64,
+    /// SHA-256 (lowercase hex) of this chunk's bytes.
+    pub hash: String,
 }
 
-/// `POST /upload/init` body — declares the file + its chunk layout. Keyed by
-/// `hash` server-side so any device with the same file resumes the same session.
+/// One file in a session: where the reassembled bytes go, the whole-file hash,
+/// and the chunk map.
 #[derive(Debug, Clone, Serialize)]
-pub struct UploadInitRequest {
+pub struct UploadFileInit {
     pub filename: String,
     pub hash: String,
     pub total_size: u64,
     pub chunk_size: u64,
     pub total_chunks: u32,
-    pub chunks: Vec<ChunkRange>,
+    pub chunks: Vec<ChunkInit>,
 }
 
-/// `POST /upload/init` response — the id + which chunks are already present.
-#[derive(Debug, Clone, Deserialize)]
-pub struct UploadInitResponse {
+/// `POST /uploads/init` body — declares a whole session (a list of files).
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadInitRequest {
+    pub files: Vec<UploadFileInit>,
+}
+
+/// Outcome of one `put_chunk`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkAck {
+    pub file_index: u32,
+    pub chunk_index: u32,
+    pub received_chunks: u32,
+    pub total_chunks: u32,
+    pub file_complete: bool,
+    pub upload_complete: bool,
+    pub state: String,
+}
+
+/// One chunk's detail in a session report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadChunkView {
+    pub index: u32,
+    pub start: u64,
+    pub end: u64,
+    pub hash: String,
+    pub received: bool,
+}
+
+/// One file's detail in a session report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadFileView {
+    pub file_index: u32,
+    pub filename: String,
+    pub file_hash: String,
+    pub total_size: u64,
+    pub chunk_size: u64,
+    pub total_chunks: u32,
+    pub received_chunks: u32,
+    pub state: String,
+    pub error: Option<String>,
+    pub chunks: Vec<UploadChunkView>,
+}
+
+/// A full upload session report (`GET /uploads/:id`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadView {
+    pub id: String,
+    pub user_id: Option<String>,
+    pub state: String,
+    pub total_files: u32,
+    pub total_bytes: u64,
+    pub bytes_received: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub error: Option<String>,
+    pub report: Option<serde_json::Value>,
+    pub files: Vec<UploadFileView>,
+}
+
+/// A lightweight session row (`GET /uploads` list item).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadSummary {
+    pub id: String,
+    pub user_id: Option<String>,
+    pub state: String,
+    pub total_files: u32,
+    pub total_bytes: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub error: Option<String>,
+}
+
+/// A live progress event from the `uploads` channel (gRPC stream or WS).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadEvent {
+    pub kind: String,
     pub upload_id: String,
+    pub owner_id: Option<String>,
+    pub state: String,
+    pub file_index: Option<i32>,
+    pub total_files: u32,
+    pub bytes_received: u64,
+    pub total_bytes: u64,
+    pub chunks_received: u32,
     pub total_chunks: u32,
-    pub received_chunks: Vec<u32>,
+    pub bytes_per_sec: Option<f64>,
+    pub report: Option<serde_json::Value>,
 }
 
-/// Outcome of a single `POST /upload/chunk` — `result` is set on the chunk that
-/// completes the upload (server reassembled + ingested).
-#[derive(Debug, Clone)]
-pub struct UploadChunkOutcome {
-    pub received: u32,
-    pub total: u32,
-    pub complete: bool,
-    pub result: Option<UploadResult>,
-}
-
-/// `GET /upload/status/:id` — which chunks remain, and the result once done.
-#[derive(Debug, Clone)]
-pub struct UploadStatus {
-    pub total_chunks: u32,
-    pub received_chunks: Vec<u32>,
-    pub missing_chunks: Vec<u32>,
-    pub complete: bool,
-    pub result: Option<UploadResult>,
+/// Filter for `list_uploads`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UploadListFilter {
+    pub user_id: Option<String>,
+    pub state: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 /// A playlist plus its ordered tracks — what `GetPlaylist` returns.

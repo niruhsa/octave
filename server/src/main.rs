@@ -12,7 +12,7 @@ use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
     ArtworkService, CoverArtArchive, IngestService, LibraryService, MetadataService,
-    PlaylistService, ScanService, StreamingService,
+    PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
 };
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
@@ -91,6 +91,14 @@ async fn main() -> Result<()> {
         None => None,
     };
 
+    // Uploads v2: shared hub (live broadcast) + DB-backed session service.
+    // The service needs an ingest pipeline to stage/organise files, so it is
+    // only available when a library/ingest root is configured.
+    let upload_hub = UploadHub::new();
+    let uploads = ingest.clone().map(|ing| {
+        UploadsService::new(Arc::new(repos.clone()), ing, upload_hub.clone())
+    });
+
     let rest_state = RestState {
         auth: auth.clone(),
         library: library.clone(),
@@ -100,6 +108,8 @@ async fn main() -> Result<()> {
         ingest: ingest.clone(),
         metadata: metadata.clone(),
         artwork: artwork.clone(),
+        uploads: uploads.clone(),
+        upload_hub: upload_hub.clone(),
     };
 
     let grpc_task = tokio::spawn(grpc::serve(
@@ -111,6 +121,8 @@ async fn main() -> Result<()> {
         artwork,
         playlists,
         ingest,
+        uploads,
+        upload_hub,
     ));
     let rest_task = tokio::spawn(rest::serve(config.rest_addr, rest_state));
 

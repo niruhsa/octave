@@ -47,6 +47,60 @@ pub async fn auth_configure_server(
     Ok(())
 }
 
+/// The server URLs the client is currently pointed at. Used to pre-fill the
+/// in-app "change server" form. `None` when no server is configured yet.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServerInfo {
+    pub rest_url: String,
+    pub grpc_url: String,
+    /// `true` when `grpc_url` is a user override (vs auto-derived from REST).
+    /// The UI prefills + reveals the gRPC field only for explicit overrides.
+    pub grpc_explicit: bool,
+}
+
+/// Return the active server config (REST + derived/explicit gRPC URL).
+#[tauri::command]
+pub async fn auth_server_config(state: State<'_, AppStateHandle>) -> AppResult<Option<ServerInfo>> {
+    let guard = state.auth.read().await;
+    Ok(guard.as_ref().map(|m| {
+        let c = m.server_config();
+        ServerInfo {
+            rest_url: c.rest_url,
+            grpc_url: c.grpc_url,
+            grpc_explicit: c.grpc_explicit,
+        }
+    }))
+}
+
+/// Re-point the app at a (possibly different) server **while signed in**.
+///
+/// Builds a fresh client for the new URLs, then validates the stored
+/// credential against it: returns the live `AuthSession` when the token is
+/// still accepted (and persists the new URLs so a restart reconnects there),
+/// or `None` when the credential is rejected on the new server (the UI should
+/// route to login). If the new server is unreachable the session is kept
+/// optimistically with the new URLs.
+#[tauri::command]
+pub async fn auth_change_server(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+    rest_url: String,
+    grpc_url: Option<String>,
+) -> AppResult<Option<AuthSession>> {
+    let config = match grpc_url.as_deref() {
+        Some(g) if !g.trim().is_empty() => ServerConfig::new(&rest_url, g)?,
+        _ => ServerConfig::from_rest_only(&rest_url)?,
+    };
+    tracing::info!(rest = %config.rest_root(), grpc = %config.grpc_endpoint(), "changing server");
+    let server = Arc::new(ServerClient::new(config)?);
+    let store = build_store(&app)?;
+    let manager = Arc::new(AuthManager::new(server, store));
+    manager.restore_from_store().await;
+    let session = manager.revalidate_for_new_server().await?;
+    *state.auth.write().await = Some(manager);
+    Ok(session)
+}
+
 /// Username/password login. Persists the bearer token and returns the
 /// resulting session for the UI to render.
 #[tauri::command]
@@ -113,10 +167,14 @@ pub async fn auth_session(
         Some(u) if !u.is_empty() => u,
         _ => return Ok(None),
     };
-    let config = if let Some(grpc) = stored.grpc_url.as_deref().filter(|g| !g.is_empty()) {
-        ServerConfig::new(rest_url, grpc)?
-    } else {
-        ServerConfig::from_rest_only(rest_url)?
+    // Honour an explicit gRPC override; otherwise re-derive from REST so a
+    // derived URL keeps tracking the REST URL (legacy entries lack the flag →
+    // treated as derived).
+    let config = match stored.grpc_url.as_deref().filter(|g| !g.is_empty()) {
+        Some(grpc) if stored.grpc_explicit.unwrap_or(false) => {
+            ServerConfig::new(rest_url, grpc)?
+        }
+        _ => ServerConfig::from_rest_only(rest_url)?,
     };
     let server = Arc::new(ServerClient::new(config)?);
     let manager = Arc::new(AuthManager::new(server, store));
@@ -136,6 +194,16 @@ pub async fn auth_logout(state: State<'_, AppStateHandle>) -> AppResult<()> {
 #[tauri::command]
 pub async fn auth_refresh_online(state: State<'_, AppStateHandle>) -> AppResult<bool> {
     with_manager(&state, |m| async move { Ok(m.refresh_online().await) }).await
+}
+
+/// Probe both transports (gRPC primary + REST fallback) concurrently and
+/// return which are reachable. Drives the per-transport status indicator;
+/// `rest || grpc` is the overall online state.
+#[tauri::command]
+pub async fn auth_refresh_transports(
+    state: State<'_, AppStateHandle>,
+) -> AppResult<crate::transport::TransportHealth> {
+    with_manager(&state, |m| async move { Ok(m.refresh_transports().await) }).await
 }
 
 /// Register a new account. Server-gated to Admin callers (or `SECRET_KEY`,

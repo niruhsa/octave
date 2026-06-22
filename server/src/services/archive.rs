@@ -116,6 +116,10 @@ fn extract_zip(source: &Path, dest_dir: &Path) -> Result<Vec<PathBuf>> {
                 continue;
             }
         };
+        if is_macos_metadata(&rel) {
+            debug!(name = %rel.display(), "zip: skipping macOS metadata entry");
+            continue;
+        }
         let dest = match safe_join(dest_dir, &rel) {
             Some(p) => p,
             None => continue,
@@ -156,6 +160,10 @@ fn extract_tar(source: &Path, kind: ArchiveKind, dest_dir: &Path) -> Result<Vec<
             .path()
             .map_err(|e| AppError::InvalidArgument(format!("tar entry path: {e}")))?
             .into_owned();
+        if is_macos_metadata(&rel) {
+            debug!(name = %rel.display(), "tar: skipping macOS metadata entry");
+            continue;
+        }
         let dest = match safe_join(dest_dir, &rel) {
             Some(p) => p,
             None => {
@@ -172,6 +180,21 @@ fn extract_tar(source: &Path, kind: ArchiveKind, dest_dir: &Path) -> Result<Vec<
         written.push(dest);
     }
     Ok(written)
+}
+
+/// `true` for macOS-only archive cruft: AppleDouble sidecars (`._name`,
+/// commonly under a `__MACOSX/` directory) that hold resource-fork / Finder
+/// metadata rather than real content. Skipping them at extraction keeps that
+/// cruft out of ingest — otherwise `._song.flac` is mis-detected as audio by
+/// its extension and minted as a ghost "Unknown Artist" track.
+fn is_macos_metadata(rel: &Path) -> bool {
+    rel.components().any(|c| match c {
+        Component::Normal(s) => {
+            let s = s.to_string_lossy();
+            s == "__MACOSX" || s.starts_with("._")
+        }
+        _ => false,
+    })
 }
 
 /// Join `rel` onto `base`, rejecting absolute paths and any `..` / root
@@ -292,6 +315,40 @@ mod tests {
         let song = out.join("a/b/song.mp3");
         assert!(song.is_file());
         assert_eq!(std::fs::read(&song).unwrap(), b"FAKEMP3");
+    }
+
+    #[test]
+    fn extract_zip_skips_macos_metadata() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("album.zip");
+        // A real audio file plus the AppleDouble cruft a macOS-built zip carries.
+        {
+            let f = File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+            zw.start_file("Album/01 - Song.flac", opts).unwrap();
+            zw.write_all(b"FAKEFLAC").unwrap();
+            zw.start_file("__MACOSX/Album/._01 - Song.flac", opts).unwrap();
+            zw.write_all(b"\x00\x05\x16\x07applemeta").unwrap();
+            zw.start_file("Album/._01 - Song.flac", opts).unwrap();
+            zw.write_all(b"\x00\x05\x16\x07applemeta").unwrap();
+            zw.finish().unwrap();
+        }
+        let out = dir.path().join("out");
+        let written = extract(&zip_path, ArchiveKind::Zip, &out).unwrap();
+        assert_eq!(written.len(), 1, "only the real audio member should be written");
+        assert!(out.join("Album/01 - Song.flac").is_file());
+        assert!(!out.join("__MACOSX").exists());
+        assert!(!out.join("Album/._01 - Song.flac").exists());
+    }
+
+    #[test]
+    fn is_macos_metadata_matches_appledouble_and_macosx() {
+        assert!(is_macos_metadata(Path::new("__MACOSX/Album/._x.flac")));
+        assert!(is_macos_metadata(Path::new("Album/._x.flac")));
+        assert!(is_macos_metadata(Path::new("._x.flac")));
+        assert!(!is_macos_metadata(Path::new("Album/01 - x.flac")));
     }
 
     #[test]

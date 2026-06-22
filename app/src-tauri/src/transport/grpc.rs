@@ -30,8 +30,10 @@ use super::proto::upload::upload_service_client::UploadServiceClient;
 use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUploadResponse};
 use super::proto::upload as pb;
 use super::{
-    Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
-    PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track, UploadResult,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, PermissionTier, Playlist,
+    PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track,
+    UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest, UploadListFilter, UploadResult,
+    UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -595,6 +597,116 @@ impl GrpcClient {
         })
     }
 
+    // ----- Uploads v2 (sessions + reports + live stream) -------------------
+
+    pub async fn init_upload(
+        &self,
+        cred: &Credential,
+        req: &UploadInitRequest,
+    ) -> AppResult<UploadView> {
+        let files = req.files.iter().map(file_init_to_pb).collect();
+        let mut r = Request::new(pb::InitUploadRequest { files });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .init_upload(r)
+            .await
+            .map_err(map_uploads_err("init_upload"))?
+            .into_inner();
+        Ok(view_from_pb(resp))
+    }
+
+    pub async fn put_chunk(
+        &self,
+        cred: &Credential,
+        upload_id: &str,
+        file_index: u32,
+        chunk_index: u32,
+        data: Vec<u8>,
+    ) -> AppResult<ChunkAck> {
+        let mut r = Request::new(pb::PutChunkRequest {
+            upload_id: upload_id.to_string(),
+            file_index,
+            chunk_index,
+            data,
+        });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .put_chunk(r)
+            .await
+            .map_err(map_uploads_err("put_chunk"))?
+            .into_inner();
+        Ok(ack_from_pb(resp))
+    }
+
+    pub async fn get_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let mut r = Request::new(pb::GetUploadRequest {
+            upload_id: id.to_string(),
+        });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .get_upload(r)
+            .await
+            .map_err(map_uploads_err("get_upload"))?
+            .into_inner();
+        Ok(view_from_pb(resp))
+    }
+
+    pub async fn list_uploads(
+        &self,
+        cred: &Credential,
+        filter: &UploadListFilter,
+    ) -> AppResult<Vec<UploadSummary>> {
+        let mut r = Request::new(pb::ListUploadsRequest {
+            user_id: filter.user_id.clone().unwrap_or_default(),
+            state: filter.state.clone().unwrap_or_default(),
+            limit: filter.limit.unwrap_or(0),
+            offset: filter.offset.unwrap_or(0),
+        });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .list_uploads(r)
+            .await
+            .map_err(map_uploads_err("list_uploads"))?
+            .into_inner();
+        Ok(resp.uploads.into_iter().map(summary_from_pb).collect())
+    }
+
+    pub async fn cancel_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let mut r = Request::new(pb::CancelUploadRequest {
+            upload_id: id.to_string(),
+        });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .cancel_upload(r)
+            .await
+            .map_err(map_uploads_err("cancel_upload"))?
+            .into_inner();
+        Ok(view_from_pb(resp))
+    }
+
+    /// Open the live `uploads` stream (gRPC server-streaming). Yields
+    /// `UploadEvent`s the caller is permitted to see; ends on transport error.
+    pub async fn stream_uploads(
+        &self,
+        cred: &Credential,
+    ) -> AppResult<impl futures_util::Stream<Item = UploadEvent> + Send + 'static> {
+        use futures_util::StreamExt;
+        let mut r = Request::new(pb::StreamUploadsRequest {});
+        attach_credential(&mut r, cred)?;
+        let stream = self
+            .uploads()
+            .stream_uploads(r)
+            .await
+            .map_err(map_uploads_err("stream_uploads"))?
+            .into_inner();
+        Ok(stream.filter_map(|item| async move { item.ok().map(event_from_pb) }))
+    }
+
     // ----- Rescan library (Phase 8+) --------------------------------------
 
     /// Re-measure actual audio duration for every track in the library.
@@ -651,6 +763,142 @@ fn map_register_err(s: tonic::Status) -> AppError {
             AppError::Internal(format!("register rejected: {s}"))
         }
         _ => AppError::Transport(format!("register: {s}")),
+    }
+}
+
+// ---- Uploads v2: proto <-> client conversions + error policy ----
+// (`opt_str` is shared with the library conversions below.)
+
+fn parse_json(s: String) -> Option<serde_json::Value> {
+    if s.is_empty() {
+        None
+    } else {
+        serde_json::from_str(&s).ok()
+    }
+}
+
+fn file_init_to_pb(f: &UploadFileInit) -> pb::FileInit {
+    pb::FileInit {
+        filename: f.filename.clone(),
+        hash: f.hash.clone(),
+        total_size: f.total_size,
+        chunk_size: f.chunk_size,
+        total_chunks: f.total_chunks,
+        chunks: f
+            .chunks
+            .iter()
+            .map(|c| pb::ChunkInit {
+                index: c.index,
+                start: c.start,
+                end: c.end,
+                hash: c.hash.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn ack_from_pb(a: pb::ChunkAck) -> ChunkAck {
+    ChunkAck {
+        file_index: a.file_index,
+        chunk_index: a.chunk_index,
+        received_chunks: a.received_chunks,
+        total_chunks: a.total_chunks,
+        file_complete: a.file_complete,
+        upload_complete: a.upload_complete,
+        state: a.state,
+    }
+}
+
+fn view_from_pb(v: pb::UploadView) -> UploadView {
+    UploadView {
+        id: v.id,
+        user_id: opt_str(v.user_id),
+        state: v.state,
+        total_files: v.total_files,
+        total_bytes: v.total_bytes,
+        bytes_received: v.bytes_received,
+        created_at: v.created_at,
+        updated_at: v.updated_at,
+        error: opt_str(v.error),
+        report: parse_json(v.report_json),
+        files: v.files.into_iter().map(file_view_from_pb).collect(),
+    }
+}
+
+fn file_view_from_pb(f: pb::UploadFileView) -> UploadFileView {
+    UploadFileView {
+        file_index: f.file_index,
+        filename: f.filename,
+        file_hash: f.file_hash,
+        total_size: f.total_size,
+        chunk_size: f.chunk_size,
+        total_chunks: f.total_chunks,
+        received_chunks: f.received_chunks,
+        state: f.state,
+        error: opt_str(f.error),
+        chunks: f
+            .chunks
+            .into_iter()
+            .map(|c| super::UploadChunkView {
+                index: c.index,
+                start: c.start,
+                end: c.end,
+                hash: c.hash,
+                received: c.received,
+            })
+            .collect(),
+    }
+}
+
+fn summary_from_pb(s: pb::UploadSummary) -> UploadSummary {
+    UploadSummary {
+        id: s.id,
+        user_id: opt_str(s.user_id),
+        state: s.state,
+        total_files: s.total_files,
+        total_bytes: s.total_bytes,
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+        error: opt_str(s.error),
+    }
+}
+
+fn event_from_pb(e: pb::UploadEvent) -> UploadEvent {
+    UploadEvent {
+        kind: e.kind,
+        upload_id: e.upload_id,
+        owner_id: opt_str(e.owner_id),
+        state: e.state,
+        file_index: if e.file_index < 0 {
+            None
+        } else {
+            Some(e.file_index)
+        },
+        total_files: e.total_files,
+        bytes_received: e.bytes_received,
+        total_bytes: e.total_bytes,
+        chunks_received: e.chunks_received,
+        total_chunks: e.total_chunks,
+        bytes_per_sec: if e.bytes_per_sec > 0.0 {
+            Some(e.bytes_per_sec)
+        } else {
+            None
+        },
+        report: parse_json(e.report_json),
+    }
+}
+
+/// Error policy for uploads v2: auth/merit rejections become non-transport
+/// errors (no REST fallback — the server spoke); only transport faults fall back.
+fn map_uploads_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
+    move |s| match s.code() {
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("{op}: {s}")),
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("{op}: {s}")),
+        tonic::Code::NotFound
+        | tonic::Code::InvalidArgument
+        | tonic::Code::FailedPrecondition
+        | tonic::Code::AlreadyExists => AppError::Internal(format!("{op} rejected: {s}")),
+        _ => AppError::Transport(format!("{op}: {s}")),
     }
 }
 

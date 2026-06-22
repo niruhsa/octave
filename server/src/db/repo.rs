@@ -149,3 +149,52 @@ pub trait SessionRepo: Send + Sync {
     async fn get(&self, token: &str) -> Result<Option<Session>>;
     async fn revoke(&self, token: &str) -> Result<()>;
 }
+
+#[async_trait]
+pub trait UploadRepo: Send + Sync {
+    // ----- Sessions -----
+    async fn create_upload(&self, new: NewUpload) -> Result<Upload>;
+    async fn get_upload(&self, id: Uuid) -> Result<Option<Upload>>;
+    async fn list_uploads(
+        &self,
+        filter: UploadFilter,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Upload>>;
+    /// Number of in-flight (`initialized`/`uploading`) sessions for an owner.
+    /// `None` matches the `SECRET_KEY` (NULL-owner) bucket.
+    async fn count_active_for_user(&self, user_id: Option<Uuid>) -> Result<i64>;
+    async fn set_upload_state(&self, id: Uuid, state: UploadState) -> Result<()>;
+    /// Terminal write: state + optional aggregated report + optional error.
+    async fn set_upload_report(
+        &self,
+        id: Uuid,
+        state: UploadState,
+        report_json: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()>;
+
+    // ----- Files -----
+    async fn create_file(&self, new: NewUploadFile) -> Result<UploadFile>;
+    async fn get_file(&self, upload_id: Uuid, file_index: i32) -> Result<Option<UploadFile>>;
+    async fn list_files(&self, upload_id: Uuid) -> Result<Vec<UploadFile>>;
+    async fn set_file_state(
+        &self,
+        file_id: Uuid,
+        state: UploadFileState,
+        error: Option<&str>,
+    ) -> Result<()>;
+    /// Overwrite a file's stored filename — used after ingest to replace the
+    /// name declared at init (possibly an opaque Android content-URI id) with
+    /// the organised on-disk filename.
+    async fn set_file_filename(&self, file_id: Uuid, filename: &str) -> Result<()>;
+
+    // ----- Chunks -----
+    async fn create_chunk(&self, new: NewUploadChunk) -> Result<()>;
+    async fn list_chunks(&self, file_id: Uuid) -> Result<Vec<UploadChunk>>;
+    async fn get_chunk(&self, file_id: Uuid, chunk_index: i32) -> Result<Option<UploadChunk>>;
+    /// Idempotently mark a chunk received and recompute the file's
+    /// `received_chunks` from the chunk table (robust to retries / races).
+    /// Returns the file's `(received_chunks, total_chunks)` after the update.
+    async fn mark_chunk_received(&self, file_id: Uuid, chunk_index: i32) -> Result<(i32, i32)>;
+}

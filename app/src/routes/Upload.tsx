@@ -1,34 +1,17 @@
-// Upload route (Phase 8) — background uploads with OS notifications.
+// Upload route (Uploads v2).
 //
-// Uploads run as a background job in Rust: the picker resolves sources, we
-// start the job (returns a jobId immediately), and a progress notification
-// updates per file then is replaced by a completion notification. The in-app
-// UI mirrors the same progress via events but the user can navigate away —
-// the job keeps running and the notification carries the status.
-//
-// Platform handling:
-//   * Desktop — the dialog returns real paths; folder upload walks a tree.
-//   * Android — the dialog returns SAF `content://` URIs; we read each via the
-//     fs plugin and stage it into the app cache, then hand the temp paths to
-//     Rust (which deletes them after upload). Folder selection isn't available
-//     through SAF here, so "bulk" upload uses the picker's multi-select.
+// State lives in the global upload store (`useUploads`), NOT here — so leaving
+// and returning to the tab preserves the in-flight upload, and completion
+// refreshes the library no matter where you are. This route just drives the
+// pickers, renders the store's live progress, and offers cancel.
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
-import {
-  uploadFiles,
-  uploadFolder,
-  onUploadProgress,
-  onUploadComplete,
-  type UploadItem,
-  type UploadProgressEvent,
-  type UploadCompleteEvent,
-} from "../ipc";
+import { uploadFiles, uploadFolder, uploadsCancel, type UploadItem } from "../ipc";
 import { useAppStore } from "../store";
-import { broadcastInvalidate } from "../App";
+import { useUploadStore, useUploadBusy } from "../uploads/useUploads";
 import { formatError } from "../lib/error";
 import { btnGhost, btnPrimary, card, errorBox, okBox } from "../lib/ui";
 import { CheckIcon, FolderIcon, UploadIcon } from "../components/icons";
@@ -54,62 +37,37 @@ async function ensureNotifyPermission(): Promise<void> {
 export default function Upload() {
   const tier = useAppStore((s) => s.tier);
   const navigate = useNavigate();
-  const qc = useQueryClient();
   const isManager = tier === "admin" || tier === "manager";
 
-  const [progress, setProgress] = useState<UploadProgressEvent | null>(null);
-  const [result, setResult] = useState<UploadCompleteEvent | null>(null);
-  const [starting, setStarting] = useState(false);
+  const progress = useUploadStore((s) => s.progress);
+  const lastComplete = useUploadStore((s) => s.lastComplete);
+  const activeUploadId = useUploadStore((s) => s.activeUploadId);
+  const dismissComplete = useUploadStore((s) => s.dismissComplete);
+  const setStarting = useUploadStore((s) => s.setStarting);
+  const busy = useUploadBusy();
+
   const [err, setErr] = useState<string | null>(null);
-  const jobIdRef = useRef<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
-  // Track the active job via background events (works even if the user
-  // navigates away and back while this component is mounted).
-  useEffect(() => {
-    let un1: (() => void) | undefined;
-    let un2: (() => void) | undefined;
-    onUploadProgress((e) => {
-      if (e.jobId === jobIdRef.current) setProgress(e);
-    }).then((f) => (un1 = f));
-    onUploadComplete((e) => {
-      if (e.jobId !== jobIdRef.current) return;
-      setResult(e);
-      setProgress(null);
-      jobIdRef.current = null;
-      qc.invalidateQueries({ queryKey: ["library"] });
-      broadcastInvalidate(["library"]);
-    }).then((f) => (un2 = f));
-    return () => {
-      un1?.();
-      un2?.();
-    };
-  }, [qc]);
-
-  const startJob = useCallback(async (starter: () => Promise<string | null>) => {
+  async function startJob(starter: () => Promise<string | null>) {
     setErr(null);
+    dismissComplete();
     setStarting(true);
     try {
       await ensureNotifyPermission();
       const jobId = await starter();
-      if (jobId) {
-        jobIdRef.current = jobId;
-        setResult(null);
-        setProgress({ jobId, phase: "scanning", current: 0, total: 0, file: null, ok: null, message: null, received: null, bytesTotal: null, bytesPerSec: null });
-      }
+      if (!jobId) setStarting(false); // user cancelled the picker
     } catch (e) {
-      setErr(formatError(e));
-    } finally {
       setStarting(false);
+      setErr(formatError(e));
     }
-  }, []);
+  }
 
   function pickFiles() {
     void startJob(async () => {
       const sel = await open({ multiple: true, filters: [{ name: "Audio & Archives", extensions: EXTS }] });
       if (!sel) return null;
       const list = Array.isArray(sel) ? sel : [sel];
-      // Pass paths/URIs straight to Rust — bytes are read natively there, so a
-      // large file or archive never goes through (and crashes) the WebView.
       const items: UploadItem[] = list.map((p) => ({ path: p }));
       return uploadFiles(items);
     });
@@ -123,6 +81,20 @@ export default function Upload() {
     });
   }
 
+  async function cancelActive() {
+    if (!activeUploadId) return;
+    setCancelling(true);
+    try {
+      await uploadsCancel(activeUploadId);
+      // Optimistically clear; the job's own completion event will confirm.
+      useUploadStore.setState({ progress: null, activeUploadId: null, starting: false });
+    } catch (e) {
+      setErr(formatError(e));
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (!isManager) {
     return (
       <div className="mx-auto max-w-lg px-6 pt-16 text-center text-oct-subtle">
@@ -134,29 +106,27 @@ export default function Upload() {
     );
   }
 
-  const busy = starting || progress !== null;
-  const total = progress?.total ?? 0;
-  const current = progress?.current ?? 0;
-  const received = progress?.received ?? 0;
-  const bytesTotal = progress?.bytesTotal ?? 0;
-  // Chunk-granular per-file fraction folded into the overall files progress.
-  const fileFrac = bytesTotal > 0 ? Math.min(received / bytesTotal, 1) : 0;
-  const overallPct = total > 0 ? Math.round(Math.min((current + fileFrac) / total, 1) * 100) : 0;
+  const sessionReceived = progress?.sessionReceived ?? 0;
+  const sessionTotal = progress?.sessionTotal ?? 0;
+  const overallPct = sessionTotal > 0 ? Math.round(Math.min(sessionReceived / sessionTotal, 1) * 100) : 0;
   const speed = progress?.bytesPerSec ?? 0;
-  const scanning = progress?.phase === "scanning" || (progress !== null && total === 0);
+  const scanning = progress?.phase === "scanning" || progress?.phase === "finalizing" || (progress !== null && sessionTotal === 0);
   const indeterminate = scanning;
   const fileLabel =
-    progress?.file && progress.file.includes(".")
-      ? progress.file
-      : `File ${Math.min(current + 1, total || 1)} of ${total || 1}`;
+    progress?.file ?? (progress ? `File ${Math.min(progress.current + 1, progress.total || 1)} of ${progress.total || 1}` : "");
 
   return (
     <OfflineGate feature="Uploads">
       <div className="mx-auto max-w-lg p-6 md:p-8">
-        <h1 className="text-[27px] font-semibold tracking-tight">Upload</h1>
+        <div className="flex items-end justify-between gap-4">
+          <h1 className="text-[27px] font-semibold tracking-tight">Upload</h1>
+          <Link to="/uploads" className="font-mono text-[11px] text-oct-accent hover:underline">
+            View reports →
+          </Link>
+        </div>
         <p className="mb-6 mt-1 text-sm text-oct-subtle">
-          Push audio tracks or archives (zip, tarball) to the server. Uploads run in the
-          background with a progress notification.
+          Push audio tracks or archives (zip, tarball) to the server. Every chunk is
+          verified by hash; uploads run in the background with a progress notification.
         </p>
 
         {/* pickers */}
@@ -165,9 +135,11 @@ export default function Upload() {
             <UploadIcon size={24} />
           </span>
           <p className="text-sm text-oct-subtle">
-            {isAndroid
-              ? "Pick one or more files. The Android picker supports selecting many at once."
-              : "Choose files, or a whole folder to upload everything inside."}
+            {busy
+              ? "An upload is already in progress — only one upload runs at a time."
+              : isAndroid
+                ? "Pick one or more files. The Android picker supports selecting many at once."
+                : "Choose files, or a whole folder to upload everything inside."}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button onClick={pickFiles} disabled={busy} className={btnPrimary}>
@@ -185,7 +157,14 @@ export default function Upload() {
         {progress && (
           <div className={`${card} mb-4 p-4`}>
             <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-oct-subtle">
-              <span className="truncate">{scanning ? "Scanning…" : `Uploading ${fileLabel}`}</span>
+              <span className="truncate">
+                {progress.phase === "finalizing"
+                  ? "Finalizing…"
+                  : scanning
+                    ? "Preparing…"
+                    : `Uploading ${fileLabel}`}
+                {progress.total > 1 ? `  ·  ${Math.min(progress.current + 1, progress.total)}/${progress.total} files` : ""}
+              </span>
               <span className="whitespace-nowrap">
                 {indeterminate ? "" : `${overallPct}%`}
                 {speed > 0 ? `  ·  ${formatBytes(speed)}/s` : ""}
@@ -197,38 +176,60 @@ export default function Upload() {
                 style={indeterminate ? undefined : { width: `${overallPct}%` }}
               />
             </div>
-            <p className="mt-2 text-[11px] text-oct-faint">
-              Running in the background — you can keep using the app; the notification shows progress.
-            </p>
+            <div className="mt-3 flex items-center justify-between">
+              <p className="text-[11px] text-oct-faint">
+                Running in the background — you can keep using the app.
+              </p>
+              <button
+                onClick={cancelActive}
+                disabled={cancelling || !activeUploadId}
+                className="font-mono text-[11px] text-oct-danger hover:underline disabled:text-oct-faint"
+              >
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </button>
+            </div>
           </div>
         )}
 
         {/* completion summary */}
-        {result && (
-          <div className={result.failed > 0 ? errorBox : okBox}>
+        {lastComplete && !progress && (
+          <div className={lastComplete.filesFailed > 0 || lastComplete.state !== "completed" ? errorBox : okBox}>
             <div className="mb-2 flex items-center gap-2 font-semibold">
-              {result.failed === 0 && <CheckIcon size={14} />}
-              {result.failed > 0 ? "Upload finished with errors" : "Upload complete"}
+              {lastComplete.state === "completed" && lastComplete.filesFailed === 0 && <CheckIcon size={14} />}
+              {lastComplete.state === "cancelled"
+                ? "Upload cancelled"
+                : lastComplete.state === "error"
+                  ? "Upload failed"
+                  : lastComplete.filesFailed > 0
+                    ? "Upload finished with errors"
+                    : "Upload complete"}
             </div>
             <ul className="list-inside list-disc text-xs opacity-90">
-              <li>Total: {result.total}</li>
-              <li>Succeeded: {result.succeeded}</li>
-              {result.failed > 0 && <li>Failed: {result.failed}</li>}
-              {result.skipped > 0 && <li>Skipped (empty): {result.skipped}</li>}
+              <li>Files: {lastComplete.totalFiles}</li>
+              <li>Tracks ingested: {lastComplete.tracksIngested}</li>
+              {lastComplete.filesFailed > 0 && <li>Files failed: {lastComplete.filesFailed}</li>}
+              {lastComplete.skipped > 0 && <li>Skipped (empty): {lastComplete.skipped}</li>}
             </ul>
-            {result.errors.length > 0 && (
+            {lastComplete.errors.length > 0 && (
               <details className="mt-2">
-                <summary className="cursor-pointer text-xs text-oct-danger">{result.errors.length} error(s)</summary>
+                <summary className="cursor-pointer text-xs text-oct-danger">{lastComplete.errors.length} error(s)</summary>
                 <ul className="mt-1 list-inside list-disc text-xs text-oct-danger">
-                  {result.errors.map((e, i) => (
+                  {lastComplete.errors.map((e, i) => (
                     <li key={i}>{e}</li>
                   ))}
                 </ul>
               </details>
             )}
-            <button onClick={() => setResult(null)} className="mt-3 font-mono text-[11px] text-oct-accent hover:underline">
-              Upload more
-            </button>
+            <div className="mt-3 flex items-center gap-4">
+              <button onClick={dismissComplete} className="font-mono text-[11px] text-oct-accent hover:underline">
+                Upload more
+              </button>
+              {lastComplete.uploadId && (
+                <Link to={`/uploads?id=${lastComplete.uploadId}`} className="font-mono text-[11px] text-oct-accent hover:underline">
+                  View report
+                </Link>
+              )}
+            </div>
           </div>
         )}
 

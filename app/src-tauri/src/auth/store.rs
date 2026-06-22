@@ -48,6 +48,12 @@ pub struct StoredCredential {
     pub rest_url: Option<String>,
     #[serde(default)]
     pub grpc_url: Option<String>,
+    /// Whether `grpc_url` was an explicit user override (vs derived from the
+    /// REST URL). Persisted so a custom gRPC endpoint survives restarts; a
+    /// derived URL is re-derived so it keeps tracking the REST URL. `None`
+    /// on legacy entries — treated as "derived" (re-derive on restore).
+    #[serde(default)]
+    pub grpc_explicit: Option<bool>,
     /// Optional cached identity from the last successful `WhoAmI` /
     /// `Login`. Treated as advisory — the server is authority on tier.
     #[serde(default)]

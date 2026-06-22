@@ -12,8 +12,9 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Credential, PermissionTier, RescanReport, ServerClient, ServerConfig, UploadChunkOutcome,
-    UploadInitRequest, UploadInitResponse, UploadResult, UploadStatus,
+    ChunkAck, Credential, PermissionTier, RescanReport, ServerClient, ServerConfig,
+    TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
+    UploadSummary, UploadView,
 };
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
@@ -31,7 +32,8 @@ pub struct AuthManager {
     server: Arc<ServerClient>,
     store: Arc<dyn SecureStore>,
     state: RwLock<Option<StoredCredential>>,
-    online: RwLock<bool>,
+    /// Last-known reachability of each transport (gRPC primary, REST fallback).
+    health: RwLock<TransportHealth>,
 }
 
 impl AuthManager {
@@ -40,7 +42,7 @@ impl AuthManager {
             server,
             store,
             state: RwLock::new(None),
-            online: RwLock::new(false),
+            health: RwLock::new(TransportHealth::default()),
         }
     }
 
@@ -82,14 +84,26 @@ impl AuthManager {
     }
 
     pub async fn is_online(&self) -> bool {
-        *self.online.read().await
+        self.health.read().await.online()
     }
 
-    /// Run a `/health` ping and update the cached online flag.
+    /// Probe both transports and update the cached health. Returns whether the
+    /// server is reachable on *either* transport (the online/offline bit).
     pub async fn refresh_online(&self) -> bool {
-        let ok = self.server.health().await.unwrap_or(false);
-        *self.online.write().await = ok;
-        ok
+        self.refresh_transports().await.online()
+    }
+
+    /// Last-known per-transport reachability (cached snapshot; no network).
+    pub async fn transport_health(&self) -> TransportHealth {
+        *self.health.read().await
+    }
+
+    /// Probe gRPC + REST concurrently and cache the result. Drives the
+    /// per-transport status indicator.
+    pub async fn refresh_transports(&self) -> TransportHealth {
+        let health = self.server.transport_health().await;
+        *self.health.write().await = health;
+        health
     }
 
     /// Username/password login. Persists the resulting bearer token AND
@@ -105,6 +119,7 @@ impl AuthManager {
             secret: outcome.token.clone(),
             rest_url: Some(cfg.rest_url.clone()),
             grpc_url: Some(cfg.grpc_url.clone()),
+            grpc_explicit: Some(cfg.grpc_explicit),
             user_id: Some(outcome.user_id.clone()),
             username: Some(username.to_string()),
             tier: Some(outcome.tier),
@@ -112,7 +127,9 @@ impl AuthManager {
         };
         self.store.save(&cred).await?;
         *self.state.write().await = Some(cred);
-        *self.online.write().await = true;
+        // Seed health from the transport that just succeeded; the periodic
+        // probe corrects the other transport within a second.
+        *self.health.write().await = seed_health(outcome.transport);
         Ok(AuthSession {
             kind: StoredCredentialKind::Bearer,
             user_id: Some(outcome.user_id),
@@ -136,6 +153,7 @@ impl AuthManager {
             secret: key.to_string(),
             rest_url: Some(cfg.rest_url.clone()),
             grpc_url: Some(cfg.grpc_url.clone()),
+            grpc_explicit: Some(cfg.grpc_explicit),
             user_id: None,
             username: None,
             tier: Some(who.tier),
@@ -143,7 +161,7 @@ impl AuthManager {
         };
         self.store.save(&cred).await?;
         *self.state.write().await = Some(cred);
-        *self.online.write().await = true;
+        *self.health.write().await = seed_health(who.transport);
         Ok(AuthSession {
             kind: StoredCredentialKind::SecretKey,
             user_id: None,
@@ -215,26 +233,44 @@ impl AuthManager {
             .await
     }
 
-    // ----- Chunked / resumable upload (Phase 8+) --------------------------
+    // ----- Uploads v2 (sessions + reports + live stream) ------------------
 
-    pub async fn upload_init(&self, req: UploadInitRequest) -> AppResult<UploadInitResponse> {
+    pub async fn init_upload(&self, req: UploadInitRequest) -> AppResult<UploadView> {
         let cred = self.credential().await?;
-        self.server.upload_init(&cred, &req).await
+        self.server.init_upload(&cred, &req).await
     }
 
-    pub async fn upload_chunk(
+    pub async fn put_chunk(
         &self,
-        id: String,
-        index: u32,
+        upload_id: String,
+        file_index: u32,
+        chunk_index: u32,
         data: Vec<u8>,
-    ) -> AppResult<UploadChunkOutcome> {
+    ) -> AppResult<ChunkAck> {
         let cred = self.credential().await?;
-        self.server.upload_chunk(&cred, &id, index, data).await
+        self.server
+            .put_chunk(&cred, &upload_id, file_index, chunk_index, data)
+            .await
     }
 
-    pub async fn upload_status(&self, id: String) -> AppResult<UploadStatus> {
+    pub async fn get_upload(&self, id: String) -> AppResult<UploadView> {
         let cred = self.credential().await?;
-        self.server.upload_status(&cred, &id).await
+        self.server.get_upload(&cred, &id).await
+    }
+
+    pub async fn list_uploads(&self, filter: UploadListFilter) -> AppResult<Vec<UploadSummary>> {
+        let cred = self.credential().await?;
+        self.server.list_uploads(&cred, &filter).await
+    }
+
+    pub async fn cancel_upload(&self, id: String) -> AppResult<UploadView> {
+        let cred = self.credential().await?;
+        self.server.cancel_upload(&cred, &id).await
+    }
+
+    pub async fn subscribe_uploads(&self) -> AppResult<tokio::sync::mpsc::Receiver<UploadEvent>> {
+        let cred = self.credential().await?;
+        self.server.subscribe_uploads(&cred).await
     }
 
     /// Delete an artist, album, or track. Manager+ gated server-side.
@@ -285,6 +321,84 @@ impl AuthManager {
         })
     }
 
+    /// Re-point an already-authenticated session at a (possibly different)
+    /// server: validate the stored credential against the new server and
+    /// persist the new URLs so a restart reconnects there.
+    ///
+    /// - `Ok(Some(session))` — the credential is accepted (same server at a new
+    ///   address, or a different server that recognises the token); the new
+    ///   URLs are saved and the session kept.
+    /// - `Ok(None)` — the credential was rejected (401/403) on the new server;
+    ///   it's wiped locally so the UI can route to login.
+    /// - new server unreachable — the credential + new URLs are kept
+    ///   optimistically so it reconnects once the server is back.
+    ///
+    /// Assumes `self` is a freshly built manager whose `ServerClient` already
+    /// points at the new URLs and whose state was loaded via
+    /// [`restore_from_store`](Self::restore_from_store).
+    pub async fn revalidate_for_new_server(&self) -> AppResult<Option<AuthSession>> {
+        let existing = { self.state.read().await.clone() };
+        let Some(mut cred) = existing else {
+            // Nothing was logged in — just record reachability.
+            let _ = self.refresh_online().await;
+            return Ok(None);
+        };
+        let cfg = self.server.config();
+        cred.rest_url = Some(cfg.rest_url.clone());
+        cred.grpc_url = Some(cfg.grpc_url.clone());
+        cred.grpc_explicit = Some(cfg.grpc_explicit);
+        let probe = match cred.kind {
+            StoredCredentialKind::SecretKey => Credential::SecretKey(cred.secret.clone()),
+            StoredCredentialKind::Bearer => Credential::Bearer(cred.secret.clone()),
+        };
+        match self.server.whoami(&probe).await {
+            Ok(who) => {
+                cred.tier = Some(who.tier);
+                if !who.user_id.is_empty() {
+                    cred.user_id = Some(who.user_id.clone());
+                }
+                if !who.username.is_empty() {
+                    cred.username = Some(who.username.clone());
+                }
+                self.store.save(&cred).await?;
+                *self.health.write().await = seed_health(who.transport);
+                let session = AuthSession {
+                    kind: cred.kind,
+                    user_id: cred.user_id.clone(),
+                    username: cred.username.clone(),
+                    tier: who.tier,
+                    expires_at: cred.expires_at.clone(),
+                };
+                *self.state.write().await = Some(cred);
+                Ok(Some(session))
+            }
+            // The server answered, but our credential isn't valid there.
+            Err(AppError::Unauthenticated(_)) | Err(AppError::Forbidden(_)) => {
+                self.store.clear().await.ok();
+                *self.state.write().await = None;
+                // Server is reachable (it rejected us) — probe both transports
+                // so the login screen reflects the real state.
+                let _ = self.refresh_transports().await;
+                Ok(None)
+            }
+            // New server unreachable — keep the credential + new URLs so it
+            // reconnects once the server is back.
+            Err(_) => {
+                self.store.save(&cred).await?;
+                *self.health.write().await = TransportHealth::default();
+                let session = AuthSession {
+                    kind: cred.kind,
+                    user_id: cred.user_id.clone(),
+                    username: cred.username.clone(),
+                    tier: cred.tier.unwrap_or(PermissionTier::User),
+                    expires_at: cred.expires_at.clone(),
+                };
+                *self.state.write().await = Some(cred);
+                Ok(Some(session))
+            }
+        }
+    }
+
     /// Log out: best-effort server revocation, then wipe local state.
     pub async fn logout(&self) -> AppResult<()> {
         if let Ok(cred) = self.credential().await {
@@ -303,5 +417,19 @@ impl AuthManager {
 
     pub fn server_config(&self) -> ServerConfig {
         self.server.config().clone()
+    }
+}
+
+/// Seed transport health from the transport that just serviced an auth call,
+/// so the indicator is right immediately without blocking the call on a fresh
+/// gRPC handshake (which can stall on `connect_timeout` when gRPC is down):
+/// - via gRPC → gRPC is up; REST is assumed up (same host; corrected by the
+///   ~1 s background probe if not).
+/// - via REST → REST is up; gRPC is down (REST is only reached as a fallback
+///   *after* the gRPC attempt fails).
+fn seed_health(used: TransportUsed) -> TransportHealth {
+    match used {
+        TransportUsed::Grpc => TransportHealth { rest: true, grpc: true },
+        TransportUsed::Rest => TransportHealth { rest: true, grpc: false },
     }
 }

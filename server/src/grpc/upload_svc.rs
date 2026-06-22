@@ -6,19 +6,27 @@
 //! as the REST `POST /upload` endpoint (single file or archive). Manager+.
 
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use tokio::io::AsyncWriteExt;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
 use crate::auth::Identity;
-use crate::db::models::PermissionLevel;
+use crate::db::models::{PermissionLevel, UploadFileState, UploadState};
 use crate::error::AppError;
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::{extract_credential, AuthInterceptor};
 use crate::grpc::proto::upload as pb;
 use crate::services::archive::ArchiveKind;
-use crate::services::{tag, IngestService};
+use crate::services::{
+    can_see, tag, ChunkAck as SvcChunkAck, ChunkInit as SvcChunkInit, FileInit as SvcFileInit,
+    IngestService, UploadEvent as SvcUploadEvent, UploadFileView as SvcUploadFileView, UploadHub,
+    UploadSummary as SvcUploadSummary, UploadView as SvcUploadView, UploadsService,
+};
 
 /// Hard cap on a streamed upload: 500 MiB (matches the REST `DefaultBodyLimit`).
 const MAX_UPLOAD_BYTES: usize = 500 * 1024 * 1024;
@@ -26,12 +34,22 @@ const MAX_UPLOAD_BYTES: usize = 500 * 1024 * 1024;
 #[derive(Clone)]
 pub struct UploadServer {
     pub ingest: Option<IngestService>,
+    /// DB-backed upload sessions (Uploads v2). None when no staging dir.
+    pub uploads: Option<UploadsService>,
+    /// Live-progress broadcast hub, shared with the REST WebSocket.
+    pub hub: UploadHub,
     pub interceptor: AuthInterceptor,
 }
 
 impl UploadServer {
     pub fn into_service(self) -> pb::upload_service_server::UploadServiceServer<Self> {
         pb::upload_service_server::UploadServiceServer::new(self)
+    }
+
+    fn uploads_svc(&self) -> Result<&UploadsService, Status> {
+        self.uploads
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("uploads service not configured"))
     }
 }
 
@@ -154,6 +172,109 @@ impl pb::upload_service_server::UploadService for UploadServer {
 
         Ok(Response::new(resp))
     }
+
+    // ---- Uploads v2: delegate to the shared UploadsService ----
+
+    async fn init_upload(
+        &self,
+        req: Request<pb::InitUploadRequest>,
+    ) -> Result<Response<pb::UploadView>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let files = req
+            .into_inner()
+            .files
+            .into_iter()
+            .map(file_init_from_pb)
+            .collect();
+        let view = svc.init(&caller, files).await.map_err(map_err)?;
+        Ok(Response::new(view_to_pb(view)))
+    }
+
+    async fn put_chunk(
+        &self,
+        req: Request<pb::PutChunkRequest>,
+    ) -> Result<Response<pb::ChunkAck>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let r = req.into_inner();
+        let id = parse_uuid(&r.upload_id)?;
+        let ack = svc
+            .put_chunk(&caller, id, r.file_index as i32, r.chunk_index as i32, &r.data)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(ack_to_pb(ack)))
+    }
+
+    async fn get_upload(
+        &self,
+        req: Request<pb::GetUploadRequest>,
+    ) -> Result<Response<pb::UploadView>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let id = parse_uuid(&req.into_inner().upload_id)?;
+        let view = svc.get(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(view_to_pb(view)))
+    }
+
+    async fn list_uploads(
+        &self,
+        req: Request<pb::ListUploadsRequest>,
+    ) -> Result<Response<pb::ListUploadsResponse>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let r = req.into_inner();
+        let user = if r.user_id.is_empty() {
+            None
+        } else {
+            Some(parse_uuid(&r.user_id)?)
+        };
+        let state = if r.state.is_empty() {
+            None
+        } else {
+            Some(
+                UploadState::parse(&r.state)
+                    .ok_or_else(|| Status::invalid_argument(format!("invalid state: {}", r.state)))?,
+            )
+        };
+        let limit = if r.limit <= 0 { 50 } else { r.limit };
+        let rows = svc
+            .list(&caller, user, state, limit, r.offset)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ListUploadsResponse {
+            uploads: rows.into_iter().map(summary_to_pb).collect(),
+        }))
+    }
+
+    async fn cancel_upload(
+        &self,
+        req: Request<pb::CancelUploadRequest>,
+    ) -> Result<Response<pb::UploadView>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let id = parse_uuid(&req.into_inner().upload_id)?;
+        let view = svc.cancel(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(view_to_pb(view)))
+    }
+
+    type StreamUploadsStream =
+        Pin<Box<dyn Stream<Item = Result<pb::UploadEvent, Status>> + Send>>;
+
+    async fn stream_uploads(
+        &self,
+        req: Request<pb::StreamUploadsRequest>,
+    ) -> Result<Response<Self::StreamUploadsStream>, Status> {
+        let identity = self.interceptor.resolve(&req).await?;
+        let rx = self.hub.subscribe();
+        // Filter to events this listener may see (admin → all; user → own).
+        let stream = BroadcastStream::new(rx).filter_map(move |item| match item {
+            Ok(ev) if can_see(&identity, ev.owner_id) => Some(Ok(event_to_pb(ev))),
+            Ok(_) => None,
+            Err(BroadcastStreamRecvError::Lagged(_)) => None,
+        });
+        Ok(Response::new(Box::pin(stream)))
+    }
 }
 
 /// Stream the remaining `chunk` messages to `path`, enforcing the size cap.
@@ -200,3 +321,134 @@ async fn drain_to_file(
 // Keep AppError import meaningful for future use without dead-code warnings.
 #[allow(dead_code)]
 fn _force(_: AppError) {}
+
+// ---------------------------------------------------------------------------
+// proto <-> service conversions
+// ---------------------------------------------------------------------------
+
+fn parse_uuid(s: &str) -> Result<Uuid, Status> {
+    Uuid::parse_str(s).map_err(|e| Status::invalid_argument(format!("invalid upload id: {e}")))
+}
+
+fn state_str(s: UploadState) -> String {
+    match s {
+        UploadState::Initialized => "initialized",
+        UploadState::Uploading => "uploading",
+        UploadState::Completed => "completed",
+        UploadState::Cancelled => "cancelled",
+    }
+    .to_string()
+}
+
+fn file_state_str(s: UploadFileState) -> String {
+    match s {
+        UploadFileState::Pending => "pending",
+        UploadFileState::Uploading => "uploading",
+        UploadFileState::Complete => "complete",
+        UploadFileState::Failed => "failed",
+    }
+    .to_string()
+}
+
+fn file_init_from_pb(f: pb::FileInit) -> SvcFileInit {
+    SvcFileInit {
+        filename: f.filename,
+        hash: f.hash,
+        total_size: f.total_size as i64,
+        chunk_size: f.chunk_size as i64,
+        total_chunks: f.total_chunks as i32,
+        chunks: f
+            .chunks
+            .into_iter()
+            .map(|c| SvcChunkInit {
+                index: c.index as i32,
+                start: c.start as i64,
+                end: c.end as i64,
+                hash: c.hash,
+            })
+            .collect(),
+    }
+}
+
+fn view_to_pb(v: SvcUploadView) -> pb::UploadView {
+    pb::UploadView {
+        id: v.id,
+        user_id: v.user_id.unwrap_or_default(),
+        state: state_str(v.state),
+        total_files: v.total_files as u32,
+        total_bytes: v.total_bytes as u64,
+        bytes_received: v.bytes_received as u64,
+        created_at: v.created_at,
+        updated_at: v.updated_at,
+        error: v.error.unwrap_or_default(),
+        report_json: v.report.map(|r| r.to_string()).unwrap_or_default(),
+        files: v.files.into_iter().map(file_view_to_pb).collect(),
+    }
+}
+
+fn file_view_to_pb(f: SvcUploadFileView) -> pb::UploadFileView {
+    pb::UploadFileView {
+        file_index: f.file_index as u32,
+        filename: f.filename,
+        file_hash: f.file_hash,
+        total_size: f.total_size as u64,
+        chunk_size: f.chunk_size as u64,
+        total_chunks: f.total_chunks as u32,
+        received_chunks: f.received_chunks as u32,
+        state: file_state_str(f.state),
+        error: f.error.unwrap_or_default(),
+        chunks: f
+            .chunks
+            .into_iter()
+            .map(|c| pb::ChunkView {
+                index: c.index as u32,
+                start: c.start as u64,
+                end: c.end as u64,
+                hash: c.hash,
+                received: c.received,
+            })
+            .collect(),
+    }
+}
+
+fn summary_to_pb(s: SvcUploadSummary) -> pb::UploadSummary {
+    pb::UploadSummary {
+        id: s.id,
+        user_id: s.user_id.unwrap_or_default(),
+        state: state_str(s.state),
+        total_files: s.total_files as u32,
+        total_bytes: s.total_bytes as u64,
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+        error: s.error.unwrap_or_default(),
+    }
+}
+
+fn ack_to_pb(a: SvcChunkAck) -> pb::ChunkAck {
+    pb::ChunkAck {
+        file_index: a.file_index as u32,
+        chunk_index: a.chunk_index as u32,
+        received_chunks: a.received_chunks as u32,
+        total_chunks: a.total_chunks as u32,
+        file_complete: a.file_complete,
+        upload_complete: a.upload_complete,
+        state: state_str(a.state),
+    }
+}
+
+fn event_to_pb(ev: SvcUploadEvent) -> pb::UploadEvent {
+    pb::UploadEvent {
+        kind: ev.kind,
+        upload_id: ev.upload_id,
+        owner_id: ev.owner_id.map(|x| x.to_string()).unwrap_or_default(),
+        state: state_str(ev.state),
+        file_index: ev.file_index.unwrap_or(-1),
+        total_files: ev.total_files as u32,
+        bytes_received: ev.bytes_received as u64,
+        total_bytes: ev.total_bytes as u64,
+        chunks_received: ev.chunks_received as u32,
+        total_chunks: ev.total_chunks as u32,
+        bytes_per_sec: ev.bytes_per_sec.unwrap_or(0.0),
+        report_json: ev.report.map(|r| r.to_string()).unwrap_or_default(),
+    }
+}

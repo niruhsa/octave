@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   authConfigureServer,
   authLogin,
-  authRefreshOnline,
+  authRefreshTransports,
+  authServerConfig,
   authSetSecretKey,
 } from "../ipc";
 import { useAppStore } from "../store";
@@ -19,7 +20,7 @@ type Mode = "password" | "secret_key";
  */
 export default function Login() {
   const setSession = useAppStore((s) => s.setSession);
-  const setOnline = useAppStore((s) => s.setOnline);
+  const setTransports = useAppStore((s) => s.setTransports);
   const setServerConfigured = useAppStore((s) => s.setServerConfigured);
   const navigate = useNavigate();
 
@@ -33,6 +34,25 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Prefill the last server we were pointed at — e.g. a returning user who
+  // signed out, or one sent here by "change server" with a new address. Only
+  // restore (and reveal) the gRPC URL when it was an explicit override; a
+  // derived one stays hidden so it keeps tracking the REST URL.
+  useEffect(() => {
+    authServerConfig()
+      .then((c) => {
+        if (!c) return;
+        setRestUrl(c.rest_url);
+        if (c.grpc_explicit) {
+          setGrpcUrl(c.grpc_url);
+          setShowAdvanced(true);
+        }
+      })
+      .catch(() => {
+        /* nothing configured yet — keep the dev default */
+      });
+  }, []);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -40,7 +60,7 @@ export default function Login() {
     try {
       await authConfigureServer(restUrl, grpcUrl.trim() || undefined);
       setServerConfigured(true);
-      setOnline(await authRefreshOnline());
+      setTransports(await authRefreshTransports());
 
       const session =
         mode === "password"

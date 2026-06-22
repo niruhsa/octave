@@ -32,7 +32,7 @@ use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
 use crate::services::{
     ArtworkService, IngestService, LibraryService, MetadataService, PlaylistService, ScanService,
-    StreamingService,
+    StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -46,13 +46,20 @@ pub struct RestState {
     pub ingest: Option<IngestService>,
     pub metadata: MetadataService,
     pub artwork: Option<ArtworkService>,
+    /// DB-backed upload sessions (None when no ingest staging dir is configured).
+    pub uploads: Option<UploadsService>,
+    /// Live upload-progress broadcast hub (shared with the gRPC stream).
+    pub upload_hub: UploadHub,
 }
 
 /// Run the REST server until shutdown.
 pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
     let public = Router::new()
         .route("/health", get(health))
-        .route("/auth/login", post(login));
+        .route("/auth/login", post(login))
+        // The uploads live-stream authenticates itself (header or query param),
+        // so it sits outside the header-only `auth_middleware`.
+        .merge(upload::ws_router());
 
     let protected = Router::new()
         .route("/auth/whoami", get(whoami))

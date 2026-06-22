@@ -26,6 +26,12 @@ const CONVENTIONAL_GRPC_PORT: u16 = 50051;
 pub struct ServerConfig {
     pub rest_url: String,
     pub grpc_url: String,
+    /// `true` when the gRPC URL was supplied by the user, `false` when it was
+    /// derived from the REST URL. Persisted so a user's explicit override
+    /// survives restarts (and isn't silently re-derived), while a derived URL
+    /// keeps tracking the REST URL when that changes.
+    #[serde(default)]
+    pub grpc_explicit: bool,
 }
 
 impl ServerConfig {
@@ -35,6 +41,7 @@ impl ServerConfig {
         Ok(Self {
             rest_url: validate_url(rest_url)?,
             grpc_url: validate_url(grpc_url)?,
+            grpc_explicit: true,
         })
     }
 
@@ -47,6 +54,7 @@ impl ServerConfig {
         Ok(Self {
             rest_url: rest,
             grpc_url: grpc,
+            grpc_explicit: false,
         })
     }
 
@@ -98,6 +106,7 @@ mod tests {
         let cfg = ServerConfig::from_rest_only("http://localhost:8080").unwrap();
         assert_eq!(cfg.rest_root(), "http://localhost:8080");
         assert_eq!(cfg.grpc_endpoint(), "http://localhost:50051");
+        assert!(!cfg.grpc_explicit, "a derived gRPC URL is not explicit");
     }
 
     #[test]
@@ -105,6 +114,7 @@ mod tests {
         let cfg = ServerConfig::from_rest_only("https://music.example.com").unwrap();
         assert_eq!(cfg.rest_root(), "https://music.example.com");
         assert_eq!(cfg.grpc_endpoint(), "https://music.example.com");
+        assert!(!cfg.grpc_explicit);
     }
 
     #[test]
@@ -116,6 +126,7 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.rest_root(), "http://10.0.0.1:9000");
         assert_eq!(cfg.grpc_endpoint(), "http://10.0.0.1:9001");
+        assert!(cfg.grpc_explicit, "a user-supplied gRPC URL is explicit");
     }
 
     #[test]

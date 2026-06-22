@@ -8,10 +8,12 @@
 // full-width.
 
 import { NavLink, useNavigate } from "react-router-dom";
-import { authLogout, authRefreshOnline } from "../ipc";
+import { authLogout, authRefreshTransports } from "../ipc";
+import type { TransportHealth } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
 import { useDownloadsStore } from "../downloads/useDownloads";
+import { TransportStatus } from "./TransportStatus";
 import {
   ArtistIcon,
   CloudOffIcon,
@@ -49,6 +51,7 @@ const NAV: NavItem[] = [
   { to: "/playlists", label: "Playlists", Icon: PlaylistIcon, badge: "pending" },
   { to: "/downloads", label: "Downloads", Icon: DownloadIcon, group: "library", badge: "downloads" },
   { to: "/upload", label: "Upload", Icon: UploadIcon, group: "library", managerOnly: true, requiresConnection: true },
+  { to: "/uploads", label: "Upload reports", Icon: SyncIcon, group: "library", managerOnly: true, requiresConnection: true },
   { to: "/account", label: "Account", Icon: ArtistIcon, group: "library", requiresConnection: true },
   { to: "/register", label: "Create account", Icon: PlusIcon, group: "library", adminOnly: true, requiresConnection: true },
 ];
@@ -57,7 +60,8 @@ export default function Sidebar() {
   const session = useAppStore((s) => s.session);
   const tier = useAppStore((s) => s.tier);
   const online = useAppStore((s) => s.online);
-  const setOnline = useAppStore((s) => s.setOnline);
+  const transports = useAppStore((s) => s.transports);
+  const setTransports = useAppStore((s) => s.setTransports);
   const setSession = useAppStore((s) => s.setSession);
   const navigate = useNavigate();
 
@@ -164,9 +168,10 @@ export default function Sidebar() {
 
       <StatusPanel
         online={online}
+        transports={transports}
         syncStatus={syncStatus}
         pending={pending}
-        onRecheck={async () => setOnline(await authRefreshOnline())}
+        onRecheck={async () => setTransports(await authRefreshTransports())}
         onSync={() => void runSync()}
       />
 
@@ -203,12 +208,14 @@ export default function Sidebar() {
 
 function StatusPanel({
   online,
+  transports,
   syncStatus,
   pending,
   onRecheck,
   onSync,
 }: {
   online: boolean;
+  transports: TransportHealth;
   syncStatus: "idle" | "syncing" | "ok" | "error";
   pending: number;
   onRecheck: () => void;
@@ -264,6 +271,9 @@ function StatusPanel({
           </span>
         </span>
       </button>
+
+      {/* per-transport breakdown: gRPC primary, REST fallback */}
+      <TransportStatus transports={transports} className="mt-2.5" />
 
       <div className="my-3 h-px bg-oct-border-strong" />
 

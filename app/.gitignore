@@ -27,3 +27,6 @@ dist-ssr
 PLAN.md
 IMPLEMENTATION.md
 designs
+.agents
+agent
+skills-lock.json

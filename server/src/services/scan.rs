@@ -13,7 +13,7 @@ use crate::auth::Identity;
 use crate::db::models::{NewTrack, PermissionLevel};
 use crate::error::{AppError, Result};
 use crate::services::library::LibraryService;
-use crate::services::tag::{self, AUDIO_EXTS};
+use crate::services::tag;
 use super::duration;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -73,11 +73,10 @@ impl ScanService {
                 continue;
             }
             let path = entry.path();
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|s| s.to_ascii_lowercase());
-            if !matches!(ext.as_deref(), Some(e) if AUDIO_EXTS.contains(&e)) {
+            // Shared audio gate: skips non-audio extensions *and* macOS
+            // AppleDouble sidecars (`._song.flac`) that would otherwise be
+            // indexed as ghost "Unknown Artist" tracks.
+            if !tag::is_audio_file(path) {
                 continue;
             }
 

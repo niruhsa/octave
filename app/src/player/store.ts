@@ -84,7 +84,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (isPlaying) {
       audio.pause();
     } else {
-      void audio.play().catch((e) => set({ error: String(e) }));
+      void audio.play().catch((e) => reportPlayError(set, e));
     }
   },
 
@@ -225,7 +225,7 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
       if (_get().queue[_get().currentIndex]?.id !== track.id) return;
       audio.src = url;
       audio.currentTime = 0;
-      void audio.play().catch((e: unknown) => set({ error: String(e) }));
+      void audio.play().catch((e: unknown) => reportPlayError(set, e));
     })
     .catch((e) => set({ error: formatErr(e) }));
 }
@@ -250,6 +250,17 @@ function applyShuffle(
     [rest[i], rest[j]] = [rest[j], rest[i]];
   }
   return pinned ? [pinned, ...rest] : rest;
+}
+
+/**
+ * Surface a play() failure — but swallow `AbortError`, which the browser
+ * raises when a pending play() is superseded (rapid skip, a new src set on the
+ * element, etc.). That's expected churn, not something to show the user; the
+ * follow-up load/play resolves the real state.
+ */
+function reportPlayError(set: Set, e: unknown) {
+  if (e instanceof DOMException && e.name === "AbortError") return;
+  set({ error: formatErr(e) });
 }
 
 function formatErr(e: unknown): string {

@@ -6,9 +6,10 @@
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { authLogout, authRefreshOnline } from "../ipc";
+import { authLogout, authRefreshTransports } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
+import { TransportStatus } from "./TransportStatus";
 import {
   ArtistIcon,
   HomeIcon,
@@ -23,8 +24,8 @@ import {
 export default function MobileTopBar() {
   const session = useAppStore((s) => s.session);
   const tier = useAppStore((s) => s.tier);
-  const online = useAppStore((s) => s.online);
-  const setOnline = useAppStore((s) => s.setOnline);
+  const transports = useAppStore((s) => s.transports);
+  const setTransports = useAppStore((s) => s.setTransports);
   const setSession = useAppStore((s) => s.setSession);
   const navigate = useNavigate();
 
@@ -51,7 +52,12 @@ export default function MobileTopBar() {
   }
 
   return (
-    <header className="relative z-40 flex shrink-0 items-center justify-between border-b border-oct-border bg-oct-surface px-4 py-2.5 md:hidden">
+    <header
+      className="relative z-40 flex shrink-0 items-center justify-between border-b border-oct-border bg-oct-surface px-4 pb-2.5 md:hidden"
+      // Pad below the Android status bar / display cutout so the bar's content
+      // isn't drawn underneath it (the bar background still fills the inset).
+      style={{ paddingTop: "calc(env(safe-area-inset-top) + 0.625rem)" }}
+    >
       <button onClick={() => go("/")} className="flex items-center gap-2">
         <span className="block h-4 w-4 rounded bg-oct-accent" />
         <span className="text-[15px] font-semibold tracking-[0.16em]">OCTAVE</span>
@@ -59,11 +65,11 @@ export default function MobileTopBar() {
 
       <div className="flex items-center gap-3">
         <button
-          onClick={async () => setOnline(await authRefreshOnline())}
+          onClick={async () => setTransports(await authRefreshTransports())}
           title="Re-check server"
-          className="flex items-center gap-1.5"
+          className="flex items-center"
         >
-          <span className={`h-2 w-2 rounded-full ${online ? "bg-oct-online" : "bg-oct-offline"}`} />
+          <TransportStatus transports={transports} compact />
         </button>
         <button onClick={() => setOpen((v) => !v)} aria-label="Menu" className="text-oct-muted">
           <MenuIcon size={20} />
@@ -73,7 +79,7 @@ export default function MobileTopBar() {
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-3 top-12 z-40 w-56 overflow-hidden rounded-xl border border-oct-border-strong bg-oct-surface shadow-[0_20px_50px_-18px_rgba(0,0,0,0.6)]">
+          <div className="absolute right-3 top-full z-40 mt-1 w-56 overflow-hidden rounded-xl border border-oct-border-strong bg-oct-surface shadow-[0_20px_50px_-18px_rgba(0,0,0,0.6)]">
             <MenuItem Icon={HomeIcon} label="Home" onClick={() => go("/")} />
             {isManager && <MenuItem Icon={UploadIcon} label="Upload" onClick={() => go("/upload")} />}
             <MenuItem Icon={ArtistIcon} label="Account" onClick={() => go("/account")} />

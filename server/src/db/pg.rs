@@ -955,3 +955,238 @@ impl SessionRepo for PgRepos {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// UploadRepo
+// ---------------------------------------------------------------------------
+
+const UPLOAD_COLS: &str =
+    "id, user_id, state, total_files, total_bytes, report_json, error, created_at, updated_at";
+const UPLOAD_FILE_COLS: &str =
+    "id, upload_id, file_index, filename, file_hash, total_size, chunk_size, \
+     total_chunks, received_chunks, state, error, created_at";
+const UPLOAD_CHUNK_COLS: &str =
+    "upload_file_id, chunk_index, start_byte, end_byte, hash, received, received_at";
+
+#[async_trait]
+impl UploadRepo for PgRepos {
+    async fn create_upload(&self, new: NewUpload) -> Result<Upload> {
+        sqlx::query_as::<_, Upload>(&format!(
+            "INSERT INTO uploads (user_id, total_files, total_bytes) \
+             VALUES ($1, $2, $3) RETURNING {UPLOAD_COLS}"
+        ))
+        .bind(new.user_id)
+        .bind(new.total_files)
+        .bind(new.total_bytes)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_upload(&self, id: Uuid) -> Result<Option<Upload>> {
+        sqlx::query_as::<_, Upload>(&format!("SELECT {UPLOAD_COLS} FROM uploads WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)
+    }
+
+    async fn list_uploads(
+        &self,
+        filter: UploadFilter,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Upload>> {
+        sqlx::query_as::<_, Upload>(&format!(
+            "SELECT {UPLOAD_COLS} FROM uploads \
+             WHERE ($1::uuid IS NULL OR user_id = $1) \
+               AND ($2::text IS NULL OR state = $2) \
+             ORDER BY created_at DESC LIMIT $3 OFFSET $4"
+        ))
+        .bind(filter.user_id)
+        .bind(filter.state)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn count_active_for_user(&self, user_id: Option<Uuid>) -> Result<i64> {
+        // `IS NOT DISTINCT FROM` so a NULL owner (SECRET_KEY) matches NULL rows.
+        let (n,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM uploads \
+             WHERE state IN ('initialized', 'uploading') \
+               AND user_id IS NOT DISTINCT FROM $1",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(n)
+    }
+
+    async fn set_upload_state(&self, id: Uuid, state: UploadState) -> Result<()> {
+        sqlx::query("UPDATE uploads SET state = $1, updated_at = now() WHERE id = $2")
+            .bind(state)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn set_upload_report(
+        &self,
+        id: Uuid,
+        state: UploadState,
+        report_json: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE uploads SET state = $1, report_json = $2, error = $3, updated_at = now() \
+             WHERE id = $4",
+        )
+        .bind(state)
+        .bind(report_json)
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn create_file(&self, new: NewUploadFile) -> Result<UploadFile> {
+        sqlx::query_as::<_, UploadFile>(&format!(
+            "INSERT INTO upload_files \
+             (upload_id, file_index, filename, file_hash, total_size, chunk_size, total_chunks) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {UPLOAD_FILE_COLS}"
+        ))
+        .bind(new.upload_id)
+        .bind(new.file_index)
+        .bind(&new.filename)
+        .bind(&new.file_hash)
+        .bind(new.total_size)
+        .bind(new.chunk_size)
+        .bind(new.total_chunks)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_file(&self, upload_id: Uuid, file_index: i32) -> Result<Option<UploadFile>> {
+        sqlx::query_as::<_, UploadFile>(&format!(
+            "SELECT {UPLOAD_FILE_COLS} FROM upload_files \
+             WHERE upload_id = $1 AND file_index = $2"
+        ))
+        .bind(upload_id)
+        .bind(file_index)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn list_files(&self, upload_id: Uuid) -> Result<Vec<UploadFile>> {
+        sqlx::query_as::<_, UploadFile>(&format!(
+            "SELECT {UPLOAD_FILE_COLS} FROM upload_files \
+             WHERE upload_id = $1 ORDER BY file_index ASC"
+        ))
+        .bind(upload_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_file_state(
+        &self,
+        file_id: Uuid,
+        state: UploadFileState,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE upload_files SET state = $1, error = $2 WHERE id = $3")
+            .bind(state)
+            .bind(error)
+            .bind(file_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn set_file_filename(&self, file_id: Uuid, filename: &str) -> Result<()> {
+        sqlx::query("UPDATE upload_files SET filename = $1 WHERE id = $2")
+            .bind(filename)
+            .bind(file_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn create_chunk(&self, new: NewUploadChunk) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO upload_chunks \
+             (upload_file_id, chunk_index, start_byte, end_byte, hash) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(new.upload_file_id)
+        .bind(new.chunk_index)
+        .bind(new.start_byte)
+        .bind(new.end_byte)
+        .bind(&new.hash)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn list_chunks(&self, file_id: Uuid) -> Result<Vec<UploadChunk>> {
+        sqlx::query_as::<_, UploadChunk>(&format!(
+            "SELECT {UPLOAD_CHUNK_COLS} FROM upload_chunks \
+             WHERE upload_file_id = $1 ORDER BY chunk_index ASC"
+        ))
+        .bind(file_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_chunk(&self, file_id: Uuid, chunk_index: i32) -> Result<Option<UploadChunk>> {
+        sqlx::query_as::<_, UploadChunk>(&format!(
+            "SELECT {UPLOAD_CHUNK_COLS} FROM upload_chunks \
+             WHERE upload_file_id = $1 AND chunk_index = $2"
+        ))
+        .bind(file_id)
+        .bind(chunk_index)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn mark_chunk_received(&self, file_id: Uuid, chunk_index: i32) -> Result<(i32, i32)> {
+        // Idempotent: only flips false→true so a retried chunk doesn't reset
+        // received_at; the recompute below is correct regardless.
+        sqlx::query(
+            "UPDATE upload_chunks SET received = TRUE, received_at = now() \
+             WHERE upload_file_id = $1 AND chunk_index = $2 AND received = FALSE",
+        )
+        .bind(file_id)
+        .bind(chunk_index)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+
+        sqlx::query_as::<_, (i32, i32)>(
+            "UPDATE upload_files \
+             SET received_chunks = (SELECT COUNT(*) FROM upload_chunks \
+                                    WHERE upload_file_id = $1 AND received), \
+                 state = CASE WHEN state = 'pending' THEN 'uploading' ELSE state END \
+             WHERE id = $1 RETURNING received_chunks, total_chunks",
+        )
+        .bind(file_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+}

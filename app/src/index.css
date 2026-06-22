@@ -51,7 +51,10 @@
 html,
 body,
 #root {
-  height: 100%;
+  /* `--app-height` mirrors the *visual* viewport on mobile so the on-screen
+     keyboard never hides focused inputs (set by installViewportSync). Before
+     that runs, and on desktop, it falls back to the full height. */
+  height: var(--app-height, 100%);
 }
 
 body {

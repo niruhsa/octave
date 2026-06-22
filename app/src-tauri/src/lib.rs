@@ -60,12 +60,10 @@ pub fn run() {
         // background-upload progress + completion notifications.
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        // Phase 4 — Playback: `media://<track_id>` serves a cached local
-        // file (range-aware) or proxies the server stream with auth. The
-        // webview's `<audio>` element loads these URLs directly.
-        .register_asynchronous_uri_scheme_protocol(player::stream::SCHEME, player::stream::handle)
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
+        // (Playback no longer uses a custom protocol — see the loopback HTTP
+        // server started in `setup` and `player::server`.)
         .register_asynchronous_uri_scheme_protocol(assets::SCHEME, assets::handle)
         .setup(|app| {
             let app_data_dir = app
@@ -81,6 +79,44 @@ pub fn run() {
                 pool,
                 auth: RwLock::new(None),
             });
+
+            // Phase 4 — Playback: start the in-app loopback HTTP server the
+            // webview's `<audio>` element streams media from (see
+            // `player::server`). Bind synchronously so the port is known before
+            // any `player_media_url` call, then serve on the async runtime.
+            let token: Arc<str> = uuid::Uuid::new_v4().to_string().into();
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .map_err(|e| format!("bind media server: {e}"))?;
+            listener
+                .set_nonblocking(true)
+                .map_err(|e| format!("media server nonblocking: {e}"))?;
+            let port = listener
+                .local_addr()
+                .map_err(|e| format!("media server addr: {e}"))?
+                .port();
+
+            let app_handle = app.handle().clone();
+            let server_token = token.clone();
+            tauri::async_runtime::spawn(async move {
+                let listener = match tokio::net::TcpListener::from_std(listener) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::error!(error = %e, "media server: adopt listener failed");
+                        return;
+                    }
+                };
+                let router = player::server::router(app_handle, server_token);
+                if let Err(e) = axum::serve(listener, router.into_make_service()).await {
+                    tracing::error!(error = %e, "media server stopped");
+                }
+            });
+
+            app.manage(player::server::MediaServer {
+                port,
+                token: token.to_string(),
+            });
+            tracing::info!(port, "media server listening on 127.0.0.1");
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -116,16 +152,18 @@ pub fn run() {
             commands::cache_commands::cache_get_sync_state,
             // auth + transport
             commands::auth_commands::auth_configure_server,
+            commands::auth_commands::auth_server_config,
+            commands::auth_commands::auth_change_server,
             commands::auth_commands::auth_login,
             commands::auth_commands::auth_set_secret_key,
             commands::auth_commands::auth_whoami,
             commands::auth_commands::auth_session,
             commands::auth_commands::auth_logout,
             commands::auth_commands::auth_refresh_online,
+            commands::auth_commands::auth_refresh_transports,
             commands::auth_commands::auth_register,
             commands::auth_commands::auth_change_password,
             commands::auth_commands::auth_list_users,
-            commands::auth_commands::auth_delete_user,
             commands::auth_commands::auth_delete_user,
             // library browse + search
             commands::library_commands::library_list_artists,
@@ -164,9 +202,13 @@ pub fn run() {
             commands::download_commands::downloads_set_dir,
             commands::download_commands::downloads_wifi_only,
             commands::download_commands::downloads_set_wifi_only,
-            // uploads (Phase 8) — background jobs + notifications
+            // uploads (v2) — background jobs + notifications + reports
             commands::upload_commands::upload_files,
             commands::upload_commands::upload_folder,
+            commands::upload_commands::uploads_list,
+            commands::upload_commands::uploads_get,
+            commands::upload_commands::uploads_cancel,
+            commands::upload_commands::uploads_subscribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

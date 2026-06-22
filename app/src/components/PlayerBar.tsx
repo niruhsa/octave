@@ -79,14 +79,19 @@ export default function PlayerBar() {
   const empty = queue.length === 0 && !current;
   const pct = dur > 0 ? (Math.min(positionSec, dur) / dur) * 100 : 0;
 
-  // The <audio> is mounted exactly once and never conditionally unmounted —
-  // the store binds to it on mount (before any track is queued). Only the
-  // visible chrome toggles on whether something is queued.
-  if (empty) return <audio ref={audioRef} preload="auto" className="hidden" />;
-
+  // One persistent <audio>, mounted once at a stable position regardless of
+  // `empty`, so a re-render never removes it from the document. It used to be
+  // rendered in two separate return branches (bare <audio> when empty vs.
+  // <div><audio>…</div> when playing); the empty → playing transition that
+  // happens when you start an album made React tear the element down and build
+  // a new one mid-play, which on Chromium rejects the pending play() with
+  // "AbortError: … media was removed from the document". Only the visible
+  // chrome toggles on whether something is queued.
   return (
-    <div className="shrink-0 border-t border-oct-border bg-oct-surface">
+    <>
       <audio ref={audioRef} preload="auto" className="hidden" />
+      {!empty && (
+    <div className="shrink-0 border-t border-oct-border bg-oct-surface">
       {error && (
         <p className="border-b border-oct-offline/40 bg-oct-offline/15 px-4 py-1 text-center text-xs text-oct-danger">
           {error}
@@ -222,5 +227,7 @@ export default function PlayerBar() {
         </button>
       </div>
     </div>
+      )}
+    </>
   );
 }

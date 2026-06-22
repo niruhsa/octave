@@ -15,6 +15,7 @@ pub mod playlist;
 pub mod scan;
 pub mod streaming;
 pub mod tag;
+pub mod uploads;
 pub mod watch;
 
 pub use archive::{extract as extract_archive, ArchiveKind};
@@ -25,3 +26,7 @@ pub use metadata::{MetadataEdit, MetadataService};
 pub use playlist::{PlaylistService, PlaylistWithTracks};
 pub use scan::{ScanReport, ScanService};
 pub use streaming::{ResolvedStream, StreamingService};
+pub use uploads::{
+    can_see, ChunkAck, ChunkInit, ChunkView, FileInit, UploadEvent, UploadFileView, UploadHub,
+    UploadSummary, UploadView, UploadsService,
+};

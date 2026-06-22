@@ -27,7 +27,10 @@ export default function MobileNav() {
   return (
     <nav
       aria-label="Primary"
-      className="flex shrink-0 items-stretch justify-around border-t border-oct-border bg-oct-surface px-1 pb-1.5 pt-2 md:hidden"
+      className="flex shrink-0 items-stretch justify-around border-t border-oct-border bg-oct-surface px-1 pt-2 md:hidden"
+      // Pad above the Android gesture indicator / nav bar so the tabs aren't
+      // overlapped (the bar background still fills the inset area).
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.375rem)" }}
     >
       {TABS.map((t) => (
         <NavLink

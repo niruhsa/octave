@@ -10,9 +10,9 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, Credential, PermissionTier, Playlist, PlaylistTrack,
-    PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track,
-    UploadChunkOutcome, UploadInitRequest, UploadInitResponse, UploadResult, UploadStatus,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, PermissionTier, Playlist,
+    PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track,
+    UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -304,8 +304,15 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("list_albums_by_artist"))?;
-        let body: Vec<AlbumJson> = check_status(resp).await?.json().await.map_err(rest_err("list_albums_by_artist decode"))?;
-        Ok(body.into_iter().map(Album::from).collect())
+        // Server wraps this list as `{ albums, total }` (the `total` field is
+        // unused here, so we don't declare it). Decoding a bare array here
+        // silently failed → cache fallback → "no albums".
+        #[derive(Deserialize)]
+        struct Resp {
+            albums: Vec<AlbumJson>,
+        }
+        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_albums_by_artist decode"))?;
+        Ok(body.albums.into_iter().map(Album::from).collect())
     }
 
     pub async fn search_albums(
@@ -345,8 +352,14 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("list_tracks_by_album"))?;
-        let body: Vec<TrackJson> = check_status(resp).await?.json().await.map_err(rest_err("list_tracks_by_album decode"))?;
-        Ok(body.into_iter().map(Track::from).collect())
+        // Server wraps this list as `{ tracks, total }`; decoding a bare array
+        // silently failed → cache fallback → "no tracks".
+        #[derive(Deserialize)]
+        struct Resp {
+            tracks: Vec<TrackJson>,
+        }
+        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_tracks_by_album decode"))?;
+        Ok(body.tracks.into_iter().map(Track::from).collect())
     }
 
     pub async fn search_tracks(
@@ -585,14 +598,14 @@ impl RestClient {
         parse_upload_response(&text)
     }
 
-    // ----- Chunked / resumable upload (Phase 8+) --------------------------
+    // ----- Uploads v2 (sessions + reports + live stream) -------------------
 
-    pub async fn upload_init(
+    pub async fn init_upload(
         &self,
         cred: &Credential,
         body: &UploadInitRequest,
-    ) -> AppResult<UploadInitResponse> {
-        let url = format!("{}/upload/init", self.base);
+    ) -> AppResult<UploadView> {
+        let url = format!("{}/uploads/init", self.base);
         let resp = self
             .http
             .post(url)
@@ -600,21 +613,26 @@ impl RestClient {
             .json(body)
             .send()
             .await
-            .map_err(rest_err("upload_init"))?;
-        let resp = check_status(resp).await?;
-        resp.json::<UploadInitResponse>()
+            .map_err(rest_err("init_upload"))?;
+        check_status(resp)
+            .await?
+            .json::<UploadView>()
             .await
-            .map_err(rest_err("upload_init decode"))
+            .map_err(rest_err("init_upload decode"))
     }
 
-    pub async fn upload_chunk(
+    pub async fn put_chunk(
         &self,
         cred: &Credential,
-        id: &str,
-        index: u32,
+        upload_id: &str,
+        file_index: u32,
+        chunk_index: u32,
         data: Vec<u8>,
-    ) -> AppResult<UploadChunkOutcome> {
-        let url = format!("{}/upload/chunk/{id}/{index}", self.base);
+    ) -> AppResult<ChunkAck> {
+        let url = format!(
+            "{}/uploads/{upload_id}/files/{file_index}/chunks/{chunk_index}",
+            self.base
+        );
         let resp = self
             .http
             .post(url)
@@ -623,24 +641,139 @@ impl RestClient {
             .body(data)
             .send()
             .await
-            .map_err(rest_err("upload_chunk"))?;
-        let resp = check_status(resp).await?;
-        let text = resp.text().await.map_err(rest_err("upload_chunk body"))?;
-        parse_chunk_response(&text)
+            .map_err(rest_err("put_chunk"))?;
+        check_status(resp)
+            .await?
+            .json::<ChunkAck>()
+            .await
+            .map_err(rest_err("put_chunk decode"))
     }
 
-    pub async fn upload_status(&self, cred: &Credential, id: &str) -> AppResult<UploadStatus> {
-        let url = format!("{}/upload/status/{id}", self.base);
+    pub async fn get_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let url = format!("{}/uploads/{id}", self.base);
         let resp = self
             .http
             .get(url)
             .header("authorization", auth_header(cred))
             .send()
             .await
-            .map_err(rest_err("upload_status"))?;
-        let resp = check_status(resp).await?;
-        let text = resp.text().await.map_err(rest_err("upload_status body"))?;
-        parse_status_response(&text)
+            .map_err(rest_err("get_upload"))?;
+        check_status(resp)
+            .await?
+            .json::<UploadView>()
+            .await
+            .map_err(rest_err("get_upload decode"))
+    }
+
+    pub async fn list_uploads(
+        &self,
+        cred: &Credential,
+        filter: &UploadListFilter,
+    ) -> AppResult<Vec<UploadSummary>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            uploads: Vec<UploadSummary>,
+        }
+        let mut query: Vec<(String, String)> = Vec::new();
+        if let Some(u) = &filter.user_id {
+            query.push(("user_id".into(), u.clone()));
+        }
+        if let Some(s) = &filter.state {
+            query.push(("state".into(), s.clone()));
+        }
+        if let Some(l) = filter.limit {
+            query.push(("limit".into(), l.to_string()));
+        }
+        if let Some(o) = filter.offset {
+            query.push(("offset".into(), o.to_string()));
+        }
+        let url = format!("{}/uploads", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .query(&query)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_uploads"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_uploads decode"))?;
+        Ok(body.uploads)
+    }
+
+    pub async fn cancel_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let url = format!("{}/uploads/{id}/cancel", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("cancel_upload"))?;
+        check_status(resp)
+            .await?
+            .json::<UploadView>()
+            .await
+            .map_err(rest_err("cancel_upload decode"))
+    }
+
+    /// Open the live `uploads` WebSocket (REST-side fallback for the gRPC
+    /// stream). Spawns a reader that forwards permitted events to `tx` until
+    /// the socket closes; the auth credential rides the handshake header.
+    pub async fn stream_uploads(
+        &self,
+        cred: &Credential,
+        tx: tokio::sync::mpsc::Sender<UploadEvent>,
+    ) -> AppResult<()> {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+        use tokio_tungstenite::tungstenite::http::HeaderValue;
+        use tokio_tungstenite::tungstenite::Message;
+
+        // http(s) base → ws(s) URL.
+        let ws_base = if let Some(rest) = self.base.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = self.base.strip_prefix("http://") {
+            format!("ws://{rest}")
+        } else {
+            format!("ws://{}", self.base)
+        };
+        let url = format!("{ws_base}/uploads/stream");
+
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| AppError::Transport(format!("ws request: {e}")))?;
+        request.headers_mut().insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&auth_header(cred))
+                .map_err(|e| AppError::Transport(format!("ws auth header: {e}")))?,
+        );
+
+        let (ws_stream, _resp) = connect_async(request)
+            .await
+            .map_err(|e| AppError::Transport(format!("ws connect: {e}")))?;
+        let (_write, mut read) = ws_stream.split();
+        tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(txt)) => {
+                        if let Ok(ev) = serde_json::from_str::<UploadEvent>(&txt) {
+                            if tx.send(ev).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Message::Close(_)) | Err(_) => break,
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
     }
 }
 
@@ -802,42 +935,6 @@ fn parse_upload_response(text: &str) -> AppResult<UploadResult> {
         track_id: single.track_id,
         path: single.path,
     }))
-}
-
-fn parse_chunk_response(text: &str) -> AppResult<UploadChunkOutcome> {
-    let v: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| AppError::Transport(format!("chunk decode: {e}")))?;
-    Ok(UploadChunkOutcome {
-        received: v.get("received").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-        total: v.get("total").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-        complete: v.get("complete").and_then(|x| x.as_bool()).unwrap_or(false),
-        result: parse_optional_result(v.get("result"))?,
-    })
-}
-
-fn parse_status_response(text: &str) -> AppResult<UploadStatus> {
-    let v: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| AppError::Transport(format!("status decode: {e}")))?;
-    Ok(UploadStatus {
-        total_chunks: v.get("total_chunks").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-        received_chunks: json_u32_vec(v.get("received_chunks")),
-        missing_chunks: json_u32_vec(v.get("missing_chunks")),
-        complete: v.get("complete").and_then(|x| x.as_bool()).unwrap_or(false),
-        result: parse_optional_result(v.get("result"))?,
-    })
-}
-
-fn parse_optional_result(v: Option<&serde_json::Value>) -> AppResult<Option<UploadResult>> {
-    match v {
-        Some(r) if !r.is_null() => Ok(Some(parse_upload_response(&r.to_string())?)),
-        _ => Ok(None),
-    }
-}
-
-fn json_u32_vec(v: Option<&serde_json::Value>) -> Vec<u32> {
-    v.and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|n| n.as_u64().map(|n| n as u32)).collect())
-        .unwrap_or_default()
 }
 
 #[derive(Deserialize)]

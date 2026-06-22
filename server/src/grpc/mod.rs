@@ -19,6 +19,7 @@ use crate::auth::service::AuthService;
 use crate::error::{AppError, Result};
 use crate::services::{
     ArtworkService, IngestService, LibraryService, MetadataService, PlaylistService, ScanService,
+    UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
@@ -38,6 +39,8 @@ pub async fn serve(
     artwork: Option<ArtworkService>,
     playlists: PlaylistService,
     ingest: Option<IngestService>,
+    uploads: Option<UploadsService>,
+    upload_hub: UploadHub,
 ) -> Result<()> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -75,6 +78,8 @@ pub async fn serve(
     .into_service();
     let upload_server = UploadServer {
         ingest,
+        uploads,
+        hub: upload_hub,
         interceptor,
     }
     .into_service();
