@@ -1,7 +1,7 @@
 import { coverUrl } from "../ipc";
 import type { MergedAlbum } from "../ipc";
 import { gradientFor } from "../lib/visual";
-import { FallbackImg } from "./FallbackImg";
+import { BlurUpImage } from "./BlurUpImage";
 
 /**
  * Album-art tile in the OCTAVE style.
@@ -40,7 +40,9 @@ export function Cover({
 }) {
   const id = (album as MergedAlbum).id;
   const hasCover = Boolean(album.local_cover_path || album.cover_path);
-  const src = id && (hasCover || tryCover) ? coverUrl(id, version) : null;
+  const show = Boolean(id) && (hasCover || tryCover);
+  const fullSrc = show ? coverUrl(id!, version) : null;
+  const lowSrc = show ? coverUrl(id!, version, true) : null;
 
   return (
     <div
@@ -65,7 +67,7 @@ export function Cover({
         </div>
       </div>
 
-      <FallbackImg src={src} className="absolute inset-0 h-full w-full object-cover" />
+      <BlurUpImage lowSrc={lowSrc} fullSrc={fullSrc} className="absolute inset-0 h-full w-full object-cover" />
 
       {badge && <div className="absolute left-2.5 top-2.5 z-10">{badge}</div>}
       {quality && (
@@ -97,7 +99,9 @@ export function Thumb({
 }) {
   const id = album?.id;
   const hasCover = Boolean(album?.local_cover_path || album?.cover_path);
-  const src = id && (hasCover || tryCover) ? coverUrl(id) : null;
+  const show = Boolean(id) && (hasCover || tryCover);
+  const fullSrc = show ? coverUrl(id!) : null;
+  const lowSrc = show ? coverUrl(id!, undefined, true) : null;
   return (
     <div
       className={`relative shrink-0 overflow-hidden ${className}`}
@@ -109,7 +113,7 @@ export function Thumb({
           style={{ border: "1px solid rgba(255,255,255,0.18)" }}
         />
       </div>
-      <FallbackImg src={src} className="absolute inset-0 h-full w-full object-cover" />
+      <BlurUpImage lowSrc={lowSrc} fullSrc={fullSrc} className="absolute inset-0 h-full w-full object-cover" />
     </div>
   );
 }

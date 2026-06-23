@@ -21,7 +21,7 @@ pub mod watch;
 
 pub use archive::{extract as extract_archive, ArchiveKind};
 pub use artwork::{ArtworkService, CoverArtArchive, CoverArtSource, CoverImage};
-pub use image_opt::{run_optimize_pass, ImageOptimizer};
+pub use image_opt::{run_optimize_pass, ImageOptimizer, Variant};
 pub use ingest::{ArchiveIngestResult, IngestService};
 pub use library::LibraryService;
 pub use metadata::{MetadataEdit, MetadataService};

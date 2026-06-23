@@ -27,8 +27,10 @@ export function ArtistAvatar({
       style={{ width: size, height: size }}
     >
       <ArtistIcon size={Math.round(size * 0.44)} />
+      {/* low-res variant: ~64px is plenty for a 32–36px avatar, and loads
+          instantly from the native image cache (no jarring pop-in). */}
       <FallbackImg
-        src={imagePath ? artistImageUrl(id, version) : null}
+        src={imagePath ? artistImageUrl(id, version, true) : null}
         className="absolute inset-0 h-full w-full object-cover"
       />
     </span>

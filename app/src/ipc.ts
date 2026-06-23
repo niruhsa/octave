@@ -544,23 +544,33 @@ export async function onDownloadProgress(
 
 // Windows/Android don't allow custom URI schemes in the WebView, so they use
 // the `http://<scheme>.localhost` form (mirrors `player_media_url`'s split).
-function coverScheme(path: string, version?: string | number): string {
+function coverScheme(
+  path: string,
+  opts?: { version?: string | number; lowres?: boolean },
+): string {
   const isWinLike =
     typeof navigator !== "undefined" && /Windows|Android/i.test(navigator.userAgent);
   const base = isWinLike ? `http://cover.localhost/${path}` : `cover://localhost/${path}`;
-  // `?v=` busts the WebView's image cache after a re-upload; the protocol
-  // handler ignores the query string (it parses the path only).
-  return version != null ? `${base}?v=${encodeURIComponent(String(version))}` : base;
+  // `?lowres=1` selects the tiny placeholder variant; `?v=` busts the cache
+  // after a re-upload. Order is fixed so the native cache key stays stable.
+  const params: string[] = [];
+  if (opts?.lowres) params.push("lowres=1");
+  if (opts?.version != null) params.push(`v=${encodeURIComponent(String(opts.version))}`);
+  return params.length ? `${base}?${params.join("&")}` : base;
 }
 
-/** Platform-correct `cover://` URL for an album cover (local-then-server). */
-export function coverUrl(albumId: string, version?: string | number): string {
-  return coverScheme(encodeURIComponent(albumId), version);
+/**
+ * Platform-correct `cover://` URL for an album cover (local-then-server,
+ * cached + optimized by the native side). `lowres` requests the tiny
+ * placeholder variant for blur-up.
+ */
+export function coverUrl(albumId: string, version?: string | number, lowres = false): string {
+  return coverScheme(encodeURIComponent(albumId), { version, lowres });
 }
 
 /** Platform-correct URL for an artist image (server-proxied; no offline copy). */
-export function artistImageUrl(artistId: string, version?: string | number): string {
-  return coverScheme(`artist/${encodeURIComponent(artistId)}`, version);
+export function artistImageUrl(artistId: string, version?: string | number, lowres = false): string {
+  return coverScheme(`artist/${encodeURIComponent(artistId)}`, { version, lowres });
 }
 
 // ---------------------------------------------------------------------------

@@ -545,10 +545,15 @@ async fn serve_album_cover(
         )));
     }
 
-    // Serve the optimized (downscaled) variant, generating it on demand for a
-    // not-yet-optimized cover. Falls back to the original on any failure.
+    // Serve the optimized (downscaled) variant — the tiny low-res placeholder
+    // when `?lowres=1`, else the full optimized image — generating it on demand.
+    // Falls back to the original on any failure.
+    let variant = lowres_variant(&req);
     let serve_path = match &state.optimizer {
-        Some(o) => o.ensure_optimized(&crate::services::ImageOptimizer::album_key(album_id), &cover_path).await,
+        Some(o) => {
+            o.ensure_optimized(&crate::services::ImageOptimizer::album_key(album_id), &cover_path, variant)
+                .await
+        }
         None => cover_path,
     };
     image_file_response(&serve_path).await
@@ -660,11 +665,29 @@ async fn serve_artist_image(
         )));
     }
 
+    let variant = lowres_variant(&req);
     let serve_path = match &state.optimizer {
-        Some(o) => o.ensure_optimized(&crate::services::ImageOptimizer::artist_key(artist_id), &image_path).await,
+        Some(o) => {
+            o.ensure_optimized(&crate::services::ImageOptimizer::artist_key(artist_id), &image_path, variant)
+                .await
+        }
         None => image_path,
     };
     image_file_response(&serve_path).await
+}
+
+/// `?lowres=1` (or bare `?lowres`) selects the tiny low-res placeholder variant.
+fn lowres_variant(req: &Request<Body>) -> crate::services::Variant {
+    let low = req
+        .uri()
+        .query()
+        .map(|q| q.split('&').any(|p| p == "lowres=1" || p == "lowres"))
+        .unwrap_or(false);
+    if low {
+        crate::services::Variant::Low
+    } else {
+        crate::services::Variant::Full
+    }
 }
 
 /// Read `path` and build a 200 image response, deriving the content-type from
@@ -696,7 +719,7 @@ async fn image_file_response(
 fn warm_optimized(state: &RestState, key: String, source: String) {
     if let Some(opt) = state.optimizer.clone() {
         tokio::spawn(async move {
-            let _ = opt.optimize_file(&key, std::path::Path::new(&source)).await;
+            opt.ensure_all(&key, std::path::Path::new(&source)).await;
         });
     }
 }

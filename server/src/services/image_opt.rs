@@ -22,6 +22,30 @@ use uuid::Uuid;
 use crate::db::repo::{AlbumRepo, ArtistRepo};
 use crate::error::{AppError, Result};
 
+/// Low-resolution placeholder dimensions/quality. Tiny (~1–3 KB) so it loads
+/// near-instantly and doubles as a blur-up placeholder for large covers and a
+/// native-res image for small avatars.
+const LOW_DIM: u32 = 64;
+const LOW_QUALITY: u8 = 58;
+
+/// Which optimized variant to produce/serve: the full optimized image or the
+/// tiny low-resolution placeholder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variant {
+    Full,
+    Low,
+}
+
+impl Variant {
+    /// Filename suffix before `.jpg` (`""` for full, `.lq` for low-res).
+    fn suffix(self) -> &'static str {
+        match self {
+            Variant::Full => "",
+            Variant::Low => ".lq",
+        }
+    }
+}
+
 /// Cheap to clone — just the cache dir + two encode knobs.
 #[derive(Clone)]
 pub struct ImageOptimizer {
@@ -48,44 +72,60 @@ impl ImageOptimizer {
         format!("artist-{id}")
     }
 
-    fn optimized_path(&self, key: &str) -> PathBuf {
-        self.optimized_dir.join(format!("{key}.jpg"))
+    fn optimized_path(&self, key: &str, variant: Variant) -> PathBuf {
+        self.optimized_dir
+            .join(format!("{key}{}.jpg", variant.suffix()))
     }
 
-    /// Return a path to serve for `source`: the optimized variant when it
-    /// exists and is fresh, otherwise generate it now. **Never errors** —
-    /// any failure (decode error, unreadable source, etc.) falls back to the
-    /// original `source` so the caller still serves *something*.
-    pub async fn ensure_optimized(&self, key: &str, source: &Path) -> PathBuf {
-        let opt = self.optimized_path(key);
+    fn dim_quality(&self, variant: Variant) -> (u32, u8) {
+        match variant {
+            Variant::Full => (self.max_dim, self.quality),
+            Variant::Low => (LOW_DIM, LOW_QUALITY),
+        }
+    }
+
+    /// Return a path to serve for `source` in the requested `variant`: the
+    /// cached variant when it exists and is fresh, otherwise generate it now.
+    /// **Never errors** — any failure (decode error, unreadable source, etc.)
+    /// falls back to the original `source` so the caller still serves
+    /// *something* (only sensible for `Full`; a `Low` failure is rare).
+    pub async fn ensure_optimized(&self, key: &str, source: &Path, variant: Variant) -> PathBuf {
+        let opt = self.optimized_path(key, variant);
         if is_fresh(&opt, source).await {
             return opt;
         }
-        match self.optimize_file(key, source).await {
+        match self.optimize_file(key, source, variant).await {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(key, error = %e, "image optimize failed; serving original");
+                tracing::warn!(key, ?variant, error = %e, "image optimize failed; serving original");
                 source.to_path_buf()
             }
         }
     }
 
-    /// Read `source`, optimize it, and write the optimized variant for `key`.
-    /// Returns the optimized path on success.
-    pub async fn optimize_file(&self, key: &str, source: &Path) -> Result<PathBuf> {
+    /// Read `source`, optimize it into `variant`, and write the cached file for
+    /// `key`. Returns the cached path on success.
+    pub async fn optimize_file(&self, key: &str, source: &Path, variant: Variant) -> Result<PathBuf> {
         let bytes = fs::read(source).await.map_err(AppError::Io)?;
         let bytes_in = bytes.len();
-        let (max_dim, quality) = (self.max_dim, self.quality);
+        let (dim, quality) = self.dim_quality(variant);
         // Decode + resize + encode is CPU-bound — keep it off the async runtime.
-        let optimized = tokio::task::spawn_blocking(move || encode_optimized(&bytes, max_dim, quality))
+        let optimized = tokio::task::spawn_blocking(move || encode_optimized(&bytes, dim, quality))
             .await
             .map_err(|e| AppError::Internal(format!("optimize task join: {e}")))??;
         fs::create_dir_all(&self.optimized_dir).await.map_err(AppError::Io)?;
-        let opt = self.optimized_path(key);
+        let opt = self.optimized_path(key, variant);
         let bytes_out = optimized.len();
         fs::write(&opt, &optimized).await.map_err(AppError::Io)?;
-        tracing::debug!(key, bytes_in, bytes_out, "image optimized");
+        tracing::debug!(key, ?variant, bytes_in, bytes_out, "image optimized");
         Ok(opt)
+    }
+
+    /// Generate both the full + low-res variants for `key` (best-effort). Used
+    /// by the startup/scheduled pass and the on-upload cache warm.
+    pub async fn ensure_all(&self, key: &str, source: &Path) {
+        self.ensure_optimized(key, source, Variant::Full).await;
+        self.ensure_optimized(key, source, Variant::Low).await;
     }
 }
 
@@ -133,7 +173,7 @@ pub async fn run_optimize_pass(albums: &dyn AlbumRepo, artists: &dyn ArtistRepo,
     match albums.all_cover_paths().await {
         Ok(rows) => {
             for (id, path) in rows {
-                opt.ensure_optimized(&ImageOptimizer::album_key(id), Path::new(&path)).await;
+                opt.ensure_all(&ImageOptimizer::album_key(id), Path::new(&path)).await;
                 count += 1;
             }
         }
@@ -142,7 +182,7 @@ pub async fn run_optimize_pass(albums: &dyn AlbumRepo, artists: &dyn ArtistRepo,
     match artists.all_image_paths().await {
         Ok(rows) => {
             for (id, path) in rows {
-                opt.ensure_optimized(&ImageOptimizer::artist_key(id), Path::new(&path)).await;
+                opt.ensure_all(&ImageOptimizer::artist_key(id), Path::new(&path)).await;
                 count += 1;
             }
         }
@@ -189,6 +229,29 @@ mod tests {
     #[test]
     fn rejects_non_image_bytes() {
         assert!(encode_optimized(b"not an image", 800, 82).is_err());
+    }
+
+    #[test]
+    fn low_res_variant_is_tiny() {
+        let src = png_bytes(2000, 1500);
+        let full = encode_optimized(&src, 800, 82).unwrap();
+        let low = encode_optimized(&src, LOW_DIM, LOW_QUALITY).unwrap();
+        let decoded = image::load_from_memory(&low).unwrap();
+        // Low-res longest side is capped at LOW_DIM, aspect preserved, and the
+        // byte payload is far smaller than the full optimized image.
+        assert_eq!(decoded.width(), LOW_DIM);
+        assert_eq!(decoded.height(), LOW_DIM * 3 / 4);
+        assert!(low.len() < full.len() / 4, "low {} vs full {}", low.len(), full.len());
+    }
+
+    #[test]
+    fn variant_suffix_distinguishes_paths() {
+        let opt = ImageOptimizer::new(std::path::PathBuf::from("/tmp/art"), 800, 82);
+        let full = opt.optimized_path("album-x", Variant::Full);
+        let low = opt.optimized_path("album-x", Variant::Low);
+        assert!(full.to_string_lossy().ends_with("album-x.jpg"));
+        assert!(low.to_string_lossy().ends_with("album-x.lq.jpg"));
+        assert_ne!(full, low);
     }
 
     #[test]

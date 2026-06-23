@@ -18,12 +18,14 @@ export function FallbackImg({
   alt = "",
   style,
   loading = "lazy",
+  onLoad,
 }: {
   src: string | null | undefined;
   className?: string;
   alt?: string;
   style?: React.CSSProperties;
   loading?: "lazy" | "eager";
+  onLoad?: () => void;
 }) {
   const [failed, setFailed] = useState(false);
   // Retry on every src change (new id, or a bumped ?v= after re-upload).
@@ -37,6 +39,7 @@ export function FallbackImg({
       style={style}
       loading={loading}
       onError={() => setFailed(true)}
+      onLoad={onLoad}
     />
   );
 }
