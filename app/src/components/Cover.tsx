@@ -1,6 +1,7 @@
 import { coverUrl } from "../ipc";
 import type { MergedAlbum } from "../ipc";
 import { gradientFor } from "../lib/visual";
+import { FallbackImg } from "./FallbackImg";
 
 /**
  * Album-art tile in the OCTAVE style.
@@ -64,17 +65,7 @@ export function Cover({
         </div>
       </div>
 
-      {src && (
-        <img
-          src={src}
-          alt=""
-          className="absolute inset-0 h-full w-full object-cover"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      )}
+      <FallbackImg src={src} className="absolute inset-0 h-full w-full object-cover" />
 
       {badge && <div className="absolute left-2.5 top-2.5 z-10">{badge}</div>}
       {quality && (
@@ -118,17 +109,7 @@ export function Thumb({
           style={{ border: "1px solid rgba(255,255,255,0.18)" }}
         />
       </div>
-      {src && (
-        <img
-          src={src}
-          alt=""
-          className="absolute inset-0 h-full w-full object-cover"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      )}
+      <FallbackImg src={src} className="absolute inset-0 h-full w-full object-cover" />
     </div>
   );
 }

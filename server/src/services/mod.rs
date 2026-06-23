@@ -6,6 +6,7 @@
 pub mod archive;
 pub mod artwork;
 pub mod duration;
+pub mod image_opt;
 pub mod ingest;
 pub mod library;
 pub mod metadata;
@@ -20,6 +21,7 @@ pub mod watch;
 
 pub use archive::{extract as extract_archive, ArchiveKind};
 pub use artwork::{ArtworkService, CoverArtArchive, CoverArtSource, CoverImage};
+pub use image_opt::{run_optimize_pass, ImageOptimizer};
 pub use ingest::{ArchiveIngestResult, IngestService};
 pub use library::LibraryService;
 pub use metadata::{MetadataEdit, MetadataService};

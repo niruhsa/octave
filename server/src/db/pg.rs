@@ -227,6 +227,16 @@ impl ArtistRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn all_image_paths(&self) -> Result<Vec<(Uuid, String)>> {
+        sqlx::query_as::<_, (Uuid, String)>(
+            r#"SELECT id, image_path FROM artists
+               WHERE image_path IS NOT NULL AND image_path <> ''"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
     async fn find_by_name(&self, name: &str) -> Result<Option<Artist>> {
         sqlx::query_as::<_, Artist>(
             r#"SELECT id, name, sort_name, image_path, created_at, updated_at
@@ -349,6 +359,16 @@ impl AlbumRepo for PgRepos {
         .bind(artist_id)
         .bind(title)
         .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn all_cover_paths(&self) -> Result<Vec<(Uuid, String)>> {
+        sqlx::query_as::<_, (Uuid, String)>(
+            r#"SELECT id, cover_path FROM albums
+               WHERE cover_path IS NOT NULL AND cover_path <> ''"#,
+        )
+        .fetch_all(&self.pool)
         .await
         .map_err(db)
     }

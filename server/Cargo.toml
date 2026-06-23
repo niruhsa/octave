@@ -56,6 +56,10 @@ subtle = "2"
 lofty = "0.21"
 walkdir = "2"
 
+# Image optimization (resize + JPEG re-encode for faster artwork loads).
+# Decode jpeg/png/gif/webp uploads; encode optimized JPEG. Pure-Rust (no C dep).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+
 # Audio duration measurement — cross-validates tag-reported duration
 # against actual frame count (critical for VBR files without a seek index).
 # The default feature set only enables flac/ogg/vorbis/wav/pcm/mkv, so

@@ -40,9 +40,9 @@ const AUDIO_EXTS: &[&str] = &[
     "flac", "mp3", "ogg", "opus", "m4a", "wav", "aiff", "ape", "wv", "aac", "mp4",
 ];
 
-/// Chunk size for resumable uploads (4 MiB). Each chunk carries its own hash so
+/// Chunk size for resumable uploads (64 KiB). Each chunk carries its own hash so
 /// the server can verify it on arrival.
-const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+const CHUNK_SIZE: u64 = 64 * 1024;
 
 /// How many times to re-send a chunk the server rejects (e.g. in-transit
 /// corruption → hash mismatch) before giving up on the session.
@@ -101,12 +101,20 @@ struct CompleteEvent {
 
 fn is_archive_name(filename: &str) -> bool {
     let name = filename.to_ascii_lowercase();
-    name.ends_with(".tar.gz") || name.ends_with(".tgz")
-        || name.ends_with(".tar.bz2") || name.ends_with(".tbz2") || name.ends_with(".tbz")
-        || name.ends_with(".tar.xz") || name.ends_with(".txz")
-        || name.ends_with(".tar") || name.ends_with(".zip")
-        || name.ends_with(".iso") || name.ends_with(".img")
-        || name.ends_with(".nrg") || name.ends_with(".bin") || name.ends_with(".cue")
+    name.ends_with(".tar.gz")
+        || name.ends_with(".tgz")
+        || name.ends_with(".tar.bz2")
+        || name.ends_with(".tbz2")
+        || name.ends_with(".tbz")
+        || name.ends_with(".tar.xz")
+        || name.ends_with(".txz")
+        || name.ends_with(".tar")
+        || name.ends_with(".zip")
+        || name.ends_with(".iso")
+        || name.ends_with(".img")
+        || name.ends_with(".nrg")
+        || name.ends_with(".bin")
+        || name.ends_with(".cue")
 }
 
 fn is_uploadable(path: &Path) -> bool {
@@ -189,10 +197,20 @@ fn percent_decode(s: &str) -> String {
 fn sanitize_stem(s: &str) -> String {
     let cleaned: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ' ') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches(['_', ' ', '.']).to_string();
-    if trimmed.is_empty() { "upload".to_string() } else { trimmed }
+    if trimmed.is_empty() {
+        "upload".to_string()
+    } else {
+        trimmed
+    }
 }
 
 /// True for a URI string (SAF `content://`, `file://`, …) vs a plain path.
@@ -226,7 +244,11 @@ fn determine_filename(name: Option<&str>, path: &Path, bytes: &[u8]) -> String {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .or_else(|| path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()));
+        .or_else(|| {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        });
 
     if let Some(c) = &candidate {
         if is_uploadable(Path::new(c)) {
@@ -237,7 +259,13 @@ fn determine_filename(name: Option<&str>, path: &Path, bytes: &[u8]) -> String {
     let ext = sniff_ext(bytes).unwrap_or("bin");
     let raw_stem = candidate
         .as_deref()
-        .map(|c| Path::new(c).file_stem().and_then(|s| s.to_str()).unwrap_or(c).to_string())
+        .map(|c| {
+            Path::new(c)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(c)
+                .to_string()
+        })
         .unwrap_or_else(|| "upload".to_string());
     format!("{}.{ext}", sanitize_stem(&raw_stem))
 }
@@ -301,7 +329,12 @@ async fn put_chunk_with_retry(
     let mut attempt = 0u32;
     loop {
         match auth
-            .put_chunk(upload_id.to_string(), file_index, chunk_index, bytes.clone())
+            .put_chunk(
+                upload_id.to_string(),
+                file_index,
+                chunk_index,
+                bytes.clone(),
+            )
             .await
         {
             Ok(ack) => return Ok(ack),
@@ -380,7 +413,11 @@ fn notify_upload_progress(
     let speed = format_speed(speed_bps);
     let bar = text_bar(pct);
     let body = if total_files > 1 {
-        format!("{bar}  {pct}%  ·  {}/{} files  ·  {speed}", file_no.min(total_files), total_files)
+        format!(
+            "{bar}  {pct}%  ·  {}/{} files  ·  {speed}",
+            file_no.min(total_files),
+            total_files
+        )
     } else {
         format!("{bar}  {pct}%  ·  {speed}")
     };
@@ -434,12 +471,15 @@ async fn run_job(
     let total_items = items.len() as u64;
 
     // Phase 1: read every source natively + compute hashes/chunk maps.
-    emit(&app, ProgressEvent {
-        job_id: job_id.clone(),
-        phase: "scanning".into(),
-        total: total_items,
-        ..Default::default()
-    });
+    emit(
+        &app,
+        ProgressEvent {
+            job_id: job_id.clone(),
+            phase: "scanning".into(),
+            total: total_items,
+            ..Default::default()
+        },
+    );
     notify_progress(&app, notif_id, "Uploading music", "Preparing files…");
 
     let mut files_init: Vec<UploadFileInit> = Vec::new();
@@ -468,7 +508,12 @@ async fn run_job(
 
     if files_init.is_empty() {
         emit_done(&app, &job_id, None, "completed", 0, 0, 0, skipped, errors);
-        notify_complete(&app, notif_id, "Upload complete", &format!("0 uploaded · {skipped} skipped"));
+        notify_complete(
+            &app,
+            notif_id,
+            "Upload complete",
+            &format!("0 uploaded · {skipped} skipped"),
+        );
         return;
     }
 
@@ -476,12 +521,27 @@ async fn run_job(
     let session_total: u64 = files_init.iter().map(|f| f.total_size).sum();
 
     // Phase 2: declare the session.
-    let view = match auth.init_upload(UploadInitRequest { files: files_init.clone() }).await {
+    let view = match auth
+        .init_upload(UploadInitRequest {
+            files: files_init.clone(),
+        })
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             let msg = e.to_string();
             errors.push(msg.clone());
-            emit_done(&app, &job_id, None, "error", total_files, 0, total_files, skipped, errors);
+            emit_done(
+                &app,
+                &job_id,
+                None,
+                "error",
+                total_files,
+                0,
+                total_files,
+                skipped,
+                errors,
+            );
             notify_complete(&app, notif_id, "Upload failed", &msg);
             return;
         }
@@ -499,7 +559,13 @@ async fn run_job(
         let already: std::collections::HashSet<u32> = view
             .files
             .get(fi)
-            .map(|f| f.chunks.iter().filter(|c| c.received).map(|c| c.index).collect())
+            .map(|f| {
+                f.chunks
+                    .iter()
+                    .filter(|c| c.received)
+                    .map(|c| c.index)
+                    .collect()
+            })
             .unwrap_or_default();
         let mut file_received: u64 = 0;
 
@@ -517,23 +583,33 @@ async fn run_job(
                     file_received += len;
                     session_received += len;
                     let speed = sent_total as f64 / started.elapsed().as_secs_f64().max(0.001);
-                    emit(&app, ProgressEvent {
-                        job_id: job_id.clone(),
-                        upload_id: Some(upload_id.clone()),
-                        phase: "uploading".into(),
-                        current: fi as u64,
-                        total: total_files,
-                        file: Some(hint.clone()),
-                        received: Some(file_received),
-                        bytes_total: Some(file_init.total_size),
-                        session_received: Some(session_received),
-                        session_total: Some(session_total),
-                        bytes_per_sec: Some(speed),
-                        ..Default::default()
-                    });
+                    emit(
+                        &app,
+                        ProgressEvent {
+                            job_id: job_id.clone(),
+                            upload_id: Some(upload_id.clone()),
+                            phase: "uploading".into(),
+                            current: fi as u64,
+                            total: total_files,
+                            file: Some(hint.clone()),
+                            received: Some(file_received),
+                            bytes_total: Some(file_init.total_size),
+                            session_received: Some(session_received),
+                            session_total: Some(session_total),
+                            bytes_per_sec: Some(speed),
+                            ..Default::default()
+                        },
+                    );
                     if last_notif.elapsed() >= Duration::from_millis(400) {
                         let frac = session_received as f64 / session_total.max(1) as f64;
-                        notify_upload_progress(&app, notif_id, frac, fi as u64 + 1, total_files, speed);
+                        notify_upload_progress(
+                            &app,
+                            notif_id,
+                            frac,
+                            fi as u64 + 1,
+                            total_files,
+                            speed,
+                        );
                         last_notif = std::time::Instant::now();
                     }
                     if ack.upload_complete {
@@ -544,7 +620,17 @@ async fn run_job(
                     // Unrecoverable: cancel so the one-active-upload slot frees up.
                     errors.push(format!("{hint}: {e}"));
                     let _ = auth.cancel_upload(upload_id.clone()).await;
-                    emit_done(&app, &job_id, Some(&upload_id), "cancelled", total_files, 0, total_files, skipped, errors);
+                    emit_done(
+                        &app,
+                        &job_id,
+                        Some(&upload_id),
+                        "cancelled",
+                        total_files,
+                        0,
+                        total_files,
+                        skipped,
+                        errors,
+                    );
                     notify_complete(&app, notif_id, "Upload failed", &e.to_string());
                     return;
                 }
@@ -553,16 +639,19 @@ async fn run_job(
     }
 
     // Phase 4: fetch the final report + announce.
-    emit(&app, ProgressEvent {
-        job_id: job_id.clone(),
-        upload_id: Some(upload_id.clone()),
-        phase: "finalizing".into(),
-        current: total_files,
-        total: total_files,
-        session_received: Some(session_received),
-        session_total: Some(session_total),
-        ..Default::default()
-    });
+    emit(
+        &app,
+        ProgressEvent {
+            job_id: job_id.clone(),
+            upload_id: Some(upload_id.clone()),
+            phase: "finalizing".into(),
+            current: total_files,
+            total: total_files,
+            session_received: Some(session_received),
+            session_total: Some(session_total),
+            ..Default::default()
+        },
+    );
 
     let report_view = auth.get_upload(upload_id.clone()).await.ok();
     let (tracks, files_failed, state) = match &report_view {
@@ -573,9 +662,23 @@ async fn run_job(
         ),
         None => (0, 0, "completed".to_string()),
     };
-    emit_done(&app, &job_id, Some(&upload_id), &state, total_files, tracks, files_failed, skipped, errors);
+    emit_done(
+        &app,
+        &job_id,
+        Some(&upload_id),
+        &state,
+        total_files,
+        tracks,
+        files_failed,
+        skipped,
+        errors,
+    );
 
-    let title = if files_failed > 0 { "Upload finished with errors" } else { "Upload complete" };
+    let title = if files_failed > 0 {
+        "Upload finished with errors"
+    } else {
+        "Upload complete"
+    };
     let mut body = format!("{tracks} track(s) ingested");
     if files_failed > 0 {
         body.push_str(&format!(" · {files_failed} failed"));
@@ -606,24 +709,30 @@ fn emit_done(
     skipped: u64,
     errors: Vec<String>,
 ) {
-    let _ = app.emit("upload-complete", CompleteEvent {
-        job_id: job_id.to_string(),
-        upload_id: upload_id.map(|s| s.to_string()),
-        state: state.to_string(),
-        total_files,
-        tracks_ingested,
-        files_failed,
-        skipped,
-        errors,
-    });
-    let _ = app.emit("upload-progress", ProgressEvent {
-        job_id: job_id.to_string(),
-        upload_id: upload_id.map(|s| s.to_string()),
-        phase: "done".into(),
-        current: total_files,
-        total: total_files,
-        ..Default::default()
-    });
+    let _ = app.emit(
+        "upload-complete",
+        CompleteEvent {
+            job_id: job_id.to_string(),
+            upload_id: upload_id.map(|s| s.to_string()),
+            state: state.to_string(),
+            total_files,
+            tracks_ingested,
+            files_failed,
+            skipped,
+            errors,
+        },
+    );
+    let _ = app.emit(
+        "upload-progress",
+        ProgressEvent {
+            job_id: job_id.to_string(),
+            upload_id: upload_id.map(|s| s.to_string()),
+            phase: "done".into(),
+            current: total_files,
+            total: total_files,
+            ..Default::default()
+        },
+    );
 }
 
 fn emit(app: &AppHandle, ev: ProgressEvent) {
@@ -635,7 +744,9 @@ fn next_job() -> (String, i32) {
     (format!("upload-{n}"), (n & 0x7fff_ffff) as i32)
 }
 
-async fn resolve_auth(state: &tauri::State<'_, crate::AppStateHandle>) -> AppResult<Arc<AuthManager>> {
+async fn resolve_auth(
+    state: &tauri::State<'_, crate::AppStateHandle>,
+) -> AppResult<Arc<AuthManager>> {
     let guard = state.auth.read().await;
     guard
         .clone()
@@ -675,17 +786,23 @@ pub async fn upload_folder(
     let auth = resolve_auth(&state).await?;
     let root = std::path::PathBuf::from(&dir_path);
     if !root.is_dir() {
-        return Err(AppError::Internal(format!("not a directory: {}", root.display())));
+        return Err(AppError::Internal(format!(
+            "not a directory: {}",
+            root.display()
+        )));
     }
     let (job_id, notif_id) = next_job();
     let jid = job_id.clone();
     tauri::async_runtime::spawn(async move {
         ensure_channels(&app);
-        emit(&app, ProgressEvent {
-            job_id: jid.clone(),
-            phase: "scanning".into(),
-            ..Default::default()
-        });
+        emit(
+            &app,
+            ProgressEvent {
+                job_id: jid.clone(),
+                phase: "scanning".into(),
+                ..Default::default()
+            },
+        );
         notify_progress(&app, notif_id, "Uploading music", "Scanning folder…");
 
         let items: Vec<UploadItem> = walkdir::WalkDir::new(&root)
@@ -694,7 +811,9 @@ pub async fn upload_folder(
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .filter(|e| is_uploadable(e.path()))
-            .map(|e| UploadItem { path: e.path().to_string_lossy().into_owned() })
+            .map(|e| UploadItem {
+                path: e.path().to_string_lossy().into_owned(),
+            })
             .collect();
 
         run_job(app, auth, jid, notif_id, items).await;
@@ -769,12 +888,18 @@ mod tests {
 
     #[test]
     fn filename_decodes_sniffs_and_sanitises() {
-        assert_eq!(determine_filename(Some("Song.flac"), Path::new("/tmp/x"), b""), "Song.flac");
+        assert_eq!(
+            determine_filename(Some("Song.flac"), Path::new("/tmp/x"), b""),
+            "Song.flac"
+        );
         assert_eq!(
             determine_filename(Some("msf:13974"), Path::new("/tmp/x"), b"fLaC\0\0\0\0"),
             "msf_13974.flac"
         );
-        assert_eq!(determine_filename(None, Path::new("/tmp/blob"), b"????"), "blob.bin");
+        assert_eq!(
+            determine_filename(None, Path::new("/tmp/blob"), b"????"),
+            "blob.bin"
+        );
     }
 
     #[test]
@@ -805,8 +930,14 @@ mod tests {
     #[test]
     fn name_hint_decodes_uris() {
         assert_eq!(name_hint("/music/song.flac"), "song.flac");
-        assert_eq!(name_hint("content://media/documents/msf%3A13974"), "msf:13974");
-        assert_eq!(name_hint("content://x/y/album%20name.zip"), "album name.zip");
+        assert_eq!(
+            name_hint("content://media/documents/msf%3A13974"),
+            "msf:13974"
+        );
+        assert_eq!(
+            name_hint("content://x/y/album%20name.zip"),
+            "album name.zip"
+        );
         assert!(is_uri("content://x/y"));
         assert!(!is_uri("/a/b.flac"));
     }

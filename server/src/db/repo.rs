@@ -32,6 +32,9 @@ pub trait ArtistRepo: Send + Sync {
     /// Set (or clear, with `None`) the artist's image path. Leaves name /
     /// sort_name untouched, so it composes with `update`.
     async fn set_image(&self, id: Uuid, image_path: Option<&str>) -> Result<Option<Artist>>;
+    /// `(id, image_path)` for every artist that has an image set. Used by the
+    /// image-optimization pass.
+    async fn all_image_paths(&self) -> Result<Vec<(Uuid, String)>>;
     async fn find_by_name(&self, name: &str) -> Result<Option<Artist>>;
     async fn delete(&self, id: Uuid) -> Result<()>;
 }
@@ -54,6 +57,9 @@ pub trait AlbumRepo: Send + Sync {
         artist_id: Uuid,
         title: &str,
     ) -> Result<Option<Album>>;
+    /// `(id, cover_path)` for every album that has a cover set. Used by the
+    /// image-optimization pass.
+    async fn all_cover_paths(&self) -> Result<Vec<(Uuid, String)>>;
     async fn delete(&self, id: Uuid) -> Result<()>;
 }
 

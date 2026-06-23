@@ -11,8 +11,9 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    ArtworkService, CoverArtArchive, CoverArtSource, IngestService, LibraryService, MetadataService,
-    PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
+    run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, ImageOptimizer,
+    IngestService, LibraryService, MetadataService, PlaylistService, ScanService, StreamingService,
+    UploadHub, UploadsService,
 };
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
@@ -76,6 +77,13 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Image optimizer: available whenever there's an artwork cache dir.
+    // Serves downscaled cover/artist images, generating them on demand.
+    let optimizer = config
+        .artwork_path
+        .clone()
+        .map(|dir| ImageOptimizer::new(dir, config.image_max_dim, config.image_quality));
+
     let ingest = match config.library_path.clone() {
         Some(ref root) => {
             let organizer = Organizer::new(root.clone());
@@ -105,6 +113,34 @@ async fn main() -> Result<()> {
         UploadsService::new(Arc::new(repos.clone()), ing, upload_hub.clone())
     });
 
+    // Image-optimization background work: optimize everything once on startup,
+    // then on a timer. New/changed images are also handled on upload + on
+    // demand at serve time — this pass is the catch-all (e.g. ingest-created
+    // covers) and a self-heal for a wiped optimized cache.
+    if let Some(opt) = optimizer.clone() {
+        let repos_for_opt = Arc::new(repos.clone());
+        // Startup pass (background — never blocks boot).
+        {
+            let opt = opt.clone();
+            let repos_for_opt = repos_for_opt.clone();
+            tokio::spawn(async move {
+                run_optimize_pass(&*repos_for_opt, &*repos_for_opt, &opt).await;
+            });
+        }
+        // Periodic pass (0 disables).
+        if config.image_optimize_interval_secs > 0 {
+            let period = std::time::Duration::from_secs(config.image_optimize_interval_secs);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(period);
+                tick.tick().await; // consume the immediate first tick (startup pass ran)
+                loop {
+                    tick.tick().await;
+                    run_optimize_pass(&*repos_for_opt, &*repos_for_opt, &opt).await;
+                }
+            });
+        }
+    }
+
     let rest_state = RestState {
         auth: auth.clone(),
         library: library.clone(),
@@ -114,6 +150,7 @@ async fn main() -> Result<()> {
         ingest: ingest.clone(),
         metadata: metadata.clone(),
         artwork: artwork.clone(),
+        optimizer: optimizer.clone(),
         uploads: uploads.clone(),
         upload_hub: upload_hub.clone(),
     };

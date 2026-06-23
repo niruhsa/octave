@@ -31,8 +31,8 @@ use crate::auth::service::{AuthService, Credential};
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
 use crate::services::{
-    ArtworkService, IngestService, LibraryService, MetadataService, PlaylistService, ScanService,
-    StreamingService, UploadHub, UploadsService,
+    ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
+    PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -46,6 +46,9 @@ pub struct RestState {
     pub ingest: Option<IngestService>,
     pub metadata: MetadataService,
     pub artwork: Option<ArtworkService>,
+    /// Image optimizer (None when no `ARTWORK_PATH` is configured). Serves
+    /// downscaled cover/artist images, generating them on demand.
+    pub optimizer: Option<ImageOptimizer>,
     /// DB-backed upload sessions (None when no ingest staging dir is configured).
     pub uploads: Option<UploadsService>,
     /// Live upload-progress broadcast hub (shared with the gRPC stream).

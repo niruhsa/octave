@@ -1,5 +1,6 @@
 import { artistImageUrl } from "../ipc";
 import { ArtistIcon } from "./icons";
+import { FallbackImg } from "./FallbackImg";
 
 /**
  * Circular artist thumbnail for browse/search lists. Shows the uploaded
@@ -26,15 +27,10 @@ export function ArtistAvatar({
       style={{ width: size, height: size }}
     >
       <ArtistIcon size={Math.round(size * 0.44)} />
-      {imagePath && (
-        <img
-          src={artistImageUrl(id, version)}
-          alt=""
-          loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover"
-          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-        />
-      )}
+      <FallbackImg
+        src={imagePath ? artistImageUrl(id, version) : null}
+        className="absolute inset-0 h-full w-full object-cover"
+      />
     </span>
   );
 }

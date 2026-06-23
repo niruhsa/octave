@@ -57,6 +57,14 @@ pub struct Config {
     /// from `ARTWORK_PATH` relative to the config anchor; defaults to
     /// `<library_path>/.artwork` when unset and a library path exists.
     pub artwork_path: Option<PathBuf>,
+    /// Max dimension (px, longest side) that cached cover/artist images are
+    /// downscaled to when optimized. `IMAGE_MAX_DIM`, default 800.
+    pub image_max_dim: u32,
+    /// JPEG quality (1–100) for optimized images. `IMAGE_QUALITY`, default 82.
+    pub image_quality: u8,
+    /// How often the background optimize-all pass runs, in seconds.
+    /// `IMAGE_OPTIMIZE_INTERVAL_SECS`, default 21600 (6h); 0 disables it.
+    pub image_optimize_interval_secs: u64,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
@@ -104,6 +112,11 @@ impl Config {
             .map(|p| resolve_path(&anchor, &p))
             .or_else(|| library_path.as_ref().map(|l| l.join(".artwork")));
 
+        // Image optimization knobs (sensible defaults; all overridable).
+        let image_max_dim = env_u64("IMAGE_MAX_DIM", 800).clamp(64, 8192) as u32;
+        let image_quality = env_u64("IMAGE_QUALITY", 82).clamp(1, 100) as u8;
+        let image_optimize_interval_secs = env_u64("IMAGE_OPTIMIZE_INTERVAL_SECS", 21_600);
+
         if let Some(p) = &library_path {
             debug!(resolved = %p.display(), "LIBRARY_PATH resolved");
         }
@@ -123,6 +136,9 @@ impl Config {
             write_tags,
             fetch_artwork,
             artwork_path,
+            image_max_dim,
+            image_quality,
+            image_optimize_interval_secs,
             config_anchor: anchor,
         })
     }
@@ -196,6 +212,14 @@ fn env_flag(var: &str) -> bool {
         .ok()
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+/// Parse a `u64` env var, falling back to `default` when absent or unparseable.
+fn env_u64(var: &str, default: u64) -> u64 {
+    env::var(var)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 /// Optional gRPC TLS, enabled by the `GRPC_TLS` flag. When on, `GRPC_TLS_CERT`

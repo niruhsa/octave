@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { artistImageUrl, libraryDeleteArtist, libraryListAlbumsByArtist } from "../ipc";
 import { Cover } from "../components/Cover";
+import { FallbackImg } from "../components/FallbackImg";
 import { ImageUploader } from "../components/ImageUploader";
 import { SavedBadge, SourceBadge, StreamBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
@@ -54,12 +55,9 @@ export default function Artist() {
             className="h-[88px] w-[88px] overflow-hidden rounded-full border border-oct-border"
             style={{ background: gradientFor(id) }}
           >
-            <img
+            <FallbackImg
               src={artistImageUrl(id, imgVersion || undefined)}
-              alt=""
               className="h-full w-full object-cover"
-              loading="lazy"
-              onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
             />
           </div>
           {isManager && (

@@ -8,8 +8,9 @@ import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { libraryUploadAlbumCover, libraryUploadArtistImage } from "../ipc";
 import { formatError } from "../lib/error";
-import { btnGhost, btnPrimary, errorBox, label } from "../lib/ui";
+import { btnGhost, btnPrimary, errorBox, label, okBox } from "../lib/ui";
 import { EditIcon } from "./icons";
+import { FallbackImg } from "./FallbackImg";
 
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif"];
 const OFFLINE_NOTICE = "Uploading artwork requires a connection to the server.";
@@ -30,6 +31,7 @@ export function ImageUploader({ kind, id, online, currentUrl, onClose, onUploade
   const [pickedName, setPickedName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -43,6 +45,7 @@ export function ImageUploader({ kind, id, online, currentUrl, onClose, onUploade
 
   async function pick() {
     setError(null);
+    setDone(false);
     try {
       const sel = await open({
         multiple: false,
@@ -65,8 +68,13 @@ export function ImageUploader({ kind, id, online, currentUrl, onClose, onUploade
     try {
       if (kind === "album") await libraryUploadAlbumCover(id, pickedPath);
       else await libraryUploadArtistImage(id, pickedPath);
+      // Keep the modal open and let the parent bump the cache-bust version
+      // (→ a fresh `currentUrl` prop) so the preview below reloads to the
+      // newly-uploaded image instead of closing on a stale frame.
       onUploaded();
-      onClose();
+      setPickedPath(null);
+      setPickedName(null);
+      setDone(true);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -100,23 +108,26 @@ export function ImageUploader({ kind, id, online, currentUrl, onClose, onUploade
         </div>
 
         {error && <p className={errorBox}>{error}</p>}
+        {done && <p className={okBox}>Image updated.</p>}
 
-        {/* current image preview */}
+        {/* current image preview — bordered box always renders so an empty /
+            failed image shows a placeholder; the image fills it when present.
+            `FallbackImg` retries when `currentUrl` changes (e.g. after upload
+            bumps the cache-bust token), so the new image appears immediately. */}
         <div className="flex flex-col items-center gap-2">
-          <span className={`self-start ${label}`}>CURRENT</span>
-          <img
-            src={currentUrl}
-            alt=""
-            className={`h-40 w-40 border border-oct-border object-cover ${
+          <span className={`self-start ${label}`}>{done ? "UPDATED" : "CURRENT"}</span>
+          <div
+            className={`grid h-40 w-40 place-items-center overflow-hidden border border-oct-border bg-oct-elevated ${
               kind === "artist" ? "rounded-full" : "rounded-lg"
             }`}
-            onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = "hidden")}
-          />
+          >
+            <FallbackImg src={currentUrl} className="h-full w-full object-cover" />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">
           <button onClick={() => void pick()} className={btnGhost} disabled={busy}>
-            {pickedName ? "Choose a different image…" : "Choose image…"}
+            {pickedName || done ? "Choose a different image…" : "Choose image…"}
           </button>
           {pickedName && (
             <p className="truncate text-center font-mono text-[11px] text-oct-subtle">
@@ -127,16 +138,24 @@ export function ImageUploader({ kind, id, online, currentUrl, onClose, onUploade
 
         <div className="flex items-center justify-end gap-3">
           {!online && <span className="mr-auto text-[11px] text-oct-danger">{OFFLINE_NOTICE}</span>}
-          <button onClick={() => !busy && onClose()} className={btnGhost} disabled={busy}>
-            Cancel
-          </button>
-          <button
-            onClick={() => void upload()}
-            className={btnPrimary}
-            disabled={busy || !online || !pickedPath}
-          >
-            {busy ? "Uploading…" : "Upload"}
-          </button>
+          {done && !pickedPath ? (
+            <button onClick={onClose} className={btnPrimary}>
+              Done
+            </button>
+          ) : (
+            <>
+              <button onClick={() => !busy && onClose()} className={btnGhost} disabled={busy}>
+                Cancel
+              </button>
+              <button
+                onClick={() => void upload()}
+                className={btnPrimary}
+                disabled={busy || !online || !pickedPath}
+              >
+                {busy ? "Uploading…" : "Upload"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>,

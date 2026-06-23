@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use tokio::io::AsyncWriteExt;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
@@ -19,17 +19,17 @@ use crate::auth::Identity;
 use crate::db::models::{PermissionLevel, UploadFileState, UploadState};
 use crate::error::AppError;
 use crate::grpc::auth_svc::map_err;
-use crate::grpc::interceptor::{extract_credential, AuthInterceptor};
+use crate::grpc::interceptor::{AuthInterceptor, extract_credential};
 use crate::grpc::proto::upload as pb;
 use crate::services::archive::ArchiveKind;
 use crate::services::{
-    can_see, tag, ChunkAck as SvcChunkAck, ChunkInit as SvcChunkInit, FileInit as SvcFileInit,
-    IngestService, UploadEvent as SvcUploadEvent, UploadFileView as SvcUploadFileView, UploadHub,
-    UploadSummary as SvcUploadSummary, UploadView as SvcUploadView, UploadsService,
+    ChunkAck as SvcChunkAck, ChunkInit as SvcChunkInit, FileInit as SvcFileInit, IngestService,
+    UploadEvent as SvcUploadEvent, UploadFileView as SvcUploadFileView, UploadHub,
+    UploadSummary as SvcUploadSummary, UploadView as SvcUploadView, UploadsService, can_see, tag,
 };
 
-/// Hard cap on a streamed upload: 500 MiB (matches the REST `DefaultBodyLimit`).
-const MAX_UPLOAD_BYTES: usize = 500 * 1024 * 1024;
+/// Hard cap on a streamed upload: 5 GiB (matches the REST `DefaultBodyLimit`).
+const MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct UploadServer {
@@ -66,9 +66,7 @@ impl pb::upload_service_server::UploadService for UploadServer {
         let cred = extract_credential(req.metadata())
             .ok_or_else(|| Status::unauthenticated("missing Authorization metadata"))?;
         let caller: Identity = self.interceptor.resolve_credential(cred).await?;
-        caller
-            .require(PermissionLevel::Manager)
-            .map_err(map_err)?;
+        caller.require(PermissionLevel::Manager).map_err(map_err)?;
 
         let ingest = self
             .ingest
@@ -87,9 +85,7 @@ impl pb::upload_service_server::UploadService for UploadServer {
                 (info.filename, info.cover, info.cover_filename)
             }
             _ => {
-                return Err(Status::invalid_argument(
-                    "first message must be UploadInfo",
-                ));
+                return Err(Status::invalid_argument("first message must be UploadInfo"));
             }
         };
         if filename.trim().is_empty() {
@@ -200,7 +196,13 @@ impl pb::upload_service_server::UploadService for UploadServer {
         let r = req.into_inner();
         let id = parse_uuid(&r.upload_id)?;
         let ack = svc
-            .put_chunk(&caller, id, r.file_index as i32, r.chunk_index as i32, &r.data)
+            .put_chunk(
+                &caller,
+                id,
+                r.file_index as i32,
+                r.chunk_index as i32,
+                &r.data,
+            )
             .await
             .map_err(map_err)?;
         Ok(Response::new(ack_to_pb(ack)))
@@ -229,14 +231,14 @@ impl pb::upload_service_server::UploadService for UploadServer {
         } else {
             Some(parse_uuid(&r.user_id)?)
         };
-        let state = if r.state.is_empty() {
-            None
-        } else {
-            Some(
-                UploadState::parse(&r.state)
-                    .ok_or_else(|| Status::invalid_argument(format!("invalid state: {}", r.state)))?,
-            )
-        };
+        let state =
+            if r.state.is_empty() {
+                None
+            } else {
+                Some(UploadState::parse(&r.state).ok_or_else(|| {
+                    Status::invalid_argument(format!("invalid state: {}", r.state))
+                })?)
+            };
         let limit = if r.limit <= 0 { 50 } else { r.limit };
         let rows = svc
             .list(&caller, user, state, limit, r.offset)
@@ -258,8 +260,7 @@ impl pb::upload_service_server::UploadService for UploadServer {
         Ok(Response::new(view_to_pb(view)))
     }
 
-    type StreamUploadsStream =
-        Pin<Box<dyn Stream<Item = Result<pb::UploadEvent, Status>> + Send>>;
+    type StreamUploadsStream = Pin<Box<dyn Stream<Item = Result<pb::UploadEvent, Status>> + Send>>;
 
     async fn stream_uploads(
         &self,

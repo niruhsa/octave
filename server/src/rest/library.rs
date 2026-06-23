@@ -516,8 +516,6 @@ async fn serve_album_cover(
     Path(album_id): Path<Uuid>,
     req: Request<Body>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>), ApiError> {
-    use axum::http::header::{CONTENT_TYPE, HeaderValue};
-
     let caller = id(&req)?;
     let album = state.library.get_album(&caller, album_id).await?;
 
@@ -547,24 +545,13 @@ async fn serve_album_cover(
         )));
     }
 
-    let bytes = tokio::fs::read(&cover_path).await
-        .map_err(|e| crate::error::AppError::Io(e))?;
-
-    let content_type = match cover_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        _ => "image/jpeg",
+    // Serve the optimized (downscaled) variant, generating it on demand for a
+    // not-yet-optimized cover. Falls back to the original on any failure.
+    let serve_path = match &state.optimizer {
+        Some(o) => o.ensure_optimized(&crate::services::ImageOptimizer::album_key(album_id), &cover_path).await,
+        None => cover_path,
     };
-
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
-    Ok((axum::http::StatusCode::OK, headers, bytes))
+    image_file_response(&serve_path).await
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +615,8 @@ async fn upload_album_cover(
 ) -> Result<Json<AlbumDto>, ApiError> {
     let (caller, image) = read_image_body(req).await?;
     let artwork = require_artwork(&state)?;
-    artwork.set_cover_from_bytes(&caller, album_id, &image).await?;
+    let cover_path = artwork.set_cover_from_bytes(&caller, album_id, &image).await?;
+    warm_optimized(&state, crate::services::ImageOptimizer::album_key(album_id), cover_path);
     let album = state.library.get_album(&caller, album_id).await?;
     Ok(Json(album_dto(album)))
 }
@@ -641,21 +629,20 @@ async fn upload_artist_image(
 ) -> Result<Json<ArtistDto>, ApiError> {
     let (caller, image) = read_image_body(req).await?;
     let artwork = require_artwork(&state)?;
-    artwork
+    let image_path = artwork
         .set_artist_image_from_bytes(&caller, artist_id, &image)
         .await?;
+    warm_optimized(&state, crate::services::ImageOptimizer::artist_key(artist_id), image_path);
     let artist = state.library.get_artist(&caller, artist_id).await?;
     Ok(Json(artist_dto(artist)))
 }
 
-/// `GET /artists/:id/image` — serve the artist's cached image, or 404.
+/// `GET /artists/:id/image` — serve the artist's cached (optimized) image, or 404.
 async fn serve_artist_image(
     State(state): State<RestState>,
     Path(artist_id): Path<Uuid>,
     req: Request<Body>,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>), ApiError> {
-    use axum::http::header::{CONTENT_TYPE, HeaderValue};
-
     let caller = id(&req)?;
     let artist = state.library.get_artist(&caller, artist_id).await?;
 
@@ -673,10 +660,21 @@ async fn serve_artist_image(
         )));
     }
 
-    let bytes = tokio::fs::read(&image_path)
-        .await
-        .map_err(crate::error::AppError::Io)?;
-    let content_type = match image_path
+    let serve_path = match &state.optimizer {
+        Some(o) => o.ensure_optimized(&crate::services::ImageOptimizer::artist_key(artist_id), &image_path).await,
+        None => image_path,
+    };
+    image_file_response(&serve_path).await
+}
+
+/// Read `path` and build a 200 image response, deriving the content-type from
+/// the file extension. Shared by the cover + artist serve handlers.
+async fn image_file_response(
+    path: &std::path::Path,
+) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>), ApiError> {
+    use axum::http::header::{CONTENT_TYPE, HeaderValue};
+    let bytes = tokio::fs::read(path).await.map_err(crate::error::AppError::Io)?;
+    let content_type = match path
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
@@ -690,6 +688,17 @@ async fn serve_artist_image(
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
     Ok((axum::http::StatusCode::OK, headers, bytes))
+}
+
+/// Warm the optimized cache for a just-uploaded image, in the background so the
+/// upload response returns immediately. Best-effort: if it loses the race the
+/// next serve generates it on demand anyway.
+fn warm_optimized(state: &RestState, key: String, source: String) {
+    if let Some(opt) = state.optimizer.clone() {
+        tokio::spawn(async move {
+            let _ = opt.optimize_file(&key, std::path::Path::new(&source)).await;
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
