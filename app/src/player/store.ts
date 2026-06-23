@@ -37,6 +37,8 @@ export type PlayerState = {
   // actions
   playTrack: (track: MergedTrack, queue?: MergedTrack[]) => void;
   playQueue: (tracks: MergedTrack[], startIndex?: number) => void;
+  /** Play the existing queue at `index` (the now-playing queue list taps). */
+  playAt: (index: number) => void;
   togglePlay: () => void;
   next: () => void;
   prev: () => void;
@@ -76,6 +78,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const playIndex = shuffle ? 0 : Math.max(0, Math.min(startIndex, q.length - 1));
     set({ queue: q, error: null });
     loadAndPlay(get, set, playIndex);
+  },
+
+  playAt: (index) => {
+    const { queue } = get();
+    if (index < 0 || index >= queue.length) return;
+    set({ error: null });
+    loadAndPlay(get, set, index);
   },
 
   togglePlay: () => {

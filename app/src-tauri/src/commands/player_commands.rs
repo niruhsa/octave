@@ -7,7 +7,7 @@
 //! `__cmd__player_media_url` shim it generates.
 
 use crate::error::AppResult;
-use crate::player::server::{MediaServer, media_url};
+use crate::player::server::{MediaServer, action_base_url, cover_url, media_url};
 
 /// Return the webview-loadable URL for a track id. It targets the in-app
 /// loopback HTTP server (see `player::server`), which streams a local file or
@@ -18,4 +18,24 @@ pub async fn player_media_url(
     track_id: String,
 ) -> AppResult<String> {
     Ok(media_url(media.port, &media.token, &track_id))
+}
+
+/// Return the loopback URL for an album's cover art. Used by the native
+/// media-session notification (Android), which fetches the bitmap over real
+/// HTTP — it can't reach the webview's `cover://` scheme.
+#[tauri::command]
+pub async fn player_cover_url(
+    media: tauri::State<'_, MediaServer>,
+    album_id: String,
+) -> AppResult<String> {
+    Ok(cover_url(media.port, &media.token, &album_id))
+}
+
+/// Base loopback URL the native media notification posts transport actions to.
+/// The frontend hands this to the native side (via `media_session_update`).
+#[tauri::command]
+pub async fn player_action_url_base(
+    media: tauri::State<'_, MediaServer>,
+) -> AppResult<String> {
+    Ok(action_base_url(media.port, &media.token))
 }

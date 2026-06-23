@@ -307,6 +307,74 @@ export const playlistReorderTrack = (
 export const playerMediaUrl = (trackId: string) =>
   invoke<string>("player_media_url", { trackId });
 
+/** Loopback URL for an album's cover art (fetchable by native code). */
+export const playerCoverUrl = (albumId: string) =>
+  invoke<string>("player_cover_url", { albumId });
+
+/** Loopback base the native notification posts transport presses to. */
+export const playerActionUrlBase = () =>
+  invoke<string>("player_action_url_base");
+
+// ---------------------------------------------------------------------------
+// native media session (Android system notification + lock screen)
+//
+// A bare WebView doesn't surface the Web Media Session API to Android's system
+// notification, so the native side (Kotlin `MediaSessionPlugin` + a foreground
+// service) owns a MediaSession + MediaStyle notification. The frontend pushes
+// now-playing state via these commands and receives transport-button presses
+// via `onMediaSessionAction`. All no-ops on desktop (handle never bound).
+// ---------------------------------------------------------------------------
+
+export type MediaInfo = {
+  title: string;
+  artist: string;
+  album: string;
+  /** Loopback cover URL (`playerCoverUrl`) or null when art is unknown. */
+  artworkUrl: string | null;
+  /** Loopback base (`playerActionUrlBase`) for native transport presses. */
+  actionBaseUrl: string;
+  durationMs: number;
+  positionMs: number;
+  playing: boolean;
+};
+
+export type PlaybackInfo = {
+  positionMs: number;
+  durationMs: number;
+  playing: boolean;
+};
+
+/** Full now-playing push (track change / metadata). */
+export const mediaSessionUpdate = (info: MediaInfo) =>
+  invoke<void>("media_session_update", { info });
+
+/** Lightweight play/pause + position push. */
+export const mediaSessionSetPlayback = (info: PlaybackInfo) =>
+  invoke<void>("media_session_set_playback", { info });
+
+/** Tear down the native session + notification. */
+export const mediaSessionClear = () => invoke<void>("media_session_clear");
+
+export type MediaSessionAction = {
+  action: "play" | "pause" | "playpause" | "next" | "prev" | "stop" | "seek";
+  /** Present for `seek` — target position in ms. */
+  positionMs?: number | null;
+};
+
+/**
+ * Subscribe to native transport-button presses (notification / lock screen /
+ * Bluetooth / headset). The native side posts these to the in-app loopback
+ * server, which re-emits them as the `media-session-action` Tauri event (the
+ * plugin event channel is ACL-gated, so we use a normal event). Returns an
+ * unlisten fn.
+ */
+export async function onMediaSessionAction(
+  cb: (a: MediaSessionAction) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<MediaSessionAction>("media-session-action", (e) => cb(e.payload));
+}
+
 // ---------------------------------------------------------------------------
 // sync engine (Phase 5)
 //

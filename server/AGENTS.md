@@ -44,6 +44,9 @@ Permission levels (each inherits the level below):
 - `SECRET_KEY` — pre-shared auth key (runtime-changeable). **Required.**
 - `DATABASE_URL` — PostgreSQL connection. **Required from Phase 2 onward.**
 - `GRPC_ADDR` — gRPC bind address. Default `0.0.0.0:50051`.
+- `GRPC_TLS` — `1`/`true` to serve gRPC over TLS. Default off (plaintext). When on, `GRPC_TLS_CERT` + `GRPC_TLS_KEY` are required (a missing one is a hard config error — TLS never silently degrades). Clients must then connect over an `https://` gRPC URL.
+- `GRPC_TLS_CERT` — PEM certificate (chain) path. Path-typed. Required when `GRPC_TLS` is on.
+- `GRPC_TLS_KEY` — PEM private key path. Path-typed. Required when `GRPC_TLS` is on.
 - `REST_ADDR` — REST bind address. Default `0.0.0.0:8080`.
 - `ENABLE_ADMIN_UI` — `1`/`true` to start the optional admin UI.
 - `LIBRARY_PATH` — organised library root. Path-typed (see below).
@@ -62,7 +65,7 @@ process environment from it. Search order:
 4. None — process env is used as-is.
 
 The directory containing the loaded `.env` becomes the **config anchor**.
-All path-typed env vars (`LIBRARY_PATH`, `INGEST_PATH`, `ARTWORK_PATH`) resolve relative
+All path-typed env vars (`LIBRARY_PATH`, `INGEST_PATH`, `ARTWORK_PATH`, `GRPC_TLS_CERT`, `GRPC_TLS_KEY`) resolve relative
 to that anchor when not absolute, so the server behaves the same
 regardless of which directory it is launched from. Copy [`.env.example`](./.env.example)
 to `.env` to get started; `.env` is gitignored.
@@ -93,6 +96,9 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Optional gRPC TLS (+ HTTP/2-over-ALPN compliance).** [`grpc::serve`](./src/grpc/mod.rs) presents a TLS identity when `GRPC_TLS` is set (tonic `tls` feature; `server_tls_config` → `ServerTlsConfig::new().identity(Identity::from_pem(cert, key))`). [`config.rs`](./src/config.rs) adds `GrpcTlsConfig { cert_path, key_path }` (paths only — key bytes never touch `Debug`/logs), loaded from `GRPC_TLS` + `GRPC_TLS_CERT`/`GRPC_TLS_KEY` (both required when enabled — missing → hard config error, no silent plaintext fallback). PEM files are read at startup so a bad path fails fast. Off by default. The client needs no change: tonic auto-enables TLS (system roots, `tls-roots`) for an `https://` gRPC URL.
+  - **gRPC-over-TLS contract is satisfied by tonic** and locked in by a test ([`grpc::tls_tests`](./src/grpc/mod.rs)): TLS + HTTP/2 (tonic is h2-only), **`h2` advertised over ALPN** (tonic's `ServerTlsConfig` pushes `h2`; verified because the tonic *client* refuses a non-`h2` ALPN), and **`application/grpc`(`+proto`)** content-type (tonic's `GRPC_CONTENT_TYPE`/prost codec). The test does a real `grpc.health.v1.Health/Check` over TLS against a self-signed loopback cert ([`tests/fixtures/tls`](./tests/fixtures/tls)) — its success proves all three at once. **84 lib tests pass.**
+
 **Phases 0–7 complete (Scaffold, Persistence & Schema, Auth & Authorization, Library Management CRUD, Streaming, Playlists, Uploads & Ingest, Metadata & Artwork).**
 
 **Uploads v2 — DB-backed, session-oriented, per-chunk-verified uploads with reports + live broadcast.**

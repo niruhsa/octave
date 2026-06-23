@@ -9,8 +9,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net
 # Wrap a broadcast receiver as a Stream for the gRPC server-streaming uploads RPC.
 tokio-stream = { version = "0.1", features = ["sync"] }
 
-# gRPC (primary transport)
-tonic = "0.12"
+# gRPC (primary transport). `tls` enables optional server-side TLS (GRPC_TLS).
+tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
 tonic-health = "0.12"
 

@@ -10,6 +10,9 @@ use std::time::Duration;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tonic_health::pb::health_client::HealthClient;
+use tonic_health::pb::HealthCheckRequest;
 
 use super::proto::auth::auth_service_client::AuthServiceClient;
 use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
@@ -58,6 +61,46 @@ impl GrpcClient {
             .await
             .map_err(|e| AppError::Transport(format!("gRPC connect: {e}")))?;
         Ok(Self { channel })
+    }
+
+    /// gRPC liveness probe for the connectivity UI / online flag.
+    ///
+    /// Uses the standard gRPC health-checking protocol
+    /// (`grpc.health.v1.Health/Check` on the overall `""` service, which the
+    /// server marks `SERVING`). gRPC is "up" **only** when the Check returns
+    /// `SERVING` — i.e. the real service answered. A bare connect (TCP/HTTP2
+    /// handshake) isn't enough: a reverse proxy / load balancer accepts the
+    /// connection even when its backend is down, which is what made gRPC
+    /// falsely read online while REST's `/health` correctly failed. Any
+    /// error — connect refused/timeout, `Unimplemented`, a non-gRPC responder,
+    /// or a non-`SERVING` status — counts as down.
+    ///
+    /// Short + hard-capped: this runs ~once a second, so connect and the Check
+    /// each get a tight budget and the whole probe is wrapped in an outer 4 s
+    /// timeout so a hung/black-holed connection can't keep it alive.
+    pub async fn probe(config: &ServerConfig) -> bool {
+        let fut = async {
+            let endpoint = match Endpoint::from_shared(config.grpc_endpoint().to_string()) {
+                Ok(e) => e
+                    .connect_timeout(Duration::from_secs(3))
+                    .timeout(Duration::from_secs(3))
+                    .tcp_nodelay(true),
+                Err(_) => return false,
+            };
+            let channel = match endpoint.connect().await {
+                Ok(c) => c,
+                Err(_) => return false,
+            };
+            // `""` = overall server health per the gRPC health spec.
+            let req = HealthCheckRequest { service: String::new() };
+            match HealthClient::new(channel).check(req).await {
+                Ok(resp) => resp.into_inner().status == ServingStatus::Serving as i32,
+                Err(_) => false,
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(4), fut)
+            .await
+            .unwrap_or(false)
     }
 
     fn client(&self) -> AuthServiceClient<Channel> {

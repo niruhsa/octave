@@ -1,6 +1,7 @@
 /target
 .env*
 tmp
+tls
 
 ### AI Coding ###
 PLAN.md

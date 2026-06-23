@@ -15,6 +15,7 @@ pub mod db;
 pub mod downloads;
 pub mod error;
 pub mod library;
+pub mod media_session;
 pub mod player;
 pub mod playlists;
 pub mod assets;
@@ -60,6 +61,10 @@ pub fn run() {
         // background-upload progress + completion notifications.
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
+        // Native Android media notification (shade + lock screen) + transport.
+        // Binds the Kotlin `MediaSessionPlugin`; no-op on desktop. See
+        // `media_session` for why a bare WebView needs this native bridge.
+        .plugin(media_session::init())
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
         // (Playback no longer uses a custom protocol — see the loopback HTTP
@@ -188,6 +193,12 @@ pub fn run() {
             commands::playlist_commands::playlist_reorder_track,
             // playback (Phase 4)
             commands::player_commands::player_media_url,
+            commands::player_commands::player_cover_url,
+            commands::player_commands::player_action_url_base,
+            // native media session (Android notification + lock screen)
+            media_session::media_session_update,
+            media_session::media_session_set_playback,
+            media_session::media_session_clear,
             // sync engine (Phase 5)
             commands::sync_commands::sync_now,
             commands::sync_commands::sync_pending_count,

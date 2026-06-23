@@ -1,10 +1,16 @@
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "../player/store";
+import { usePlayerUi } from "../player/ui";
+import { useNowPlayingMeta } from "../player/useNowPlayingMeta";
+import { useMediaSession } from "../player/useMediaSession";
+import { useNativeMediaSession } from "../player/useNativeMediaSession";
 import { formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
 import { Thumb } from "./Cover";
 import { SavedPill } from "./SourceBadge";
+import NowPlaying from "./NowPlaying";
 import {
+  ChevronDownIcon,
   NextIcon,
   PauseIcon,
   PlayIcon,
@@ -45,35 +51,25 @@ export default function PlayerBar() {
   const setVolume = usePlayerStore((s) => s.setVolume);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
   const cycleRepeat = usePlayerStore((s) => s.cycleRepeat);
+  const openPlayer = usePlayerUi((s) => s.open);
 
   const current = currentIndex >= 0 ? queue[currentIndex] : null;
+
+  // Best-effort artist/album names — feeds both the OS media notification and
+  // the full-screen player (deduped by React Query when both are mounted).
+  const meta = useNowPlayingMeta(current);
 
   useEffect(() => {
     if (!audioRef.current) return;
     return bind(audioRef.current);
   }, [bind]);
 
-  useEffect(() => {
-    if (!("mediaSession" in navigator) || !current) return;
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: current.title,
-      artist: "",
-      album: "",
-    });
-    navigator.mediaSession.setActionHandler("play", () => togglePlay());
-    navigator.mediaSession.setActionHandler("pause", () => togglePlay());
-    navigator.mediaSession.setActionHandler("nexttrack", () => next());
-    navigator.mediaSession.setActionHandler("previoustrack", () => prev());
-    navigator.mediaSession.setActionHandler("seekto", (d) => {
-      if (typeof d.seekTime === "number") seekTo(d.seekTime);
-    });
-  }, [current, togglePlay, next, prev, seekTo]);
-
-  useEffect(() => {
-    if ("mediaSession" in navigator) {
-      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-    }
-  }, [isPlaying]);
+  // Drive the OS media controls from the shared player state. `useMediaSession`
+  // is the Web Media Session API (desktop OS integration); `useNativeMediaSession`
+  // drives the native Android system notification + lock-screen controls (a bare
+  // WebView doesn't surface the web API there).
+  useMediaSession(current, meta);
+  useNativeMediaSession(current, meta);
 
   const dur = durationSec || (current ? current.duration_ms / 1000 : 0);
   const empty = queue.length === 0 && !current;
@@ -106,7 +102,11 @@ export default function PlayerBar() {
       {/* ───────── desktop / wide bar ───────── */}
       <div className="hidden h-[90px] grid-cols-[1fr_auto_1fr] items-center gap-6 px-5 md:grid">
         {/* now-playing */}
-        <div className="flex min-w-0 items-center gap-3">
+        <button
+          onClick={openPlayer}
+          title="Open player"
+          className="group flex min-w-0 items-center gap-3 text-left"
+        >
           <Thumb album={current ? { id: current.album_id } : null} size={52} tryCover />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -114,10 +114,13 @@ export default function PlayerBar() {
               {current?.downloaded && <SavedPill />}
             </div>
             <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
-              {current ? qualityLabel(current) : ""}
+              {meta.artistName ?? (current ? qualityLabel(current) : "")}
             </div>
           </div>
-        </div>
+          <span className="text-oct-faint opacity-0 transition-opacity group-hover:opacity-100">
+            <ChevronDownIcon size={15} className="rotate-180" />
+          </span>
+        </button>
 
         {/* transport + progress */}
         <div className="flex w-[440px] flex-col items-center gap-2">
@@ -202,16 +205,22 @@ export default function PlayerBar() {
 
       {/* ───────── mobile mini-player ───────── */}
       <div className="flex items-center gap-3 px-3.5 py-2 md:hidden">
-        <Thumb album={current ? { id: current.album_id } : null} size={44} tryCover />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-medium">{current?.title ?? "—"}</span>
-            {current?.downloaded && <SavedPill />}
+        <button
+          onClick={openPlayer}
+          title="Open player"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <Thumb album={current ? { id: current.album_id } : null} size={44} tryCover />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-[13px] font-medium">{current?.title ?? "—"}</span>
+              {current?.downloaded && <SavedPill />}
+            </div>
+            <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
+              {meta.artistName ?? (current ? qualityLabel(current) : "")}
+            </div>
           </div>
-          <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
-            {current ? qualityLabel(current) : ""}
-          </div>
-        </div>
+        </button>
         <button onClick={prev} title="Previous" className="text-oct-text">
           <PrevIcon size={18} />
         </button>
@@ -228,6 +237,8 @@ export default function PlayerBar() {
       </div>
     </div>
       )}
+      {/* Full-screen player (design B) — overlays the app when expanded. */}
+      <NowPlaying />
     </>
   );
 }

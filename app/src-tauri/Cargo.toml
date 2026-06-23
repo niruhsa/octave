@@ -40,6 +40,10 @@ walkdir = "2"
 
 # Transport: gRPC primary, REST fallback (mirrors server).
 tonic = { version = "0.12", features = ["transport", "tls", "tls-roots"] }
+# Standard gRPC health-checking client (`grpc.health.v1.Health`) — the
+# connectivity probe calls `Check` so "gRPC online" means the service really
+# answered, not just that a socket opened. The server already serves it.
+tonic-health = "0.12"
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "stream", "multipart"] }
 futures-util = "0.3"

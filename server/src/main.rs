@@ -114,6 +114,7 @@ async fn main() -> Result<()> {
 
     let grpc_task = tokio::spawn(grpc::serve(
         config.grpc_addr,
+        config.grpc_tls.clone(),
         auth.clone(),
         library,
         scan,

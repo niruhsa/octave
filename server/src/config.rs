@@ -30,6 +30,9 @@ use crate::error::{AppError, Result};
 pub struct Config {
     /// Address the gRPC server binds to (primary transport).
     pub grpc_addr: SocketAddr,
+    /// Optional gRPC TLS. `Some` when `GRPC_TLS` is enabled; the server then
+    /// presents this identity to clients (which must connect over `https`).
+    pub grpc_tls: Option<GrpcTlsConfig>,
     /// Address the REST fallback binds to.
     pub rest_addr: SocketAddr,
     /// Pre-shared secret key for the `SECRET_KEY` auth mechanism.
@@ -59,6 +62,16 @@ pub struct Config {
     pub config_anchor: PathBuf,
 }
 
+/// PEM file paths for gRPC TLS. Paths only — never the key bytes, which must
+/// not end up in `Debug` output or logs.
+#[derive(Debug, Clone)]
+pub struct GrpcTlsConfig {
+    /// PEM-encoded certificate (chain). Absolute (resolved against the anchor).
+    pub cert_path: PathBuf,
+    /// PEM-encoded private key. Absolute (resolved against the anchor).
+    pub key_path: PathBuf,
+}
+
 impl Config {
     /// Load configuration from environment variables, seeding from `.env`
     /// if one is found (see module docs for the search order).
@@ -66,6 +79,7 @@ impl Config {
         let anchor = load_dotenv_and_anchor();
 
         let grpc_addr = parse_addr("GRPC_ADDR", "0.0.0.0:50051")?;
+        let grpc_tls = load_grpc_tls(&anchor)?;
         let rest_addr = parse_addr("REST_ADDR", "0.0.0.0:8080")?;
 
         let secret_key = env::var("SECRET_KEY")
@@ -99,6 +113,7 @@ impl Config {
 
         Ok(Self {
             grpc_addr,
+            grpc_tls,
             rest_addr,
             secret_key,
             enable_admin_ui,
@@ -181,6 +196,26 @@ fn env_flag(var: &str) -> bool {
         .ok()
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+/// Optional gRPC TLS, enabled by the `GRPC_TLS` flag. When on, `GRPC_TLS_CERT`
+/// and `GRPC_TLS_KEY` (PEM file paths, resolved against the config anchor) are
+/// both required — a missing one is a hard config error so TLS never silently
+/// falls back to plaintext.
+fn load_grpc_tls(anchor: &Path) -> Result<Option<GrpcTlsConfig>> {
+    if !env_flag("GRPC_TLS") {
+        return Ok(None);
+    }
+    let cert = env::var("GRPC_TLS_CERT").map_err(|_| {
+        AppError::Config("GRPC_TLS is enabled but GRPC_TLS_CERT (cert PEM path) is not set".into())
+    })?;
+    let key = env::var("GRPC_TLS_KEY").map_err(|_| {
+        AppError::Config("GRPC_TLS is enabled but GRPC_TLS_KEY (key PEM path) is not set".into())
+    })?;
+    Ok(Some(GrpcTlsConfig {
+        cert_path: resolve_path(anchor, &cert),
+        key_path: resolve_path(anchor, &key),
+    }))
 }
 
 fn parse_addr(var: &str, default: &str) -> Result<SocketAddr> {

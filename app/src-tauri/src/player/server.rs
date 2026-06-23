@@ -42,12 +42,12 @@ use std::sync::Arc;
 use axum::{
     Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
@@ -72,12 +72,64 @@ struct ServerState {
 pub fn router(app: tauri::AppHandle, token: Arc<str>) -> Router {
     Router::new()
         .route("/s/:token/:id", get(serve).head(serve))
+        .route("/cover/:token/:id", get(serve_cover).head(serve_cover))
+        .route("/action/:token/:action", get(serve_action))
         .with_state(ServerState { app, token })
 }
 
 /// The loopback URL the webview's `<audio>` element loads for `track_id`.
 pub fn media_url(port: u16, token: &str, track_id: &str) -> String {
     format!("http://127.0.0.1:{port}/s/{token}/{}", encode_segment(track_id))
+}
+
+/// The loopback URL native code fetches album art from. The webview uses the
+/// `cover://` scheme (see `assets`), but the Android media-notification service
+/// is native Kotlin and can only reach a real HTTP origin — so it loads the
+/// cover from this loopback route, which resolves it the same way.
+pub fn cover_url(port: u16, token: &str, album_id: &str) -> String {
+    format!("http://127.0.0.1:{port}/cover/{token}/{}", encode_segment(album_id))
+}
+
+/// Base URL the native media-session code hits to deliver a transport-button
+/// press back to the app (`<base>/<action>` → a `media-session-action` Tauri
+/// event the frontend listens for). Native Kotlin can't emit a Tauri event or
+/// reach the plugin event channel (ACL), so it routes through this loopback
+/// route instead.
+pub fn action_base_url(port: u16, token: &str) -> String {
+    format!("http://127.0.0.1:{port}/action/{token}")
+}
+
+#[derive(serde::Deserialize)]
+struct ActionQuery {
+    /// Target position (ms) for the `seek` action.
+    pos: Option<i64>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct MediaActionEvent {
+    action: String,
+    position_ms: Option<i64>,
+}
+
+/// Receive a transport action from the native media notification / lock screen
+/// and re-broadcast it as a `media-session-action` Tauri event for the player
+/// store to act on.
+async fn serve_action(
+    State(st): State<ServerState>,
+    Path((token, action)): Path<(String, String)>,
+    Query(q): Query<ActionQuery>,
+) -> Response {
+    if token.as_bytes() != st.token.as_bytes() {
+        return (StatusCode::FORBIDDEN, "bad token").into_response();
+    }
+    let _ = st.app.emit(
+        "media-session-action",
+        MediaActionEvent {
+            action,
+            position_ms: q.pos,
+        },
+    );
+    (StatusCode::OK, "ok").into_response()
 }
 
 async fn serve(
@@ -128,6 +180,80 @@ async fn serve(
                 .into_response()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cover art (for the native media-session notification)
+// ---------------------------------------------------------------------------
+
+/// Serve album art over the loopback origin: a downloaded local cover, else the
+/// auth-proxied server cover (`GET /albums/{id}/cover`). Mirrors `assets`'s
+/// `cover://` resolution but as real HTTP so native Kotlin can fetch the bitmap.
+async fn serve_cover(
+    State(st): State<ServerState>,
+    Path((token, id)): Path<(String, String)>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response {
+    if token.as_bytes() != st.token.as_bytes() {
+        return (StatusCode::FORBIDDEN, "bad token").into_response();
+    }
+    let Some(state) = st.app.try_state::<AppStateHandle>() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "starting up").into_response();
+    };
+
+    // 1. Local downloaded cover — serve directly (works offline).
+    if let Ok(Some(row)) = repo::get_album_art(&state.pool, &id).await {
+        if tokio::fs::metadata(&row.local_cover_path).await.is_ok() {
+            return serve_local(&row.local_cover_path, &headers, &method).await;
+        }
+    }
+
+    // 2. Auth-proxied server cover.
+    let auth = state.auth.read().await.clone();
+    let Some(auth) = auth else {
+        return (StatusCode::NOT_FOUND, "no cover").into_response();
+    };
+    let cred = match auth.credential().await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::NOT_FOUND, "no cover").into_response(),
+    };
+    match proxy_cover(&auth.server_config(), &cred, &id).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::warn!(err = %e, album = %id, "cover proxy failed");
+            (StatusCode::NOT_FOUND, "no cover").into_response()
+        }
+    }
+}
+
+async fn proxy_cover(
+    config: &ServerConfig,
+    cred: &Credential,
+    album_id: &str,
+) -> AppResult<Response> {
+    let client = proxy_client()?;
+    let url = format!("{}/albums/{}/cover", config.rest_root(), album_id);
+    let resp = client
+        .get(&url)
+        .header(header::AUTHORIZATION, auth_header_value(cred)?)
+        .send()
+        .await
+        .map_err(|e| AppError::Transport(format!("cover proxy send: {e}")))?;
+    if !resp.status().is_success() {
+        return Ok((StatusCode::NOT_FOUND, "no cover").into_response());
+    }
+    let mut builder = Response::builder().status(StatusCode::OK);
+    if let Some(v) = resp.headers().get(header::CONTENT_TYPE) {
+        builder = builder.header(header::CONTENT_TYPE, v.clone());
+    }
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| AppError::Transport(format!("cover proxy body: {e}")))?;
+    builder
+        .body(Body::from(body))
+        .map_err(|e| AppError::Internal(format!("build cover response: {e}")))
 }
 
 // ---------------------------------------------------------------------------

@@ -191,15 +191,16 @@ impl ServerClient {
     }
 
     /// Probe **both** transports so the UI can show which are actually working,
-    /// not just a single online bit. REST is the cheap `/health` GET; gRPC is
-    /// the same channel handshake the per-call fallback uses (`try_grpc`), so
-    /// this reports gRPC up exactly when real gRPC calls would succeed. Both
-    /// probes run concurrently.
+    /// not just a single online bit. REST is the cheap `/health` GET; gRPC is a
+    /// real unary call ([`GrpcClient::probe`]) rather than a bare connect —
+    /// otherwise a reverse proxy / LB that accepts the connection makes gRPC
+    /// read "online" while its backend is down (and the app then thinks the
+    /// server is reachable). Both probes run concurrently.
     pub async fn transport_health(&self) -> TransportHealth {
-        let (rest, grpc) = tokio::join!(self.rest.health(), GrpcClient::connect(&self.config));
+        let (rest, grpc) = tokio::join!(self.rest.health(), GrpcClient::probe(&self.config));
         TransportHealth {
             rest: rest.unwrap_or(false),
-            grpc: grpc.is_ok(),
+            grpc,
         }
     }
 
