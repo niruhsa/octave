@@ -109,7 +109,11 @@ pub async fn auth_login(
     username: String,
     password: String,
 ) -> AppResult<AuthSession> {
-    with_manager(&state, |m| async move { m.login(&username, &password).await }).await
+    with_manager(
+        &state,
+        |m| async move { m.login(&username, &password).await },
+    )
+    .await
 }
 
 /// Install a `SECRET_KEY` credential. Verified server-side via `WhoAmI`
@@ -119,7 +123,11 @@ pub async fn auth_set_secret_key(
     state: State<'_, AppStateHandle>,
     secret_key: String,
 ) -> AppResult<AuthSession> {
-    with_manager(&state, |m| async move { m.set_secret_key(&secret_key).await }).await
+    with_manager(
+        &state,
+        |m| async move { m.set_secret_key(&secret_key).await },
+    )
+    .await
 }
 
 /// Resolve the current credential against the server. Returns the live tier.
@@ -171,9 +179,7 @@ pub async fn auth_session(
     // derived URL keeps tracking the REST URL (legacy entries lack the flag →
     // treated as derived).
     let config = match stored.grpc_url.as_deref().filter(|g| !g.is_empty()) {
-        Some(grpc) if stored.grpc_explicit.unwrap_or(false) => {
-            ServerConfig::new(rest_url, grpc)?
-        }
+        Some(grpc) if stored.grpc_explicit.unwrap_or(false) => ServerConfig::new(rest_url, grpc)?,
         _ => ServerConfig::from_rest_only(rest_url)?,
     };
     let server = Arc::new(ServerClient::new(config)?);
@@ -263,7 +269,11 @@ pub async fn auth_delete_user(
     state: State<'_, AppStateHandle>,
     target_user_id: String,
 ) -> AppResult<()> {
-    with_manager(&state, |m| async move { m.delete_user(&target_user_id).await }).await
+    with_manager(
+        &state,
+        |m| async move { m.delete_user(&target_user_id).await },
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

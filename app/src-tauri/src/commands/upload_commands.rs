@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_fs::{FilePath, FsExt};
@@ -40,13 +41,20 @@ const AUDIO_EXTS: &[&str] = &[
     "flac", "mp3", "ogg", "opus", "m4a", "wav", "aiff", "ape", "wv", "aac", "mp4",
 ];
 
-/// Chunk size for resumable uploads (64 KiB). Each chunk carries its own hash so
+/// Chunk size for resumable uploads (128 KiB). Each chunk carries its own hash so
 /// the server can verify it on arrival.
-const CHUNK_SIZE: u64 = 64 * 1024;
+const CHUNK_SIZE: u64 = 512 * 1024;
 
 /// How many times to re-send a chunk the server rejects (e.g. in-transit
 /// corruption → hash mismatch) before giving up on the session.
 const CHUNK_RETRIES: u32 = 3;
+
+/// How many chunks to upload concurrently (in flight at once) within a file.
+/// The server accepts concurrent chunks safely (per-chunk verify, atomic
+/// received-count, single-finalizer election), so this just trades a little
+/// memory (`CHUNK_CONCURRENCY × CHUNK_SIZE`) for throughput on high-latency
+/// links.
+const CHUNK_CONCURRENCY: usize = 8;
 
 /// Monotonic job id source (also seeds the per-job notification id).
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -318,6 +326,16 @@ fn prepare_file(filename: String, data: &[u8]) -> UploadFileInit {
     }
 }
 
+/// Has the session already reached a terminal `completed` state? Used to tell a
+/// benign post-finalize chunk failure (lost ack + retry race) apart from a real
+/// upload failure, which matters once chunks upload concurrently.
+async fn session_completed(auth: &AuthManager, upload_id: &str) -> bool {
+    auth.get_upload(upload_id.to_string())
+        .await
+        .map(|v| v.state == "completed")
+        .unwrap_or(false)
+}
+
 /// Send one chunk, retrying a server-side rejection (corruption) a few times.
 async fn put_chunk_with_retry(
     auth: &AuthManager,
@@ -548,12 +566,13 @@ async fn run_job(
     };
     let upload_id = view.id.clone();
 
-    // Phase 3: upload missing chunks.
+    // Phase 3: upload missing chunks (up to CHUNK_CONCURRENCY in flight).
     let mut sent_total: u64 = 0; // bytes transmitted this run (drives speed)
     let mut session_received: u64 = 0;
     let mut last_notif = std::time::Instant::now();
+    let mut complete = false;
 
-    'outer: for (fi, (hint, data)) in datas.iter().enumerate() {
+    'outer: for (fi, (hint, data)) in datas.into_iter().enumerate() {
         let file_init = &files_init[fi];
         // Chunks the server already holds (resume within a session).
         let already: std::collections::HashSet<u32> = view
@@ -568,16 +587,46 @@ async fn run_job(
             })
             .unwrap_or_default();
         let mut file_received: u64 = 0;
-
+        // Account already-uploaded chunks (resume) up-front.
         for chunk in &file_init.chunks {
-            let len = chunk.end - chunk.start;
             if already.contains(&chunk.index) {
+                let len = chunk.end - chunk.start;
                 file_received += len;
                 session_received += len;
-                continue;
             }
-            let bytes = data[chunk.start as usize..chunk.end as usize].to_vec();
-            match put_chunk_with_retry(&auth, &upload_id, fi as u32, chunk.index, bytes).await {
+        }
+
+        // Upload the missing chunks concurrently. The network I/O is parallel
+        // (`buffer_unordered`); the acks are consumed sequentially in this loop,
+        // so the progress counters stay single-writer and need no locking. Each
+        // chunk future owns its inputs (so the spawned job stays `Send + 'static`):
+        // the file bytes are shared cheaply via an `Arc` and a chunk-sized copy
+        // is sliced off inside the future, keeping at most `CHUNK_CONCURRENCY`
+        // chunk buffers live at once.
+        let data = std::sync::Arc::new(data);
+        let missing: Vec<(u32, u64, u64)> = file_init
+            .chunks
+            .iter()
+            .filter(|c| !already.contains(&c.index))
+            .map(|c| (c.index, c.start, c.end))
+            .collect();
+        let mut chunks =
+            futures_util::stream::iter(missing.into_iter().map(|(index, start, end)| {
+                let auth = auth.clone();
+                let upload_id = upload_id.clone();
+                let data = data.clone();
+                let len = end - start;
+                async move {
+                    let bytes = data[start as usize..end as usize].to_vec();
+                    let res =
+                        put_chunk_with_retry(&auth, &upload_id, fi as u32, index, bytes).await;
+                    (len, res)
+                }
+            }))
+            .buffer_unordered(CHUNK_CONCURRENCY);
+
+        while let Some((len, res)) = chunks.next().await {
+            match res {
                 Ok(ack) => {
                     sent_total += len;
                     file_received += len;
@@ -613,10 +662,19 @@ async fn run_job(
                         last_notif = std::time::Instant::now();
                     }
                     if ack.upload_complete {
-                        break 'outer;
+                        complete = true;
+                        break;
                     }
                 }
                 Err(e) => {
+                    // A chunk can fail *after* the session already finalized —
+                    // e.g. a lost ack on a chunk the server did receive, then a
+                    // retry races the now-Completed session (more likely with
+                    // chunks in flight). Only fatal when the session isn't done.
+                    if complete || session_completed(&auth, &upload_id).await {
+                        complete = true;
+                        break;
+                    }
                     // Unrecoverable: cancel so the one-active-upload slot frees up.
                     errors.push(format!("{hint}: {e}"));
                     let _ = auth.cancel_upload(upload_id.clone()).await;
@@ -635,6 +693,13 @@ async fn run_job(
                     return;
                 }
             }
+        }
+        // Drop the stream to cancel any still-in-flight chunk futures. When
+        // `complete`, the server already received every chunk (that's why it
+        // finalized), so abandoning their unread acks is safe.
+        drop(chunks);
+        if complete {
+            break 'outer;
         }
     }
 
