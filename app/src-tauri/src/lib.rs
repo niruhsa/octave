@@ -177,6 +177,10 @@ pub fn run() {
             commands::library_commands::library_search_albums,
             commands::library_commands::library_list_tracks_by_album,
             commands::library_commands::library_search_tracks,
+            // metadata edit (Phase 9 — Manager+ gated server-side)
+            commands::library_commands::library_edit_track_metadata,
+            commands::library_commands::library_upload_album_cover,
+            commands::library_commands::library_upload_artist_image,
             // library delete (Phase 8+ — Manager+ gated server-side)
             commands::library_commands::library_delete_artist,
             commands::library_commands::library_delete_album,

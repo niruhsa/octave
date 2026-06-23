@@ -22,6 +22,10 @@ pub struct MergedArtist {
     pub id: String,
     pub name: String,
     pub sort_name: Option<String>,
+    /// Server-side artist image path when set (presence drives whether the UI
+    /// attempts to render the image). `None` for cache-sourced rows — the
+    /// offline cache doesn't store artist images.
+    pub image_path: Option<String>,
     /// Has at least one track by this artist been downloaded locally? The
     /// service decides how to determine that — see `service.rs`. For
     /// offline-source results it's always `true`.
@@ -68,6 +72,7 @@ impl MergedArtist {
             id: a.id,
             name: a.name,
             sort_name: a.sort_name,
+            image_path: a.image_path,
             downloaded,
         }
     }
@@ -77,6 +82,8 @@ impl MergedArtist {
             id: a.id,
             name: a.name,
             sort_name: a.sort_name,
+            // The offline cache doesn't store artist images.
+            image_path: None,
             downloaded: true,
         }
     }

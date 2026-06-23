@@ -161,6 +161,9 @@ export type MergedArtist = {
   id: string;
   name: string;
   sort_name: string | null;
+  /** Server-side artist image path when set; drives whether the UI renders
+   * the image (served via `artistImageUrl`). `null` for cache-only rows. */
+  image_path: string | null;
   downloaded: boolean;
 };
 
@@ -226,6 +229,40 @@ export type RescanReport = {
 
 /** Re-measure actual durations for all tracks. Manager+ gated. */
 export const libraryRescan = () => invoke<RescanReport>("library_rescan");
+
+/**
+ * One opt-in metadata edit for a track (Phase 9). Every field is optional;
+ * omit a field to leave it unchanged server-side. `year` is written to the
+ * file's audio tag only (not a DB column) and takes effect only when the
+ * server has tag write-back (`WRITE_TAGS`) enabled.
+ */
+export type MetadataEdit = {
+  title?: string;
+  track_no?: number;
+  disc_no?: number;
+  metadata_json?: string;
+  year?: number;
+};
+
+/**
+ * Apply a metadata edit to a track. Manager+ gated server-side. Returns the
+ * refreshed track; the change is mirrored into the offline cache for
+ * downloaded items and reconciled into the cache for everyone on next sync.
+ */
+export const libraryEditTrackMetadata = (id: string, edit: MetadataEdit) =>
+  invoke<MergedTrack>("library_edit_track_metadata", { id, edit });
+
+/**
+ * Upload a cover image (album) / image (artist) from a locally-picked file
+ * path. The Rust side reads the file natively (off the WebView) and POSTs the
+ * bytes to the server (Manager+ gated). After success, bust the cached image
+ * URL with a new `version` (see `coverUrl` / `artistImageUrl`).
+ */
+export const libraryUploadAlbumCover = (albumId: string, path: string) =>
+  invoke<void>("library_upload_album_cover", { albumId, path });
+
+export const libraryUploadArtistImage = (artistId: string, path: string) =>
+  invoke<void>("library_upload_artist_image", { artistId, path });
 
 // ---------------------------------------------------------------------------
 // playlists (Phase 7)
@@ -505,15 +542,25 @@ export async function onDownloadProgress(
   return listen<ProgressEvent>("download-progress", (e) => cb(e.payload));
 }
 
-/** Platform-correct `cover://` URL for a downloaded album cover. */
-export function coverUrl(albumId: string): string {
-  // Mirrors `player_media_url`'s platform split: Windows/Android need the
-  // `http://<scheme>.localhost` form because they don't allow custom schemes.
+// Windows/Android don't allow custom URI schemes in the WebView, so they use
+// the `http://<scheme>.localhost` form (mirrors `player_media_url`'s split).
+function coverScheme(path: string, version?: string | number): string {
   const isWinLike =
     typeof navigator !== "undefined" && /Windows|Android/i.test(navigator.userAgent);
-  return isWinLike
-    ? `http://cover.localhost/${encodeURIComponent(albumId)}`
-    : `cover://localhost/${encodeURIComponent(albumId)}`;
+  const base = isWinLike ? `http://cover.localhost/${path}` : `cover://localhost/${path}`;
+  // `?v=` busts the WebView's image cache after a re-upload; the protocol
+  // handler ignores the query string (it parses the path only).
+  return version != null ? `${base}?v=${encodeURIComponent(String(version))}` : base;
+}
+
+/** Platform-correct `cover://` URL for an album cover (local-then-server). */
+export function coverUrl(albumId: string, version?: string | number): string {
+  return coverScheme(encodeURIComponent(albumId), version);
+}
+
+/** Platform-correct URL for an artist image (server-proxied; no offline copy). */
+export function artistImageUrl(artistId: string, version?: string | number): string {
+  return coverScheme(`artist/${encodeURIComponent(artistId)}`, version);
 }
 
 // ---------------------------------------------------------------------------

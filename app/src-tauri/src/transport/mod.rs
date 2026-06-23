@@ -36,6 +36,10 @@ pub struct Artist {
     pub id: String,
     pub name: String,
     pub sort_name: Option<String>,
+    /// Server-side path to a manager-uploaded artist image, or `None`.
+    /// The client renders it via `GET /artists/:id/image` (proxied through
+    /// the `cover://` scheme); the path itself isn't used directly.
+    pub image_path: Option<String>,
 }
 
 /// Server's view of an album. `cover_path` is server-relative — not yet
@@ -301,6 +305,38 @@ pub struct RescanReport {
     pub errors: u64,
 }
 
+/// A single opt-in metadata edit for one track (Phase 9). Mirrors the
+/// server's `EditTrackMetadataRequest`: every field is optional and `None`
+/// means "leave unchanged". `skip_serializing_if` keeps the REST PATCH body
+/// to only the fields the manager actually touched.
+///
+/// `year` is written back to the file's audio tag only (it's not a track DB
+/// column) and takes effect server-side only when `WRITE_TAGS` is enabled.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MetadataEdit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_no: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disc_no: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+}
+
+impl MetadataEdit {
+    /// True when nothing would change — used to short-circuit a no-op edit.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.track_no.is_none()
+            && self.disc_no.is_none()
+            && self.metadata_json.is_none()
+            && self.year.is_none()
+    }
+}
+
 impl PermissionTier {
     /// Decode the proto enum's i32 wire value into a tier. Unknown values
     /// fall back to `User` (least privilege) on the principle that an
@@ -311,5 +347,48 @@ impl PermissionTier {
             2 => Self::Manager,
             _ => Self::User,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_edit_empty_default() {
+        assert!(MetadataEdit::default().is_empty());
+        assert!(!MetadataEdit {
+            title: Some("x".into()),
+            ..Default::default()
+        }
+        .is_empty());
+    }
+
+    #[test]
+    fn metadata_edit_serialises_only_touched_fields() {
+        // Only `title` + `track_no` set → PATCH body omits the rest, so the
+        // server reads "leave unchanged" for disc_no / metadata_json / year.
+        let edit = MetadataEdit {
+            title: Some("New Title".into()),
+            track_no: Some(3),
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::to_value(&edit).unwrap();
+        assert_eq!(v["title"], "New Title");
+        assert_eq!(v["track_no"], 3);
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("disc_no"));
+        assert!(!obj.contains_key("metadata_json"));
+        assert!(!obj.contains_key("year"));
+    }
+
+    #[test]
+    fn metadata_edit_deserialises_from_partial_frontend_payload() {
+        // The frontend sends only the fields the manager touched; absent
+        // Option fields deserialise to None.
+        let edit: MetadataEdit = serde_json::from_str(r#"{ "disc_no": 2 }"#).unwrap();
+        assert_eq!(edit.disc_no, Some(2));
+        assert!(edit.title.is_none());
+        assert!(edit.year.is_none());
     }
 }

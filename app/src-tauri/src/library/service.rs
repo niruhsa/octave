@@ -9,8 +9,10 @@ use sqlx::SqlitePool;
 
 use super::merged::{MergedAlbum, MergedArtist, MergedTrack};
 use crate::auth::AuthManager;
+use crate::cache::model as cache_model;
 use crate::cache::repo;
 use crate::error::{AppError, AppResult};
+use crate::transport::MetadataEdit;
 
 /// Which data source serviced a call. Surfaced to the UI for diagnostics
 /// (e.g. show "offline" badge when source is `Cache`).
@@ -354,6 +356,55 @@ impl<'a> LibraryService<'a> {
         Ok(LibraryView::cache(items))
     }
 
+    // ----- metadata edit (Phase 9) ---------------------------------------
+
+    /// Apply an opt-in metadata edit to a track (Manager+, enforced
+    /// server-side). The server is authoritative: the edit is pushed first,
+    /// and on success — if the track is downloaded — the change is mirrored
+    /// into the offline cache so a downloaded item reflects the edit before
+    /// the next sync reconcile (which would also pick it up via the
+    /// content-hash compare in `sync::engine`). The client-owned fields
+    /// (`local_file_path`, `downloaded_at`) are preserved.
+    ///
+    /// Requires a live server: a metadata edit cannot be queued offline (the
+    /// audit/rollback contract is server-owned), so transport failures
+    /// surface to the caller rather than falling back to the cache.
+    pub async fn edit_track_metadata(
+        &self,
+        id: &str,
+        edit: &MetadataEdit,
+    ) -> AppResult<MergedTrack> {
+        let updated = self.auth.edit_track_metadata(id, edit).await?;
+
+        // Mirror into the cache only when the track is already downloaded.
+        let local_file_path = match repo::get_track(self.pool, id).await? {
+            Some(existing) => {
+                let row = cache_model::Track {
+                    id: updated.id.clone(),
+                    album_id: updated.album_id.clone(),
+                    artist_id: updated.artist_id.clone(),
+                    title: updated.title.clone(),
+                    track_no: updated.track_no,
+                    disc_no: updated.disc_no,
+                    duration_ms: updated.duration_ms,
+                    codec: updated.codec.clone(),
+                    bitrate_kbps: updated.bitrate_kbps,
+                    file_size: updated.file_size,
+                    // Client-owned — never overwritten by a metadata edit.
+                    local_file_path: existing.local_file_path.clone(),
+                    metadata_json: updated.metadata_json.clone(),
+                    downloaded_at: existing.downloaded_at,
+                    updated_at: now_iso(),
+                };
+                repo::upsert_track(self.pool, &row).await?;
+                Some(existing.local_file_path)
+            }
+            None => None,
+        };
+
+        Ok(MergedTrack::from_server(updated, local_file_path))
+    }
+
     // ----- helpers -------------------------------------------------------
 
     /// Which of the given artist IDs have at least one cached track? Used
@@ -419,4 +470,11 @@ impl<'a> LibraryService<'a> {
 /// silently serve stale data.
 fn is_offline_signal(err: &AppError) -> bool {
     matches!(err, AppError::Transport(_) | AppError::AuthNotConfigured(_))
+}
+
+/// RFC3339 timestamp for cache `updated_at` stamps on an optimistic mirror.
+fn now_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }

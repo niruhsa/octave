@@ -10,9 +10,10 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, PermissionTier, Playlist,
-    PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track,
-    UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier,
+    Playlist, PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult,
+    Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
+    UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -459,6 +460,80 @@ impl RestClient {
         Ok(())
     }
 
+    // ----- Metadata edit (Phase 9; Manager+ gated server-side) -------------
+
+    /// `PATCH /tracks/:id/metadata` — `MetadataEdit` serialises only the
+    /// touched fields (others are omitted → "leave unchanged" server-side).
+    pub async fn edit_track_metadata(
+        &self,
+        cred: &Credential,
+        id: &str,
+        edit: &MetadataEdit,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{id}/metadata", self.base);
+        let resp = self
+            .http
+            .patch(url)
+            .header("authorization", auth_header(cred))
+            .json(edit)
+            .send()
+            .await
+            .map_err(rest_err("edit_track_metadata"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("edit_track_metadata decode"))?;
+        Ok(body.into())
+    }
+
+    // ----- Image upload (Phase 9; Manager+ gated, REST-only binary blob) ----
+
+    /// `POST /albums/:id/cover` — raw `image/*` body. Returns `()`; the caller
+    /// refreshes the album view (the cover is served via `GET .../cover`).
+    pub async fn upload_album_cover(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<()> {
+        let url = format!("{}/albums/{album_id}/cover", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(rest_err("upload_album_cover"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    /// `POST /artists/:id/image` — raw `image/*` body.
+    pub async fn upload_artist_image(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<()> {
+        let url = format!("{}/artists/{artist_id}/image", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(rest_err("upload_artist_image"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
@@ -784,10 +859,12 @@ struct ArtistJson {
     id: String,
     name: String,
     sort_name: Option<String>,
+    #[serde(default)]
+    image_path: Option<String>,
 }
 impl From<ArtistJson> for Artist {
     fn from(a: ArtistJson) -> Self {
-        Self { id: a.id, name: a.name, sort_name: a.sort_name }
+        Self { id: a.id, name: a.name, sort_name: a.sort_name, image_path: a.image_path }
     }
 }
 

@@ -57,6 +57,9 @@ pub struct Artist {
     pub id: Uuid,
     pub name: String,
     pub sort_name: Option<String>,
+    /// Path to a manager-uploaded artist image under `ARTWORK_PATH`, or
+    /// `None` when no image has been set. Served via `GET /artists/:id/image`.
+    pub image_path: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }

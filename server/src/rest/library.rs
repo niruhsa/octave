@@ -23,12 +23,13 @@ pub fn router() -> Router<RestState> {
         .route("/artists/search", get(search_artists))
         .route("/artists/:id", get(get_artist).put(update_artist).delete(delete_artist))
         .route("/artists/:id/albums", get(list_albums_by_artist))
+        .route("/artists/:id/image", get(serve_artist_image).post(upload_artist_image))
         // Albums
         .route("/albums", post(create_album))
         .route("/albums/search", get(search_albums))
         .route("/albums/:id", get(get_album).put(update_album).delete(delete_album))
         .route("/albums/:id/tracks", get(list_tracks_by_album))
-        .route("/albums/:id/cover", get(serve_album_cover))
+        .route("/albums/:id/cover", get(serve_album_cover).post(upload_album_cover))
         .route("/albums/:id/artwork", post(fetch_album_artwork))
         // Tracks
         .route("/tracks", post(create_track))
@@ -69,12 +70,14 @@ pub struct ArtistDto {
     pub id: String,
     pub name: String,
     pub sort_name: Option<String>,
+    pub image_path: Option<String>,
 }
 fn artist_dto(a: m::Artist) -> ArtistDto {
     ArtistDto {
         id: a.id.to_string(),
         name: a.name,
         sort_name: a.sort_name,
+        image_path: a.image_path,
     }
 }
 
@@ -487,11 +490,15 @@ async fn fetch_album_artwork(
     req: Request<Body>,
 ) -> Result<Json<ArtworkDto>, ApiError> {
     let caller = id(&req)?;
-    let artwork = state.artwork.as_ref().ok_or_else(|| {
-        ApiError::from(crate::error::AppError::Config(
-            "artwork fetch is disabled (set FETCH_ARTWORK)".into(),
-        ))
-    })?;
+    let artwork = state
+        .artwork
+        .as_ref()
+        .filter(|a| a.auto_fetch_enabled())
+        .ok_or_else(|| {
+            ApiError::from(crate::error::AppError::Config(
+                "artwork fetch is disabled (set FETCH_ARTWORK)".into(),
+            ))
+        })?;
     let cover = artwork.fetch_for_album(&caller, album_id).await?;
     Ok(Json(ArtworkDto {
         found: cover.is_some(),
@@ -516,10 +523,9 @@ async fn serve_album_cover(
 
     let cover_path = match album.cover_path {
         Some(p) if !p.is_empty() => std::path::PathBuf::from(&p),
-        // No cover_path set → optionally try to fetch if the artwork
-        // service is configured.
+        // No cover_path set → optionally try to fetch if auto-fetch is on.
         _ => {
-            if let Some(artwork) = &state.artwork {
+            if let Some(artwork) = state.artwork.as_ref().filter(|a| a.auto_fetch_enabled()) {
                 match artwork.fetch_for_album(&caller, album_id).await {
                     Ok(Some(new_path)) => std::path::PathBuf::from(&new_path),
                     Ok(None) => return Err(ApiError::from(crate::error::AppError::NotFound(
@@ -556,6 +562,131 @@ async fn serve_album_cover(
         _ => "image/jpeg",
     };
 
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    Ok((axum::http::StatusCode::OK, headers, bytes))
+}
+
+// ---------------------------------------------------------------------------
+// Image upload (Phase 9 metadata-editing extension; Manager+ gated)
+//
+// Raw-body upload (image/* + bytes), mirroring the REST-only cover *serving*
+// above — binary blobs go over REST, not gRPC. Album covers reuse
+// `ArtworkService::set_cover_from_bytes` (cache + audited `cover_path` update
+// + embed into track files); artist images use `set_artist_image_from_bytes`.
+// ---------------------------------------------------------------------------
+
+/// Max bytes accepted for an uploaded cover / artist image (raw body).
+const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Pull the caller + an image body off the request, validating the
+/// `Content-Type` is `image/*` and the body is non-empty + within the cap.
+async fn read_image_body(
+    req: Request<Body>,
+) -> Result<(Identity, crate::services::artwork::CoverImage), ApiError> {
+    let caller = id(&req)?;
+    let content_type = req
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if !content_type.starts_with("image/") {
+        return Err(crate::error::AppError::InvalidArgument(format!(
+            "expected an image/* Content-Type for upload, got {content_type:?}"
+        ))
+        .into());
+    }
+    let bytes = axum::body::to_bytes(req.into_body(), MAX_IMAGE_BYTES)
+        .await
+        .map_err(|_| {
+            crate::error::AppError::InvalidArgument(format!(
+                "image body too large (max {} MiB) or unreadable",
+                MAX_IMAGE_BYTES / (1024 * 1024)
+            ))
+        })?
+        .to_vec();
+    if bytes.is_empty() {
+        return Err(crate::error::AppError::InvalidArgument("empty image body".into()).into());
+    }
+    Ok((caller, crate::services::artwork::CoverImage { bytes, content_type }))
+}
+
+fn require_artwork(state: &RestState) -> Result<&crate::services::ArtworkService, ApiError> {
+    state.artwork.as_ref().ok_or_else(|| {
+        ApiError::from(crate::error::AppError::Config(
+            "artwork storage not configured (set ARTWORK_PATH)".into(),
+        ))
+    })
+}
+
+/// `POST /albums/:id/cover` — upload a cover image (raw `image/*` body).
+async fn upload_album_cover(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<AlbumDto>, ApiError> {
+    let (caller, image) = read_image_body(req).await?;
+    let artwork = require_artwork(&state)?;
+    artwork.set_cover_from_bytes(&caller, album_id, &image).await?;
+    let album = state.library.get_album(&caller, album_id).await?;
+    Ok(Json(album_dto(album)))
+}
+
+/// `POST /artists/:id/image` — upload an artist image (raw `image/*` body).
+async fn upload_artist_image(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<ArtistDto>, ApiError> {
+    let (caller, image) = read_image_body(req).await?;
+    let artwork = require_artwork(&state)?;
+    artwork
+        .set_artist_image_from_bytes(&caller, artist_id, &image)
+        .await?;
+    let artist = state.library.get_artist(&caller, artist_id).await?;
+    Ok(Json(artist_dto(artist)))
+}
+
+/// `GET /artists/:id/image` — serve the artist's cached image, or 404.
+async fn serve_artist_image(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>), ApiError> {
+    use axum::http::header::{CONTENT_TYPE, HeaderValue};
+
+    let caller = id(&req)?;
+    let artist = state.library.get_artist(&caller, artist_id).await?;
+
+    let image_path = match artist.image_path {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(&p),
+        _ => {
+            return Err(ApiError::from(crate::error::AppError::NotFound(
+                "no image available for this artist".into(),
+            )));
+        }
+    };
+    if !image_path.is_file() {
+        return Err(ApiError::from(crate::error::AppError::NotFound(
+            "artist image file not found".into(),
+        )));
+    }
+
+    let bytes = tokio::fs::read(&image_path)
+        .await
+        .map_err(crate::error::AppError::Io)?;
+    let content_type = match image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    };
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
     Ok((axum::http::StatusCode::OK, headers, bytes))

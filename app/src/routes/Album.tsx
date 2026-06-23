@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   cacheGetAlbum,
+  coverUrl,
   downloadAlbum,
   downloadDelete,
   downloadTrack,
@@ -24,10 +26,13 @@ import { offlineAttrs } from "../components/OfflineGate";
 import { SkeletonHero, SkeletonTracks } from "../components/Skeleton";
 import {
   DownloadIcon,
+  EditIcon,
   PlayIcon,
   ShuffleIcon,
   TrashIcon,
 } from "../components/icons";
+import { EditMetaButton, MetadataEditor } from "../components/MetadataEditor";
+import { ImageUploader } from "../components/ImageUploader";
 import type { MergedTrack } from "../ipc";
 
 function totalLabel(ms: number): string {
@@ -64,6 +69,23 @@ export default function Album() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const currentId = currentIndex >= 0 ? queue[currentIndex]?.id : undefined;
   const refreshStorage = useDownloadsStore((s) => s.refreshStorage);
+
+  // Metadata editor (Manager+). `null` = closed; a non-empty list opens the
+  // single (1) or batch (>1) editor.
+  const [editTracks, setEditTracks] = useState<MergedTrack[] | null>(null);
+  // Cover-art uploader (Manager+) + a cache-bust token bumped after upload.
+  const [editCover, setEditCover] = useState(false);
+  const [coverVersion, setCoverVersion] = useState(0);
+
+  async function onMetaSaved() {
+    await qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] });
+    broadcastInvalidate(["library"]);
+  }
+  function onCoverUploaded() {
+    setCoverVersion(Date.now());
+    void qc.invalidateQueries({ queryKey: ["cache", "album", id] });
+    broadcastInvalidate(["library"]);
+  }
 
   const items = q.data?.items ?? [];
   const totalMs = items.reduce((s, t) => s + t.duration_ms, 0);
@@ -134,13 +156,25 @@ export default function Album() {
         <SkeletonHero />
       ) : (
       <header className="flex flex-col gap-5 sm:flex-row sm:items-end">
-        <Cover
-          album={{ id, cover_path: meta.data ? "1" : null, local_cover_path: null }}
-          tryCover
-          size={132}
-          radius={10}
-          className="shadow-[0_10px_24px_-10px_rgba(0,0,0,0.6)]"
-        />
+        <div className="relative shrink-0" style={{ width: 132 }}>
+          <Cover
+            album={{ id, cover_path: meta.data ? "1" : null, local_cover_path: null }}
+            tryCover
+            size={132}
+            radius={10}
+            version={coverVersion || undefined}
+            className="shadow-[0_10px_24px_-10px_rgba(0,0,0,0.6)]"
+          />
+          {isManager && (
+            <button
+              onClick={() => setEditCover(true)}
+              {...offlineAttrs(online, false, "Edit cover art")}
+              className="absolute bottom-1.5 right-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 disabled:opacity-40"
+            >
+              <EditIcon size={13} />
+            </button>
+          )}
+        </div>
         <div className="flex min-w-0 flex-col">
           <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">ALBUM</span>
           <h1 className="mt-1.5 text-3xl font-semibold tracking-tight sm:text-[34px]">{title}</h1>
@@ -180,9 +214,18 @@ export default function Album() {
             </Link>
           )}
           {isManager && (
-            <button onClick={delAlbum} className={`${btnDanger} ml-auto`} {...offlineAttrs(online)}>
-              <TrashIcon size={14} /> Delete album
-            </button>
+            <div className="ml-auto flex items-center gap-3">
+              <button
+                onClick={() => setEditTracks(items)}
+                className={`${btnGhost} hidden sm:inline-flex`}
+                {...offlineAttrs(online, false, "Edit metadata for all tracks")}
+              >
+                <EditIcon size={14} /> Edit tags
+              </button>
+              <button onClick={delAlbum} className={btnDanger} {...offlineAttrs(online)}>
+                <TrashIcon size={14} /> Delete album
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -244,9 +287,12 @@ export default function Album() {
                           </button>
                         )}
                         {isManager && (
-                          <button onClick={() => void delTrack(t)} {...offlineAttrs(online, false, "Delete from server")} className="text-oct-dim hover:text-oct-danger disabled:opacity-30">
-                            <TrashIcon size={14} />
-                          </button>
+                          <>
+                            <EditMetaButton online={online} onClick={() => setEditTracks([t])} />
+                            <button onClick={() => void delTrack(t)} {...offlineAttrs(online, false, "Delete from server")} className="text-oct-dim hover:text-oct-danger disabled:opacity-30">
+                              <TrashIcon size={14} />
+                            </button>
+                          </>
                         )}
                       </span>
                       <span className="w-9 text-right font-mono text-[11px] text-oct-subtle">
@@ -259,6 +305,26 @@ export default function Album() {
             </>
           )}
         </div>
+      )}
+
+      {editTracks && (
+        <MetadataEditor
+          tracks={editTracks}
+          online={online}
+          onClose={() => setEditTracks(null)}
+          onSaved={() => void onMetaSaved()}
+        />
+      )}
+
+      {editCover && (
+        <ImageUploader
+          kind="album"
+          id={id}
+          online={online}
+          currentUrl={coverUrl(id, coverVersion || undefined)}
+          onClose={() => setEditCover(false)}
+          onUploaded={onCoverUploaded}
+        />
       )}
     </section>
   );

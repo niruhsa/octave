@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { libraryListArtists, libraryDeleteArtist, libraryRescan } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
-import { ArtistIcon, SyncIcon, TrashIcon } from "../components/icons";
+import { ArtistAvatar } from "../components/ArtistAvatar";
+import { SyncIcon, TrashIcon } from "../components/icons";
 import { formatError } from "../lib/error";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
@@ -87,9 +88,7 @@ export default function Library() {
             ) : (
               items.map((a) => (
                 <div key={a.id} className="group flex items-center gap-3 px-3 py-2.5 first:rounded-t-xl last:rounded-b-xl hover:bg-oct-elevated/50">
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-oct-elevated text-oct-subtle">
-                    <ArtistIcon size={16} />
-                  </span>
+                  <ArtistAvatar id={a.id} imagePath={a.image_path} size={36} />
                   <Link to={`/artists/${a.id}`} className="min-w-0 flex-1">
                     <span className="block truncate text-[13.5px] group-hover:text-white">{a.name}</span>
                     {a.sort_name && a.sort_name !== a.name && (

@@ -236,6 +236,13 @@ export const PowerIcon = (p: IconProps) => (
   </Line>
 );
 
+export const EditIcon = (p: IconProps) => (
+  <Line {...p}>
+    <path d="M11 2.5l2.5 2.5L5.5 13H3v-2.5z" />
+    <path d="M9.5 4.5l2 2" />
+  </Line>
+);
+
 export const FolderIcon = (p: IconProps) => (
   <Line {...p}>
     <path d="M2 4.5h4l1.2 1.5H14v6.5H2z" />

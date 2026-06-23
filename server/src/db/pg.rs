@@ -141,7 +141,7 @@ impl ArtistRepo for PgRepos {
     async fn create(&self, new: NewArtist) -> Result<Artist> {
         sqlx::query_as::<_, Artist>(
             r#"INSERT INTO artists (name, sort_name) VALUES ($1, $2)
-               RETURNING id, name, sort_name, created_at, updated_at"#,
+               RETURNING id, name, sort_name, image_path, created_at, updated_at"#,
         )
         .bind(&new.name)
         .bind(&new.sort_name)
@@ -152,7 +152,7 @@ impl ArtistRepo for PgRepos {
 
     async fn get(&self, id: Uuid) -> Result<Option<Artist>> {
         sqlx::query_as::<_, Artist>(
-            r#"SELECT id, name, sort_name, created_at, updated_at
+            r#"SELECT id, name, sort_name, image_path, created_at, updated_at
                FROM artists WHERE id = $1"#,
         )
         .bind(id)
@@ -163,7 +163,7 @@ impl ArtistRepo for PgRepos {
 
     async fn list(&self, limit: i64, offset: i64) -> Result<Vec<Artist>> {
         sqlx::query_as::<_, Artist>(
-            r#"SELECT id, name, sort_name, created_at, updated_at
+            r#"SELECT id, name, sort_name, image_path, created_at, updated_at
                FROM artists ORDER BY name ASC LIMIT $1 OFFSET $2"#,
         )
         .bind(limit)
@@ -184,7 +184,7 @@ impl ArtistRepo for PgRepos {
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Artist>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         sqlx::query_as::<_, Artist>(
-            r#"SELECT id, name, sort_name, created_at, updated_at
+            r#"SELECT id, name, sort_name, image_path, created_at, updated_at
                FROM artists
                WHERE name ILIKE $1 OR sort_name ILIKE $1
                ORDER BY name ASC
@@ -203,7 +203,7 @@ impl ArtistRepo for PgRepos {
             r#"UPDATE artists
                SET name = $2, sort_name = $3, updated_at = now()
                WHERE id = $1
-               RETURNING id, name, sort_name, created_at, updated_at"#,
+               RETURNING id, name, sort_name, image_path, created_at, updated_at"#,
         )
         .bind(id)
         .bind(name)
@@ -213,9 +213,23 @@ impl ArtistRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn set_image(&self, id: Uuid, image_path: Option<&str>) -> Result<Option<Artist>> {
+        sqlx::query_as::<_, Artist>(
+            r#"UPDATE artists
+               SET image_path = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, name, sort_name, image_path, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(image_path)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
     async fn find_by_name(&self, name: &str) -> Result<Option<Artist>> {
         sqlx::query_as::<_, Artist>(
-            r#"SELECT id, name, sort_name, created_at, updated_at
+            r#"SELECT id, name, sort_name, image_path, created_at, updated_at
                FROM artists WHERE name = $1 LIMIT 1"#,
         )
         .bind(name)

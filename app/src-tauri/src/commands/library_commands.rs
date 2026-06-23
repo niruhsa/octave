@@ -4,12 +4,16 @@
 //! to hit the server or fall back to the cache. The frontend never has to
 //! ask "am I online?" — the returned `LibraryView` carries a `source` tag.
 
-use tauri::State;
+use std::sync::Arc;
 
+use tauri::{AppHandle, State};
+use tauri_plugin_fs::{FilePath, FsExt};
+
+use crate::auth::AuthManager;
 use crate::error::{AppError, AppResult};
 use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::library::service::LibraryService;
-use crate::transport::RescanReport;
+use crate::transport::{MetadataEdit, RescanReport};
 use crate::AppStateHandle;
 
 /// Server default page sizes mirror the server's cap (200) / default (50).
@@ -109,6 +113,24 @@ pub async fn library_search_tracks(
 }
 
 // ---------------------------------------------------------------------------
+// metadata edit (Phase 9; Manager+ gated server-side)
+// ---------------------------------------------------------------------------
+
+/// Apply an opt-in metadata edit to a track. Returns the refreshed
+/// `MergedTrack` (with its `downloaded` flag) so the UI updates in one
+/// round-trip; the edit is mirrored into the offline cache for downloaded
+/// items by `LibraryService::edit_track_metadata`.
+#[tauri::command]
+pub async fn library_edit_track_metadata(
+    state: State<'_, AppStateHandle>,
+    id: String,
+    edit: MetadataEdit,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.edit_track_metadata(&id, &edit).await
+}
+
+// ---------------------------------------------------------------------------
 // rescan (Manager+ gated server-side)
 // ---------------------------------------------------------------------------
 
@@ -169,4 +191,125 @@ pub async fn library_delete_track(
             .ok_or_else(|| AppError::AuthNotConfigured("log in first".into()))?
     };
     auth.delete_track(&id).await
+}
+
+// ---------------------------------------------------------------------------
+// image upload (Phase 9 — Manager+ gated server-side)
+//
+// The picked image file is read **natively** (desktop path or Android
+// `content://` URI) — never through the WebView — then pushed to the server
+// over REST (`POST /albums/:id/cover` / `POST /artists/:id/image`). The
+// server caches it under ARTWORK_PATH + updates the row (audited).
+// ---------------------------------------------------------------------------
+
+/// Generous client-side cap, matching the server's `MAX_IMAGE_BYTES`.
+const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+
+async fn auth_handle(state: &State<'_, AppStateHandle>) -> AppResult<Arc<AuthManager>> {
+    state
+        .auth
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| AppError::AuthNotConfigured("log in first".into()))
+}
+
+/// Read a picked image file's bytes natively (off the WebView), capped.
+async fn read_image_file(app: AppHandle, path: &str) -> AppResult<Vec<u8>> {
+    let fp: FilePath = path.parse().expect("FilePath::from_str is infallible");
+    let bytes = tokio::task::spawn_blocking(move || app.fs().read(fp))
+        .await
+        .map_err(|e| AppError::Internal(format!("read task: {e}")))?
+        .map_err(|e| AppError::Internal(format!("read image file: {e}")))?;
+    if bytes.is_empty() {
+        return Err(AppError::Internal("picked image is empty".into()));
+    }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(AppError::Internal(format!(
+            "image is too large ({} MiB); max is {} MiB",
+            bytes.len() / (1024 * 1024),
+            MAX_IMAGE_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Best-effort image content-type: magic-byte sniff first (robust for Android
+/// `content://` URIs with opaque names), falling back to the file extension,
+/// then `image/jpeg`.
+fn sniff_image_content_type(bytes: &[u8], path: &str) -> &'static str {
+    if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+        return "image/jpeg";
+    }
+    if bytes.len() >= 8 && bytes[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        return "image/png";
+    }
+    if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+        return "image/gif";
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    }
+}
+
+#[tauri::command]
+pub async fn library_upload_album_cover(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+    path: String,
+) -> AppResult<()> {
+    let bytes = read_image_file(app, &path).await?;
+    let content_type = sniff_image_content_type(&bytes, &path);
+    let auth = auth_handle(&state).await?;
+    auth.upload_album_cover(&album_id, bytes, content_type).await
+}
+
+#[tauri::command]
+pub async fn library_upload_artist_image(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+    artist_id: String,
+    path: String,
+) -> AppResult<()> {
+    let bytes = read_image_file(app, &path).await?;
+    let content_type = sniff_image_content_type(&bytes, &path);
+    let auth = auth_handle(&state).await?;
+    auth.upload_artist_image(&artist_id, bytes, content_type).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sniff_image_content_type;
+
+    #[test]
+    fn sniffs_by_magic_bytes() {
+        assert_eq!(sniff_image_content_type(&[0xFF, 0xD8, 0xFF, 0x00], "x"), "image/jpeg");
+        assert_eq!(
+            sniff_image_content_type(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "x"),
+            "image/png"
+        );
+        assert_eq!(sniff_image_content_type(b"GIF89a....", "x"), "image/gif");
+        let webp = b"RIFF\x00\x00\x00\x00WEBP....";
+        assert_eq!(sniff_image_content_type(webp, "x"), "image/webp");
+    }
+
+    #[test]
+    fn falls_back_to_extension_then_jpeg() {
+        // Opaque bytes + a .png name → png by extension.
+        assert_eq!(sniff_image_content_type(&[0, 1, 2, 3], "/a/b/c.PNG"), "image/png");
+        // No magic, no usable extension → jpeg.
+        assert_eq!(sniff_image_content_type(&[0, 1, 2, 3], "msf%3A13974"), "image/jpeg");
+    }
 }

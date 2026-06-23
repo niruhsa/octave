@@ -24,6 +24,7 @@ export function Cover({
   quality,
   className = "",
   tryCover = false,
+  version,
 }: {
   album: { id?: string; local_cover_path?: string | null; cover_path?: string | null };
   size?: number;
@@ -33,10 +34,12 @@ export function Cover({
   className?: string;
   /** Attempt the cover by id even when cover paths are unknown. */
   tryCover?: boolean;
+  /** Cache-bust token — bump after a cover re-upload to force a reload. */
+  version?: string | number;
 }) {
   const id = (album as MergedAlbum).id;
   const hasCover = Boolean(album.local_cover_path || album.cover_path);
-  const src = id && (hasCover || tryCover) ? coverUrl(id) : null;
+  const src = id && (hasCover || tryCover) ? coverUrl(id, version) : null;
 
   return (
     <div

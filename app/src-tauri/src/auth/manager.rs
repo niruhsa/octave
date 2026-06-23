@@ -12,9 +12,9 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    ChunkAck, Credential, PermissionTier, RescanReport, ServerClient, ServerConfig,
-    TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
-    UploadSummary, UploadView,
+    ChunkAck, Credential, MetadataEdit, PermissionTier, RescanReport, ServerClient, ServerConfig,
+    Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
+    UploadResult, UploadSummary, UploadView,
 };
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
@@ -293,6 +293,38 @@ impl AuthManager {
     pub async fn rescan_library(&self) -> AppResult<RescanReport> {
         let cred = self.credential().await?;
         self.server.rescan_library(&cred).await
+    }
+
+    /// Apply an opt-in metadata edit to a track. Manager+ gated server-side.
+    pub async fn edit_track_metadata(
+        &self,
+        id: &str,
+        edit: &MetadataEdit,
+    ) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.edit_track_metadata(&cred, id, edit).await
+    }
+
+    /// Upload a cover image for an album. Manager+ gated server-side.
+    pub async fn upload_album_cover(
+        &self,
+        album_id: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.upload_album_cover(&cred, album_id, bytes, content_type).await
+    }
+
+    /// Upload an image for an artist. Manager+ gated server-side.
+    pub async fn upload_artist_image(
+        &self,
+        artist_id: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.upload_artist_image(&cred, artist_id, bytes, content_type).await
     }
 
     /// Resolve the current credential against the server. Updates the

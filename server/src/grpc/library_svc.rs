@@ -61,6 +61,7 @@ fn artist_to_pb(a: m::Artist) -> pb::Artist {
         sort_name: a.sort_name.unwrap_or_default(),
         created_at: a.created_at.to_string(),
         updated_at: a.updated_at.to_string(),
+        image_path: a.image_path.unwrap_or_default(),
     }
 }
 fn album_to_pb(a: m::Album) -> pb::Album {
@@ -410,9 +411,13 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     ) -> Result<Response<pb::FetchAlbumArtworkResponse>, Status> {
         let caller = self.caller(&req).await?;
         let album_id = parse_uuid(&req.into_inner().album_id, "album")?;
-        let artwork = self.artwork.as_ref().ok_or_else(|| {
-            Status::failed_precondition("artwork fetch is disabled (set FETCH_ARTWORK)")
-        })?;
+        let artwork = self
+            .artwork
+            .as_ref()
+            .filter(|a| a.auto_fetch_enabled())
+            .ok_or_else(|| {
+                Status::failed_precondition("artwork fetch is disabled (set FETCH_ARTWORK)")
+            })?;
         let cover = artwork
             .fetch_for_album(&caller, album_id)
             .await

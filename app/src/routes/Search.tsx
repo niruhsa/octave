@@ -13,7 +13,8 @@ import {
 import type { MergedTrack } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
 import { Thumb } from "../components/Cover";
-import { ArtistIcon, PlayIcon, SearchIcon, TrashIcon } from "../components/icons";
+import { ArtistAvatar } from "../components/ArtistAvatar";
+import { PlayIcon, SearchIcon, TrashIcon } from "../components/icons";
 import { formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
 import { formatError } from "../lib/error";
@@ -102,9 +103,7 @@ export default function Search() {
               <div className={`${card} divide-y divide-oct-border`}>
                 {artists.data?.items.map((a) => (
                   <div key={a.id} className="group flex items-center gap-3 px-3 py-2 text-sm hover:bg-oct-elevated/50">
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-oct-elevated text-oct-subtle">
-                      <ArtistIcon size={14} />
-                    </span>
+                    <ArtistAvatar id={a.id} imagePath={a.image_path} size={32} />
                     <Link to={`/artists/${a.id}`} className="flex-1 truncate group-hover:text-white">{a.name}</Link>
                     <DownloadedDot downloaded={a.downloaded} />
                     {isManager && (

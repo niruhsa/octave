@@ -1,14 +1,17 @@
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import { libraryDeleteArtist, libraryListAlbumsByArtist } from "../ipc";
+import { artistImageUrl, libraryDeleteArtist, libraryListAlbumsByArtist } from "../ipc";
 import { Cover } from "../components/Cover";
+import { ImageUploader } from "../components/ImageUploader";
 import { SavedBadge, SourceBadge, StreamBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
+import { gradientFor } from "../lib/visual";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
 import { btnDangerSm } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
-import { TrashIcon } from "../components/icons";
+import { EditIcon, TrashIcon } from "../components/icons";
 import { SkeletonGrid } from "../components/Skeleton";
 
 export default function Artist() {
@@ -18,6 +21,8 @@ export default function Artist() {
   const tier = useAppStore((s) => s.tier);
   const online = useAppStore((s) => s.online);
   const isManager = tier === "admin" || tier === "manager";
+  const [editImage, setEditImage] = useState(false);
+  const [imgVersion, setImgVersion] = useState(0);
 
   const q = useQuery({
     queryKey: ["library", "albums-by-artist", id],
@@ -42,8 +47,32 @@ export default function Artist() {
 
   return (
     <section className="flex flex-col gap-6 p-6 md:p-8">
-      <header className="flex items-end justify-between gap-4">
-        <div className="min-w-0">
+      <header className="flex items-end gap-4">
+        {/* artist image hero — always attempted by id; hides on 404 */}
+        <div className="relative shrink-0">
+          <div
+            className="h-[88px] w-[88px] overflow-hidden rounded-full border border-oct-border"
+            style={{ background: gradientFor(id) }}
+          >
+            <img
+              src={artistImageUrl(id, imgVersion || undefined)}
+              alt=""
+              className="h-full w-full object-cover"
+              loading="lazy"
+              onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+            />
+          </div>
+          {isManager && (
+            <button
+              onClick={() => setEditImage(true)}
+              {...offlineAttrs(online, false, "Edit artist image")}
+              className="absolute bottom-0 right-0 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80 disabled:opacity-40"
+            >
+              <EditIcon size={13} />
+            </button>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
           <Link to="/library" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">
             ← LIBRARY
           </Link>
@@ -91,6 +120,20 @@ export default function Artist() {
             ))
           )}
         </div>
+      )}
+
+      {editImage && (
+        <ImageUploader
+          kind="artist"
+          id={id}
+          online={online}
+          currentUrl={artistImageUrl(id, imgVersion || undefined)}
+          onClose={() => setEditImage(false)}
+          onUploaded={() => {
+            setImgVersion(Date.now());
+            broadcastInvalidate(["library"]);
+          }}
+        />
       )}
     </section>
   );

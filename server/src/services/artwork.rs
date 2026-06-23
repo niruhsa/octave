@@ -151,21 +151,25 @@ impl CoverArtSource for CoverArtArchive {
     }
 }
 
-/// Orchestrates artwork fetch → cache → album `cover_path` update.
+/// Orchestrates artwork fetch / manual upload → cache → album `cover_path`
+/// (or artist `image_path`) update.
 #[derive(Clone)]
 pub struct ArtworkService {
     pub library: LibraryService,
-    pub source: Arc<dyn CoverArtSource>,
-    /// Directory where fetched covers are cached. `None` disables caching to
-    /// disk (the album row is still updated if a path can be derived — but
-    /// without a cache dir there is nowhere to write, so fetch is a no-op).
+    /// External cover-art lookup. `None` disables **auto-fetch** (the
+    /// `FETCH_ARTWORK` toggle); manual uploads still work as long as
+    /// `cache_dir` is set, so the service is constructed whenever there's
+    /// somewhere to store images.
+    pub source: Option<Arc<dyn CoverArtSource>>,
+    /// Directory where covers / artist images are cached. `None` disables
+    /// caching to disk (no place to write → upload + fetch both error).
     pub cache_dir: Option<PathBuf>,
 }
 
 impl ArtworkService {
     pub fn new(
         library: LibraryService,
-        source: Arc<dyn CoverArtSource>,
+        source: Option<Arc<dyn CoverArtSource>>,
         cache_dir: Option<PathBuf>,
     ) -> Self {
         Self {
@@ -179,7 +183,8 @@ impl ArtworkService {
     /// `cover_path` (audited). Manager+ only.
     ///
     /// Returns the cached `cover_path` on success, `Ok(None)` when no cover
-    /// was found upstream.
+    /// was found upstream. Errors with `FailedPrecondition` when auto-fetch
+    /// is disabled (no `CoverArtSource` — set `FETCH_ARTWORK`).
     pub async fn fetch_for_album(
         &self,
         caller: &Identity,
@@ -187,10 +192,14 @@ impl ArtworkService {
     ) -> Result<Option<String>> {
         caller.require(PermissionLevel::Manager)?;
 
+        let source = self.source.as_ref().ok_or_else(|| {
+            AppError::Config("artwork auto-fetch is disabled (set FETCH_ARTWORK)".into())
+        })?;
+
         let album = self.library.get_album(caller, album_id).await?;
         let artist = self.library.get_artist(caller, album.artist_id).await?;
 
-        let cover = match self.source.fetch_cover(&artist.name, &album.title).await? {
+        let cover = match source.fetch_cover(&artist.name, &album.title).await? {
             Some(c) => c,
             None => return Ok(None),
         };
@@ -252,6 +261,52 @@ impl ArtworkService {
 
         debug!(%album_id, cover_path, "artwork: cached + album updated + embedded in tracks");
         Ok(cover_path)
+    }
+
+    /// Whether external auto-fetch is available (a `CoverArtSource` is wired,
+    /// i.e. `FETCH_ARTWORK` is on). Manual uploads don't need this.
+    pub fn auto_fetch_enabled(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// Cache an uploaded artist image for `artist_id` under
+    /// `<cache_dir>/artist-<id>.<ext>` and point the artist row's
+    /// `image_path` there (audited via `LibraryService`). Manager+ only.
+    ///
+    /// Unlike album covers there is nothing to embed (artists aren't files),
+    /// so this just caches + updates the row. Returns the cached path.
+    pub async fn set_artist_image_from_bytes(
+        &self,
+        caller: &Identity,
+        artist_id: Uuid,
+        image: &CoverImage,
+    ) -> Result<String> {
+        caller.require(PermissionLevel::Manager)?;
+
+        let cache_dir = self.cache_dir.as_ref().ok_or_else(|| {
+            AppError::Config("artwork cache dir not configured (set ARTWORK_PATH)".into())
+        })?;
+
+        // Ensure the artist exists (and surface a clean 404 if not) before
+        // writing any bytes.
+        let _ = self.library.get_artist(caller, artist_id).await?;
+
+        tokio::fs::create_dir_all(cache_dir)
+            .await
+            .map_err(AppError::Io)?;
+        let file_name = format!("artist-{artist_id}.{}", image.ext());
+        let dest = cache_dir.join(&file_name);
+        tokio::fs::write(&dest, &image.bytes)
+            .await
+            .map_err(AppError::Io)?;
+        let image_path = dest.to_string_lossy().into_owned();
+
+        self.library
+            .update_artist_image(caller, artist_id, Some(&image_path))
+            .await?;
+
+        debug!(%artist_id, image_path, "artwork: artist image cached + row updated");
+        Ok(image_path)
     }
 
     /// Embed `cover_bytes` (with the given `mime_type` string, e.g.

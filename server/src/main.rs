@@ -11,7 +11,7 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    ArtworkService, CoverArtArchive, IngestService, LibraryService, MetadataService,
+    ArtworkService, CoverArtArchive, CoverArtSource, IngestService, LibraryService, MetadataService,
     PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
 };
 use server::services::organizer::Organizer;
@@ -60,10 +60,16 @@ async fn main() -> Result<()> {
     );
 
     let metadata = MetadataService::new(library.clone(), config.write_tags);
-    let artwork = if config.fetch_artwork {
+    // Construct the artwork service whenever there's somewhere to cache images
+    // (ARTWORK_PATH) OR auto-fetch is enabled. The external CAA source is only
+    // wired when FETCH_ARTWORK is on — manual cover/image uploads need only the
+    // cache dir, so they work regardless of the auto-fetch toggle.
+    let artwork = if config.artwork_path.is_some() || config.fetch_artwork {
+        let source: Option<Arc<dyn CoverArtSource>> =
+            config.fetch_artwork.then(|| Arc::new(CoverArtArchive::new()) as Arc<dyn CoverArtSource>);
         Some(ArtworkService::new(
             library.clone(),
-            Arc::new(CoverArtArchive::new()),
+            source,
             config.artwork_path.clone(),
         ))
     } else {

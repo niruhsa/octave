@@ -29,6 +29,9 @@ pub trait ArtistRepo: Send + Sync {
     async fn count(&self) -> Result<i64>;
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Artist>>;
     async fn update(&self, id: Uuid, name: &str, sort_name: Option<&str>) -> Result<Option<Artist>>;
+    /// Set (or clear, with `None`) the artist's image path. Leaves name /
+    /// sort_name untouched, so it composes with `update`.
+    async fn set_image(&self, id: Uuid, image_path: Option<&str>) -> Result<Option<Artist>>;
     async fn find_by_name(&self, name: &str) -> Result<Option<Artist>>;
     async fn delete(&self, id: Uuid) -> Result<()>;
 }

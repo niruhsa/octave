@@ -51,6 +51,7 @@ message Artist {
   string sort_name = 3;
   string created_at = 4;       // RFC3339
   string updated_at = 5;
+  string image_path = 6;       // server-side path; empty = no image
 }
 
 message Album {

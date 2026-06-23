@@ -120,6 +120,30 @@ impl LibraryService {
         Ok(after)
     }
 
+    /// Set (or clear) the artist's `image_path` (audited like any mutation).
+    /// Manager+. Leaves name / sort_name untouched.
+    pub async fn update_artist_image(
+        &self,
+        caller: &Identity,
+        id: Uuid,
+        image_path: Option<&str>,
+    ) -> Result<Artist> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .artists
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("artist {id}")))?;
+        let after = self
+            .artists
+            .set_image(id, image_path)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("artist {id}")))?;
+        self.audit(caller, "artist.image_update", "artist", Some(id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
     pub async fn delete_artist(&self, caller: &Identity, id: Uuid) -> Result<bool> {
         caller.require(PermissionLevel::Manager)?;
         let before = self.artists.get(id).await?;

@@ -19,7 +19,7 @@ use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
 use super::proto::auth::{ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse};
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
-    DeleteAlbumRequest, DeleteArtistRequest, DeleteTrackRequest,
+    DeleteAlbumRequest, DeleteArtistRequest, DeleteTrackRequest, EditTrackMetadataRequest,
     GetAlbumRequest, GetArtistRequest, GetTrackRequest, ListAlbumsByArtistRequest,
     ListArtistsRequest, ListTracksByAlbumRequest, Pagination, SearchRequest,
 };
@@ -33,10 +33,10 @@ use super::proto::upload::upload_service_client::UploadServiceClient;
 use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUploadResponse};
 use super::proto::upload as pb;
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, PermissionTier, Playlist,
-    PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult, Track,
-    UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest, UploadListFilter, UploadResult,
-    UploadSummary, UploadView,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier,
+    Playlist, PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult,
+    Track, UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest, UploadListFilter,
+    UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -440,6 +440,34 @@ impl GrpcClient {
             .await
             .map_err(map_mutation_err("delete_track"))?;
         Ok(())
+    }
+
+    // ----- Metadata edit (Phase 9; Manager+ gated server-side) -------------
+
+    /// Apply an opt-in metadata edit to a track. Auth/merit rejections map to
+    /// permanent errors (no REST fallback); only transport faults fall back.
+    pub async fn edit_track_metadata(
+        &self,
+        cred: &Credential,
+        id: &str,
+        edit: &MetadataEdit,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(EditTrackMetadataRequest {
+            id: id.to_string(),
+            title: edit.title.clone(),
+            track_no: edit.track_no,
+            disc_no: edit.disc_no,
+            metadata_json: edit.metadata_json.clone(),
+            year: edit.year,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .edit_track_metadata(req)
+            .await
+            .map_err(map_mutation_err("edit_track_metadata"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
     }
 
     // ----- Playlists (sync pull + push) ----------------------------------
@@ -1022,6 +1050,7 @@ fn artist_from_proto(a: super::proto::library::Artist) -> Artist {
         id: a.id,
         name: a.name,
         sort_name: opt_str(a.sort_name),
+        image_path: opt_str(a.image_path),
     }
 }
 

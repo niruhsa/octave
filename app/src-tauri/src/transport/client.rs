@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, PermissionTier, Playlist, PlaylistWithTracks,
-    RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter,
-    UploadResult, UploadSummary, UploadView,
+    Album, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier, Playlist,
+    PlaylistWithTracks, RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest,
+    UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -371,6 +371,49 @@ impl ServerClient {
             }
         }
         self.rest.delete_track(cred, id).await
+    }
+
+    // ----- Metadata edit (Phase 9; Manager+ gated server-side) -------------
+
+    pub async fn edit_track_metadata(
+        &self,
+        cred: &Credential,
+        id: &str,
+        edit: &MetadataEdit,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.edit_track_metadata(cred, id, edit).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("edit_track_metadata", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.edit_track_metadata(cred, id, edit).await
+    }
+
+    // ----- Image upload (Phase 9) ------------------------------------------
+    //
+    // REST-only: binary blob upload, mirroring the REST-only cover *serving*
+    // (`GET /albums/:id/cover`). No gRPC path, so no fallback dance.
+
+    pub async fn upload_album_cover(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<()> {
+        self.rest.upload_album_cover(cred, album_id, bytes, content_type).await
+    }
+
+    pub async fn upload_artist_image(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<()> {
+        self.rest.upload_artist_image(cred, artist_id, bytes, content_type).await
     }
 
     // ----- Playlists (sync pull + push) ----------------------------------

@@ -5,7 +5,7 @@
 // plus the completion report (what songs/albums/artists were ingested). Both
 // refresh live off the server's `uploads` broadcast.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -14,6 +14,7 @@ import {
   uploadsGet,
   uploadsList,
   uploadsSubscribe,
+  type MergedTrack,
   type UploadLifecycle,
   type UploadReport,
   type UploadSummary,
@@ -23,7 +24,31 @@ import { formatError } from "../lib/error";
 import { btnGhostSm, card, errorBox } from "../lib/ui";
 import { SkeletonList } from "../components/Skeleton";
 import { OfflineGate } from "../components/OfflineGate";
+import { EditMetaButton, MetadataEditor } from "../components/MetadataEditor";
+import { broadcastInvalidate } from "../App";
 import { formatBytes } from "../downloads/useDownloads";
+
+// A freshly-ingested track only carries id/title/artist/album in the report,
+// so seed a minimal `MergedTrack` for the editor — track/disc numbers start
+// blank (the manager fills what they want to fix). The editor only reads
+// id + title + track_no/disc_no, so the unused fields are harmless stubs.
+function reportTrackToMerged(t: ReportTrack): MergedTrack {
+  return {
+    id: t.id,
+    album_id: "",
+    artist_id: "",
+    title: t.title,
+    track_no: null,
+    disc_no: null,
+    duration_ms: 0,
+    codec: "",
+    bitrate_kbps: null,
+    file_path: "",
+    file_size: null,
+    local_file_path: null,
+    downloaded: false,
+  };
+}
 
 const STATES: (UploadLifecycle | "all")[] = ["all", "uploading", "initialized", "completed", "cancelled"];
 
@@ -231,6 +256,10 @@ type ReportFile = {
 
 function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const qc = useQueryClient();
+  const tier = useAppStore((s) => s.tier);
+  const online = useAppStore((s) => s.online);
+  const isManager = tier === "admin" || tier === "manager";
+  const [editTrack, setEditTrack] = useState<MergedTrack | null>(null);
   const q = useQuery({
     queryKey: ["uploads", "detail", id],
     queryFn: () => uploadsGet(id),
@@ -349,10 +378,19 @@ function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
                   </div>
                   {f.error && <p className="mt-1 text-xs text-oct-danger">{f.error}</p>}
                   {f.tracks.length > 0 && (
-                    <ul className="mt-1 list-inside list-disc text-[11.5px] text-oct-subtle">
+                    <ul className="mt-1 flex flex-col gap-0.5 text-[11.5px] text-oct-subtle">
                       {f.tracks.map((t) => (
-                        <li key={t.id} className="truncate">
-                          {t.title} — <span className="text-oct-faint">{t.artist} · {t.album}</span>
+                        <li key={t.id} className="group flex min-w-0 items-center gap-2">
+                          <span className="truncate">
+                            {t.title} — <span className="text-oct-faint">{t.artist} · {t.album}</span>
+                          </span>
+                          {isManager && (
+                            <EditMetaButton
+                              online={online}
+                              onClick={() => setEditTrack(reportTrackToMerged(t))}
+                              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                            />
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -362,6 +400,15 @@ function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
             </div>
           )}
         </>
+      )}
+
+      {editTrack && (
+        <MetadataEditor
+          tracks={[editTrack]}
+          online={online}
+          onClose={() => setEditTrack(null)}
+          onSaved={() => broadcastInvalidate(["library"])}
+        />
       )}
     </section>
   );

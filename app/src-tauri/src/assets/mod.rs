@@ -48,10 +48,18 @@ async fn dispatch<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     request: &Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
-    let album_id = match parse_album_id(request.uri().path()) {
+    let id = match parse_id(request.uri().path()) {
         Some(id) => id,
-        None => return text(StatusCode::BAD_REQUEST, "missing album id"),
+        None => return text(StatusCode::BAD_REQUEST, "missing id"),
     };
+
+    // `cover://localhost/artist/<id>` → artist image (server proxy only; the
+    // offline cache doesn't store artist images). `cover://localhost/<id>` →
+    // album cover (local-then-proxy, as before).
+    if let Some(artist_id) = id.strip_prefix("artist/") {
+        return dispatch_artist_image(app, artist_id).await;
+    }
+    let album_id = id;
 
     let state = app.state::<AppStateHandle>();
 
@@ -123,20 +131,31 @@ async fn proxy_server_cover(
     cred: &crate::transport::Credential,
     album_id: &str,
 ) -> crate::error::AppResult<Response<Vec<u8>>> {
-    let client = proxy_client()?;
     let url = format!("{}/albums/{}/cover", config.rest_root(), album_id);
+    proxy_image(cred, &url).await
+}
+
+/// Auth-inject + proxy an image URL from the server, relaying its
+/// content-type. Shared by album-cover and artist-image proxying. A
+/// non-success upstream status is relayed (so a 404 stays a 404 and the
+/// `<img>` falls back to its placeholder).
+async fn proxy_image(
+    cred: &crate::transport::Credential,
+    url: &str,
+) -> crate::error::AppResult<Response<Vec<u8>>> {
+    let client = proxy_client()?;
     let resp = client
-        .get(&url)
+        .get(url)
         .header(header::AUTHORIZATION, auth_header_value(cred)?)
         .send()
         .await
-        .map_err(|e| crate::error::AppError::Transport(format!("cover proxy send: {e}")))?;
+        .map_err(|e| crate::error::AppError::Transport(format!("image proxy send: {e}")))?;
 
     let status = resp.status();
     if !status.is_success() {
         return Ok(text(
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::NOT_FOUND),
-            "no cover available",
+            "no image available",
         ));
     }
 
@@ -148,8 +167,33 @@ async fn proxy_server_cover(
     let body = resp
         .bytes()
         .await
-        .map_err(|e| crate::error::AppError::Transport(format!("cover proxy body: {e}")))?;
+        .map_err(|e| crate::error::AppError::Transport(format!("image proxy body: {e}")))?;
     Ok(builder.body(body.to_vec()).unwrap())
+}
+
+/// Artist image: no offline cache, so always proxy `GET /artists/:id/image`
+/// with the session credential injected.
+async fn dispatch_artist_image<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    artist_id: &str,
+) -> Response<Vec<u8>> {
+    let state = app.state::<AppStateHandle>();
+    let auth = state.auth.read().await.clone();
+    let Some(auth): Option<Arc<AuthManager>> = auth else {
+        return text(StatusCode::NOT_FOUND, "not authenticated");
+    };
+    let cred = match auth.credential().await {
+        Ok(c) => c,
+        Err(_) => return text(StatusCode::NOT_FOUND, "no credential"),
+    };
+    let url = format!("{}/artists/{}/image", auth.server_config().rest_root(), artist_id);
+    match proxy_image(&cred, &url).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::warn!(err = %e, artist_id, "artist image proxy failed");
+            text(StatusCode::NOT_FOUND, "no image available")
+        }
+    }
 }
 
 fn auth_header_value(
@@ -162,7 +206,7 @@ fn auth_header_value(
     HeaderValue::from_str(&s).map_err(|_| crate::error::AppError::Internal("bad auth chars".into()))
 }
 
-fn parse_album_id(path: &str) -> Option<String> {
+fn parse_id(path: &str) -> Option<String> {
     let trimmed = path.trim_start_matches('/');
     if trimmed.is_empty() {
         return None;
