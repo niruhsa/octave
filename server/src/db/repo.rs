@@ -4,6 +4,7 @@
 //! an in-memory fake while the Postgres impls in [`super::pg`] back production.
 
 use async_trait::async_trait;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -174,6 +175,14 @@ pub trait UploadRepo: Send + Sync {
     /// `None` matches the `SECRET_KEY` (NULL-owner) bucket.
     async fn count_active_for_user(&self, user_id: Option<Uuid>) -> Result<i64>;
     async fn set_upload_state(&self, id: Uuid, state: UploadState) -> Result<()>;
+    /// Atomically mark every active (`initialized`/`uploading`) upload whose most
+    /// recent activity (latest chunk receipt, else creation — and never older
+    /// than its own `updated_at`, so a fresh resume isn't re-paused) predates
+    /// `cutoff` as `paused`, returning the affected sessions for event
+    /// publishing. The server-side backstop for a stalled client that can't
+    /// send a `pause` itself (the usual stall cause — the network is down —
+    /// fails that call too).
+    async fn pause_stale_active(&self, cutoff: OffsetDateTime) -> Result<Vec<Upload>>;
     /// Terminal write: state + optional aggregated report + optional error.
     async fn set_upload_report(
         &self,

@@ -112,6 +112,12 @@ async fn main() -> Result<()> {
     let uploads = ingest.clone().map(|ing| {
         UploadsService::new(Arc::new(repos.clone()), ing, upload_hub.clone())
     });
+    // Server-side stall sweeper: autonomously pause an active upload that has
+    // received no chunk for ≥1 min, so the server reflects `paused` even when the
+    // client can't deliver its own pause (network down / app killed).
+    if let Some(up) = &uploads {
+        up.spawn_stall_sweeper();
+    }
 
     // Image-optimization background work: optimize everything once on startup,
     // then on a timer. New/changed images are also handled on upload + on

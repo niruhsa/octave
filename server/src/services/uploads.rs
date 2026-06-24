@@ -42,6 +42,15 @@ use crate::services::ingest::IngestService;
 /// is fine to skip); they still get the next event.
 const HUB_CAPACITY: usize = 512;
 
+/// An active upload with no chunk activity for this long is auto-paused by the
+/// server sweeper. Matches the client's own stall monitor (1 minute) — this is
+/// the authoritative backstop for when the client can't deliver its own `pause`
+/// (its network is down, or it was killed).
+const STALL_PAUSE_SECS: i64 = 60;
+
+/// How often the server sweeps for stalled uploads.
+const STALL_SWEEP_SECS: u64 = 20;
+
 // ===========================================================================
 // Wire input DTOs (REST JSON deserializes these; gRPC builds them from proto)
 // ===========================================================================
@@ -570,6 +579,44 @@ impl UploadsService {
         let built = self.build_view(&upload).await?;
         self.publish_state(&upload, "resumed", None, &built.files_models).await;
         Ok(built.view)
+    }
+
+    // ------------------------------------------------------------------
+    // stall sweeper (server-side auto-pause backstop)
+    // ------------------------------------------------------------------
+
+    /// Spawn the background stall-sweeper: every [`STALL_SWEEP_SECS`] it marks
+    /// active uploads idle for ≥ [`STALL_PAUSE_SECS`] as `paused`. This makes the
+    /// server set `paused` on its own when chunks simply stop arriving — without
+    /// relying on the client's best-effort `pause` call, which fails in the very
+    /// case that matters (the client's network went down, or it was killed).
+    /// Runs for the life of the process.
+    pub fn spawn_stall_sweeper(&self) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(STALL_SWEEP_SECS));
+            tick.tick().await; // consume the immediate first tick
+            loop {
+                tick.tick().await;
+                if let Err(e) = svc.sweep_stalled().await {
+                    warn!(error = %e, "upload stall sweep failed");
+                }
+            }
+        });
+    }
+
+    /// One sweep pass: pause every active upload idle for ≥ `STALL_PAUSE_SECS`
+    /// and broadcast a `paused` event for each so live listeners update.
+    async fn sweep_stalled(&self) -> Result<()> {
+        let cutoff = OffsetDateTime::now_utc() - time::Duration::seconds(STALL_PAUSE_SECS);
+        let paused = self.repo.pause_stale_active(cutoff).await?;
+        for upload in &paused {
+            debug!(upload_id = %upload.id, "auto-paused — no chunk activity for ≥{STALL_PAUSE_SECS}s");
+            let files = self.repo.list_files(upload.id).await.unwrap_or_default();
+            self.publish_state(upload, "paused", None, &files).await;
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------------

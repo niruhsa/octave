@@ -7,6 +7,7 @@
 
 use async_trait::async_trait;
 use sqlx::PgPool;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::{AppError, Result};
@@ -1068,6 +1069,32 @@ impl UploadRepo for PgRepos {
             .await
             .map_err(db)?;
         Ok(())
+    }
+
+    async fn pause_stale_active(&self, cutoff: OffsetDateTime) -> Result<Vec<Upload>> {
+        // Staleness = time since the most recent chunk receipt (or creation when
+        // none) — but bounded below by the row's own `updated_at`, so a just-
+        // resumed session (which bumps `updated_at`) isn't re-paused before its
+        // first new chunk lands. `MAX` ignores the NULL `received_at` of
+        // not-yet-received chunks. Atomic: only rows still active at update time
+        // are paused + returned.
+        sqlx::query_as::<_, Upload>(&format!(
+            "UPDATE uploads u SET state = 'paused', updated_at = now() \
+             WHERE u.state IN ('initialized', 'uploading') \
+               AND GREATEST( \
+                     u.updated_at, \
+                     COALESCE( \
+                       (SELECT MAX(c.received_at) FROM upload_chunks c \
+                        JOIN upload_files f ON c.upload_file_id = f.id \
+                        WHERE f.upload_id = u.id), \
+                       u.created_at) \
+                   ) < $1 \
+             RETURNING {UPLOAD_COLS}"
+        ))
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
     }
 
     async fn set_upload_report(
