@@ -30,6 +30,38 @@ impl LibraryServer {
     async fn caller<T>(&self, req: &Request<T>) -> Result<Identity, Status> {
         self.interceptor.resolve(req).await
     }
+
+    /// Build a `pb::Artist` with its alias list populated (single-entity reads).
+    async fn artist_pb_with_aliases(
+        &self,
+        caller: &Identity,
+        a: m::Artist,
+    ) -> Result<pb::Artist, Status> {
+        let aliases = self
+            .library
+            .list_artist_aliases(caller, a.id)
+            .await
+            .map_err(map_err)?;
+        let mut pb = artist_to_pb(a);
+        pb.aliases = aliases.into_iter().map(artist_alias_to_pb).collect();
+        Ok(pb)
+    }
+
+    /// Build a `pb::Album` with its alias list populated (single-entity reads).
+    async fn album_pb_with_aliases(
+        &self,
+        caller: &Identity,
+        a: m::Album,
+    ) -> Result<pb::Album, Status> {
+        let aliases = self
+            .library
+            .list_album_aliases(caller, a.id)
+            .await
+            .map_err(map_err)?;
+        let mut pb = album_to_pb(a);
+        pb.aliases = aliases.into_iter().map(album_alias_to_pb).collect();
+        Ok(pb)
+    }
 }
 
 fn parse_uuid(s: &str, what: &str) -> Result<Uuid, Status> {
@@ -62,6 +94,7 @@ fn artist_to_pb(a: m::Artist) -> pb::Artist {
         created_at: a.created_at.to_string(),
         updated_at: a.updated_at.to_string(),
         image_path: a.image_path.unwrap_or_default(),
+        aliases: Vec::new(),
     }
 }
 fn album_to_pb(a: m::Album) -> pb::Album {
@@ -73,6 +106,7 @@ fn album_to_pb(a: m::Album) -> pb::Album {
         cover_path: a.cover_path.unwrap_or_default(),
         created_at: a.created_at.to_string(),
         updated_at: a.updated_at.to_string(),
+        aliases: Vec::new(),
     }
 }
 fn track_to_pb(t: m::Track) -> pb::Track {
@@ -91,6 +125,25 @@ fn track_to_pb(t: m::Track) -> pb::Track {
         metadata_json: t.metadata_json,
         created_at: t.created_at.to_string(),
         updated_at: t.updated_at.to_string(),
+        is_single_release: t.is_single_release,
+    }
+}
+fn artist_alias_to_pb(a: m::ArtistAlias) -> pb::AliasInfo {
+    pb::AliasInfo {
+        id: a.id.to_string(),
+        name: a.name,
+        sort_name: a.sort_name.unwrap_or_default(),
+        language: a.language.unwrap_or_default(),
+        is_primary: a.is_primary,
+    }
+}
+fn album_alias_to_pb(a: m::AlbumAlias) -> pb::AliasInfo {
+    pb::AliasInfo {
+        id: a.id.to_string(),
+        name: a.title,
+        sort_name: String::new(),
+        language: a.language.unwrap_or_default(),
+        is_primary: a.is_primary,
     }
 }
 
@@ -122,7 +175,7 @@ impl pb::library_service_server::LibraryService for LibraryServer {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "artist")?;
         let a = self.library.get_artist(&caller, id).await.map_err(map_err)?;
-        Ok(Response::new(artist_to_pb(a)))
+        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
     }
     async fn update_artist(
         &self,
@@ -137,7 +190,7 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .update_artist(&caller, id, &body.name, sort.as_deref())
             .await
             .map_err(map_err)?;
-        Ok(Response::new(artist_to_pb(a)))
+        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
     }
     async fn delete_artist(
         &self,
@@ -212,7 +265,7 @@ impl pb::library_service_server::LibraryService for LibraryServer {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "album")?;
         let a = self.library.get_album(&caller, id).await.map_err(map_err)?;
-        Ok(Response::new(album_to_pb(a)))
+        Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
     }
     async fn update_album(
         &self,
@@ -233,7 +286,7 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             )
             .await
             .map_err(map_err)?;
-        Ok(Response::new(album_to_pb(a)))
+        Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
     }
     async fn delete_album(
         &self,
@@ -426,6 +479,191 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             found: cover.is_some(),
             cover_path: cover.unwrap_or_default(),
         }))
+    }
+
+    // ---- Merge + aliases ----
+    async fn merge_artists(
+        &self,
+        req: Request<pb::MergeRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let survivor = parse_uuid(&b.survivor_id, "artist")?;
+        let duplicate = parse_uuid(&b.duplicate_id, "artist")?;
+        let a = self
+            .library
+            .merge_artists(&caller, survivor, duplicate)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+    }
+    async fn merge_albums(
+        &self,
+        req: Request<pb::MergeRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let survivor = parse_uuid(&b.survivor_id, "album")?;
+        let duplicate = parse_uuid(&b.duplicate_id, "album")?;
+        let a = self
+            .library
+            .merge_albums(&caller, survivor, duplicate)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
+    }
+    async fn move_track(
+        &self,
+        req: Request<pb::MoveTrackRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let track_id = parse_uuid(&b.track_id, "track")?;
+        let album_id = parse_uuid(&b.album_id, "album")?;
+        let t = self
+            .library
+            .move_track(&caller, track_id, album_id, b.single_release)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn set_track_single_release(
+        &self,
+        req: Request<pb::SetSingleReleaseRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let track_id = parse_uuid(&b.track_id, "track")?;
+        let t = self
+            .library
+            .set_track_single_release(&caller, track_id, b.single_release)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn list_artist_aliases(
+        &self,
+        req: Request<pb::GetArtistRequest>,
+    ) -> Result<Response<pb::ListAliasesResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "artist")?;
+        let aliases = self
+            .library
+            .list_artist_aliases(&caller, id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ListAliasesResponse {
+            aliases: aliases.into_iter().map(artist_alias_to_pb).collect(),
+        }))
+    }
+    async fn add_artist_alias(
+        &self,
+        req: Request<pb::AddArtistAliasRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.artist_id, "artist")?;
+        let a = self
+            .library
+            .add_artist_alias(
+                &caller,
+                id,
+                &b.name,
+                nonempty(b.sort_name).as_deref(),
+                nonempty(b.language).as_deref(),
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+    }
+    async fn remove_artist_alias(
+        &self,
+        req: Request<pb::RemoveAliasRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.entity_id, "artist")?;
+        let alias_id = parse_uuid(&b.alias_id, "alias")?;
+        let a = self
+            .library
+            .remove_artist_alias(&caller, id, alias_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+    }
+    async fn set_primary_artist_alias(
+        &self,
+        req: Request<pb::SetPrimaryAliasRequest>,
+    ) -> Result<Response<pb::Artist>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.entity_id, "artist")?;
+        let alias_id = parse_uuid(&b.alias_id, "alias")?;
+        let a = self
+            .library
+            .set_primary_artist_alias(&caller, id, alias_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+    }
+    async fn list_album_aliases(
+        &self,
+        req: Request<pb::GetAlbumRequest>,
+    ) -> Result<Response<pb::ListAliasesResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "album")?;
+        let aliases = self
+            .library
+            .list_album_aliases(&caller, id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ListAliasesResponse {
+            aliases: aliases.into_iter().map(album_alias_to_pb).collect(),
+        }))
+    }
+    async fn add_album_alias(
+        &self,
+        req: Request<pb::AddAlbumAliasRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.album_id, "album")?;
+        let a = self
+            .library
+            .add_album_alias(&caller, id, &b.title, nonempty(b.language).as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
+    }
+    async fn remove_album_alias(
+        &self,
+        req: Request<pb::RemoveAliasRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.entity_id, "album")?;
+        let alias_id = parse_uuid(&b.alias_id, "alias")?;
+        let a = self
+            .library
+            .remove_album_alias(&caller, id, alias_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
+    }
+    async fn set_primary_album_alias(
+        &self,
+        req: Request<pb::SetPrimaryAliasRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.entity_id, "album")?;
+        let alias_id = parse_uuid(&b.alias_id, "alias")?;
+        let a = self
+            .library
+            .set_primary_album_alias(&caller, id, alias_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
     }
 
     // ---- Scan ----

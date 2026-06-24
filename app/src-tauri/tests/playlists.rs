@@ -6,10 +6,10 @@
 //! the optimistic splice/remove/renumber the service applies, and the
 //! dependent-op pruning the local-id delete path runs.
 
-use music_app_lib::cache::model::{Playlist, PlaylistTrack};
-use music_app_lib::cache::repo;
-use music_app_lib::db;
-use music_app_lib::sync::ops::{is_local_id, PendingOpKind};
+use octave_lib::cache::model::{Playlist, PlaylistTrack};
+use octave_lib::cache::repo;
+use octave_lib::db;
+use octave_lib::sync::ops::{is_local_id, PendingOpKind};
 
 fn now() -> String {
     "2026-06-20T12:00:00.000Z".to_string()
@@ -57,17 +57,15 @@ async fn replace_playlist_tracks_is_atomic_and_ordered() {
     .unwrap();
 
     // Replace with a reordered subset — the old rows must be gone.
-    repo::replace_playlist_tracks(
-        &pool,
-        "p1",
-        &[entry("p1", "c", 1), entry("p1", "a", 2)],
-    )
-    .await
-    .unwrap();
+    repo::replace_playlist_tracks(&pool, "p1", &[entry("p1", "c", 1), entry("p1", "a", 2)])
+        .await
+        .unwrap();
 
     let rows = repo::list_playlist_tracks(&pool, "p1").await.unwrap();
     assert_eq!(
-        rows.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| (r.track_id.as_str(), r.position))
+            .collect::<Vec<_>>(),
         [("c", 1), ("a", 2)]
     );
 }
@@ -92,18 +90,29 @@ async fn optimistic_insert_then_remove_keeps_contiguous() {
     .unwrap();
 
     // Start: [a, b, c].
-    let mut rows = vec![entry("p2", "a", 1), entry("p2", "b", 2), entry("p2", "c", 3)];
-    repo::replace_playlist_tracks(&pool, "p2", &rows).await.unwrap();
+    let mut rows = vec![
+        entry("p2", "a", 1),
+        entry("p2", "b", 2),
+        entry("p2", "c", 3),
+    ];
+    repo::replace_playlist_tracks(&pool, "p2", &rows)
+        .await
+        .unwrap();
 
     // Insert x at position 2 (1-based) → [a, x, b, c].
     rows.insert(1, entry("p2", "x", 0));
     for (i, r) in rows.iter_mut().enumerate() {
         r.position = (i + 1) as i64;
     }
-    repo::replace_playlist_tracks(&pool, "p2", &rows).await.unwrap();
+    repo::replace_playlist_tracks(&pool, "p2", &rows)
+        .await
+        .unwrap();
     let after_add = repo::list_playlist_tracks(&pool, "p2").await.unwrap();
     assert_eq!(
-        after_add.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+        after_add
+            .iter()
+            .map(|r| (r.track_id.as_str(), r.position))
+            .collect::<Vec<_>>(),
         [("a", 1), ("x", 2), ("b", 3), ("c", 4)]
     );
 
@@ -113,10 +122,15 @@ async fn optimistic_insert_then_remove_keeps_contiguous() {
     for (i, r) in rows.iter_mut().enumerate() {
         r.position = (i + 1) as i64;
     }
-    repo::replace_playlist_tracks(&pool, "p2", &rows).await.unwrap();
+    repo::replace_playlist_tracks(&pool, "p2", &rows)
+        .await
+        .unwrap();
     let after_rm = repo::list_playlist_tracks(&pool, "p2").await.unwrap();
     assert_eq!(
-        after_rm.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+        after_rm
+            .iter()
+            .map(|r| (r.track_id.as_str(), r.position))
+            .collect::<Vec<_>>(),
         [("a", 1), ("x", 2), ("c", 3)]
     );
     // Contiguity invariant: positions are exactly 1..=N.
@@ -184,7 +198,9 @@ async fn delete_offline_local_drops_dependent_ops() {
     let remaining = repo::list_pending_ops(&pool).await.unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(
-        PendingOpKind::from_payload_json(&remaining[0].payload_json).unwrap().op_type(),
+        PendingOpKind::from_payload_json(&remaining[0].payload_json)
+            .unwrap()
+            .op_type(),
         "playlist.rename"
     );
     assert!(repo::list_playlists(&pool).await.unwrap().is_empty());

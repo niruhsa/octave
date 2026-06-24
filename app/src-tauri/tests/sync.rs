@@ -3,10 +3,10 @@
 //! live server, so these focus on the persistence + remap logic that runs
 //! regardless of transport.
 
-use music_app_lib::cache::model::{Artist, Playlist, PlaylistTrack, Track};
-use music_app_lib::cache::repo;
-use music_app_lib::db;
-use music_app_lib::sync::PendingOpKind;
+use octave_lib::cache::model::{Artist, Playlist, PlaylistTrack, Track};
+use octave_lib::cache::repo;
+use octave_lib::db;
+use octave_lib::sync::PendingOpKind;
 
 fn now() -> String {
     "2026-06-20T12:00:00.000Z".to_string()
@@ -66,7 +66,10 @@ async fn mark_failed_bumps_attempts_and_records_error() {
 
     let ops = repo::list_pending_ops(&pool).await.unwrap();
     assert_eq!(ops[0].attempts, 2);
-    assert_eq!(ops[0].last_error.as_deref(), Some("transport error: refused again"));
+    assert_eq!(
+        ops[0].last_error.as_deref(),
+        Some("transport error: refused again")
+    );
 }
 
 #[tokio::test]
@@ -131,14 +134,16 @@ async fn local_id_rewrite_cascades_to_playlist_tracks() {
     let pls = repo::list_playlists(&pool).await.unwrap();
     assert_eq!(pls.len(), 1);
     assert_eq!(pls[0].id, "server-uuid");
-    let entries = repo::list_playlist_tracks(&pool, "server-uuid").await.unwrap();
+    let entries = repo::list_playlist_tracks(&pool, "server-uuid")
+        .await
+        .unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].track_id, "t1");
 }
 
 #[tokio::test]
 async fn delete_sync_state_removes_only_targeted_row() {
-    use music_app_lib::cache::model::SyncState;
+    use octave_lib::cache::model::SyncState;
     let tmp = tempfile::tempdir().unwrap();
     let pool = db::open(&tmp.path().join("c.sqlite")).await.unwrap();
 
@@ -157,9 +162,17 @@ async fn delete_sync_state_removes_only_targeted_row() {
         .unwrap();
     }
 
-    repo::delete_sync_state(&pool, "artist", "a1").await.unwrap();
-    assert!(repo::get_sync_state(&pool, "artist", "a1").await.unwrap().is_none());
-    assert!(repo::get_sync_state(&pool, "artist", "a2").await.unwrap().is_some());
+    repo::delete_sync_state(&pool, "artist", "a1")
+        .await
+        .unwrap();
+    assert!(repo::get_sync_state(&pool, "artist", "a1")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repo::get_sync_state(&pool, "artist", "a2")
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
@@ -182,7 +195,7 @@ async fn artist_and_track_rows_persist_for_reconcile() {
     // album required by tracks FK
     repo::upsert_album(
         &pool,
-        &music_app_lib::cache::model::Album {
+        &octave_lib::cache::model::Album {
             id: "al1".into(),
             artist_id: "ar1".into(),
             title: "A".into(),

@@ -90,8 +90,37 @@ pub struct Track {
     pub file_size: Option<i64>,
     /// JSON-as-TEXT; validated at the service layer.
     pub metadata_json: String,
+    /// `true` when this track is a "single release" within its album — e.g.
+    /// it was moved in from a one-track single album via `move_track`.
+    pub is_single_release: bool,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+/// One known spelling of an artist. Every artist has at least one (the primary,
+/// mirrored into `artists.name`); merging duplicates adds the merged-in
+/// spellings here so nothing is lost. `language` is the inferred/declared label
+/// (e.g. `"English"`, `"Korean"`); `None` means "infer from the script".
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct ArtistAlias {
+    pub id: Uuid,
+    pub artist_id: Uuid,
+    pub name: String,
+    pub sort_name: Option<String>,
+    pub language: Option<String>,
+    pub is_primary: bool,
+    pub created_at: OffsetDateTime,
+}
+
+/// One known spelling of an album title (see [`ArtistAlias`]).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct AlbumAlias {
+    pub id: Uuid,
+    pub album_id: Uuid,
+    pub title: String,
+    pub language: Option<String>,
+    pub is_primary: bool,
+    pub created_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
@@ -177,6 +206,23 @@ pub struct NewTrack {
     pub file_path: String,
     pub file_size: Option<i64>,
     pub metadata_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewArtistAlias {
+    pub artist_id: Uuid,
+    pub name: String,
+    pub sort_name: Option<String>,
+    pub language: Option<String>,
+    pub is_primary: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewAlbumAlias {
+    pub album_id: Uuid,
+    pub title: String,
+    pub language: Option<String>,
+    pub is_primary: bool,
 }
 
 #[derive(Debug, Clone)]

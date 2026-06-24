@@ -1,16 +1,24 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import { artistImageUrl, libraryDeleteArtist, libraryListAlbumsByArtist } from "../ipc";
+import {
+  artistImageUrl,
+  libraryDeleteArtist,
+  libraryGetArtist,
+  libraryListAlbumsByArtist,
+  libraryMergeArtists,
+} from "../ipc";
 import { Cover } from "../components/Cover";
 import { BlurUpImage } from "../components/BlurUpImage";
 import { ImageUploader } from "../components/ImageUploader";
+import { Aliases } from "../components/Aliases";
+import { EntityPicker } from "../components/EntityPicker";
 import { SavedBadge, SourceBadge, StreamBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
 import { gradientFor } from "../lib/visual";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
-import { btnDangerSm } from "../lib/ui";
+import { btnDangerSm, btnGhostSm } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
 import { EditIcon, TrashIcon } from "../components/icons";
 import { SkeletonGrid } from "../components/Skeleton";
@@ -24,12 +32,25 @@ export default function Artist() {
   const isManager = tier === "admin" || tier === "manager";
   const [editImage, setEditImage] = useState(false);
   const [imgVersion, setImgVersion] = useState(0);
+  const [merging, setMerging] = useState(false);
 
   const q = useQuery({
     queryKey: ["library", "albums-by-artist", id],
     queryFn: () => libraryListAlbumsByArtist(id),
     enabled: !!id,
   });
+  // Single-entity fetch for the canonical name + preserved-spelling aliases.
+  const artistQ = useQuery({
+    queryKey: ["library", "artist", id],
+    queryFn: () => libraryGetArtist(id),
+    enabled: !!id,
+  });
+  const artist = artistQ.data;
+
+  function refreshArtist() {
+    void qc.invalidateQueries({ queryKey: ["library"] });
+    broadcastInvalidate(["library"]);
+  }
 
   async function delArtist() {
     if (!window.confirm("Permanently delete this artist and all their albums/tracks from the server?")) return;
@@ -75,7 +96,7 @@ export default function Artist() {
           <Link to="/library" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">
             ← LIBRARY
           </Link>
-          <h1 className="mt-2 text-[27px] font-semibold tracking-tight">Albums</h1>
+          <h1 className="mt-2 text-[27px] font-semibold tracking-tight">{artist?.name ?? "Artist"}</h1>
           <p className="mt-1 font-mono text-[11.5px] text-oct-subtle">
             {items.length} album{items.length === 1 ? "" : "s"}
             {downloaded > 0 ? ` · ${downloaded} downloaded` : ""}
@@ -84,12 +105,33 @@ export default function Artist() {
         <div className="flex items-center gap-3">
           {q.data && <SourceBadge source={q.data.source} />}
           {isManager && (
-            <button onClick={delArtist} className={btnDangerSm} {...offlineAttrs(online)}>
-              <TrashIcon size={13} /> Delete artist
-            </button>
+            <>
+              <button
+                onClick={() => setMerging(true)}
+                className={btnGhostSm}
+                {...offlineAttrs(online, false, "Merge a duplicate artist into this one")}
+              >
+                Merge artist…
+              </button>
+              <button onClick={delArtist} className={btnDangerSm} {...offlineAttrs(online)}>
+                <TrashIcon size={13} /> Delete artist
+              </button>
+            </>
           )}
         </div>
       </header>
+
+      {/* Preserved spellings (Korean + English, etc.) + manager controls. */}
+      {(artist?.aliases?.length || isManager) && (
+        <Aliases
+          kind="artist"
+          entityId={id}
+          aliases={artist?.aliases ?? []}
+          online={online}
+          isManager={isManager}
+          onChanged={refreshArtist}
+        />
+      )}
 
       {q.isLoading && <SkeletonGrid count={12} />}
       {q.isError && <p className="rounded-lg border border-oct-offline/50 bg-oct-offline/10 px-3 py-2 text-sm text-oct-danger">{formatError(q.error)}</p>}
@@ -132,6 +174,21 @@ export default function Artist() {
             setImgVersion(Date.now());
             broadcastInvalidate(["library"]);
           }}
+        />
+      )}
+
+      {merging && (
+        <EntityPicker
+          kind="artist"
+          excludeId={id}
+          title="Merge artist"
+          hint={`Pick a duplicate artist to fold into "${artist?.name ?? "this artist"}". Its albums, tracks and followers move here, and every spelling is preserved.`}
+          online={online}
+          onPick={async (dupId) => {
+            await libraryMergeArtists(id, dupId);
+            refreshArtist();
+          }}
+          onClose={() => setMerging(false)}
         />
       )}
     </section>

@@ -1,4 +1,4 @@
-package dev.niruhsa.music.app
+package dev.niruhsa.octave
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -41,10 +41,10 @@ class MediaService : Service() {
     const val CHANNEL_ID = "octave_playback"
     const val NOTIFICATION_ID = 1001
 
-    const val ACTION_PREV = "dev.niruhsa.music.app.PREV"
-    const val ACTION_PLAY_PAUSE = "dev.niruhsa.music.app.PLAY_PAUSE"
-    const val ACTION_NEXT = "dev.niruhsa.music.app.NEXT"
-    const val ACTION_STOP = "dev.niruhsa.music.app.STOP"
+    const val ACTION_PREV = "dev.niruhsa.octave.PREV"
+    const val ACTION_PLAY_PAUSE = "dev.niruhsa.octave.PLAY_PAUSE"
+    const val ACTION_NEXT = "dev.niruhsa.octave.NEXT"
+    const val ACTION_STOP = "dev.niruhsa.octave.STOP"
 
     @Volatile var session: MediaSessionCompat? = null
     @Volatile var running = false

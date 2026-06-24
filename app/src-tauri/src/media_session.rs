@@ -73,10 +73,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let handle: Option<PluginHandle<R>> = {
                 #[cfg(target_os = "android")]
                 {
-                    Some(_api.register_android_plugin(
-                        "dev.niruhsa.music.app",
-                        "MediaSessionPlugin",
-                    )?)
+                    Some(_api.register_android_plugin("dev.niruhsa.octave", "MediaSessionPlugin")?)
                 }
                 #[cfg(not(target_os = "android"))]
                 {
@@ -137,7 +134,11 @@ pub fn media_session_set_playback<R: Runtime>(
     app: tauri::AppHandle<R>,
     info: PlaybackInfo,
 ) -> Result<(), String> {
-    run(app.state::<MediaSessionHandle<R>>().inner(), "setPlayback", info)
+    run(
+        app.state::<MediaSessionHandle<R>>().inner(),
+        "setPlayback",
+        info,
+    )
 }
 
 #[tauri::command]

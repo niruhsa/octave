@@ -487,6 +487,244 @@ impl RestClient {
         Ok(body.into())
     }
 
+    // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------
+
+    pub async fn merge_artists(
+        &self,
+        cred: &Credential,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<Artist> {
+        let url = format!("{}/artists/{survivor_id}/merge", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "duplicate_id": duplicate_id }))
+            .send()
+            .await
+            .map_err(rest_err("merge_artists"))?;
+        let body: ArtistJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("merge_artists decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn merge_albums(
+        &self,
+        cred: &Credential,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<Album> {
+        let url = format!("{}/albums/{survivor_id}/merge", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "duplicate_id": duplicate_id }))
+            .send()
+            .await
+            .map_err(rest_err("merge_albums"))?;
+        let body: AlbumJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("merge_albums decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn move_track(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        album_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{track_id}/move", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "album_id": album_id, "single_release": single_release }))
+            .send()
+            .await
+            .map_err(rest_err("move_track"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("move_track decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn set_track_single_release(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{track_id}/single-release", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "single_release": single_release }))
+            .send()
+            .await
+            .map_err(rest_err("set_track_single_release"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_track_single_release decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn add_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        name: &str,
+        sort_name: Option<&str>,
+        language: Option<&str>,
+    ) -> AppResult<Artist> {
+        let url = format!("{}/artists/{artist_id}/aliases", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({
+                "name": name,
+                "sort_name": sort_name,
+                "language": language,
+            }))
+            .send()
+            .await
+            .map_err(rest_err("add_artist_alias"))?;
+        let body: ArtistJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("add_artist_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn remove_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        let url = format!("{}/artists/{artist_id}/aliases/{alias_id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("remove_artist_alias"))?;
+        let body: ArtistJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("remove_artist_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn set_primary_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        let url = format!("{}/artists/{artist_id}/primary-alias", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "alias_id": alias_id }))
+            .send()
+            .await
+            .map_err(rest_err("set_primary_artist_alias"))?;
+        let body: ArtistJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_primary_artist_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn add_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Album> {
+        let url = format!("{}/albums/{album_id}/aliases", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "title": title, "language": language }))
+            .send()
+            .await
+            .map_err(rest_err("add_album_alias"))?;
+        let body: AlbumJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("add_album_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn remove_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        let url = format!("{}/albums/{album_id}/aliases/{alias_id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("remove_album_alias"))?;
+        let body: AlbumJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("remove_album_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn set_primary_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        let url = format!("{}/albums/{album_id}/primary-alias", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "alias_id": alias_id }))
+            .send()
+            .await
+            .map_err(rest_err("set_primary_album_alias"))?;
+        let body: AlbumJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_primary_album_alias decode"))?;
+        Ok(body.into())
+    }
+
     // ----- Image upload (Phase 9; Manager+ gated, REST-only binary blob) ----
 
     /// `POST /albums/:id/cover` — raw `image/*` body. Returns `()`; the caller
@@ -887,16 +1125,46 @@ impl RestClient {
 // REST DTOs (match server/src/rest/library.rs exactly).
 
 #[derive(Deserialize)]
+struct AliasJson {
+    id: String,
+    name: String,
+    #[serde(default)]
+    sort_name: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    is_primary: bool,
+}
+impl From<AliasJson> for super::AliasInfo {
+    fn from(a: AliasJson) -> Self {
+        Self {
+            id: a.id,
+            name: a.name,
+            sort_name: a.sort_name,
+            language: a.language,
+            is_primary: a.is_primary,
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct ArtistJson {
     id: String,
     name: String,
     sort_name: Option<String>,
     #[serde(default)]
     image_path: Option<String>,
+    #[serde(default)]
+    aliases: Vec<AliasJson>,
 }
 impl From<ArtistJson> for Artist {
     fn from(a: ArtistJson) -> Self {
-        Self { id: a.id, name: a.name, sort_name: a.sort_name, image_path: a.image_path }
+        Self {
+            id: a.id,
+            name: a.name,
+            sort_name: a.sort_name,
+            image_path: a.image_path,
+            aliases: a.aliases.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -907,6 +1175,8 @@ struct AlbumJson {
     title: String,
     release_year: Option<i64>,
     cover_path: Option<String>,
+    #[serde(default)]
+    aliases: Vec<AliasJson>,
 }
 impl From<AlbumJson> for Album {
     fn from(a: AlbumJson) -> Self {
@@ -916,6 +1186,7 @@ impl From<AlbumJson> for Album {
             title: a.title,
             release_year: a.release_year,
             cover_path: a.cover_path,
+            aliases: a.aliases.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -934,6 +1205,8 @@ struct TrackJson {
     file_path: String,
     file_size: Option<i64>,
     metadata_json: String,
+    #[serde(default)]
+    is_single_release: bool,
 }
 impl From<TrackJson> for Track {
     fn from(t: TrackJson) -> Self {
@@ -950,6 +1223,7 @@ impl From<TrackJson> for Track {
             file_path: t.file_path,
             file_size: t.file_size,
             metadata_json: t.metadata_json,
+            is_single_release: t.is_single_release,
         }
     }
 }

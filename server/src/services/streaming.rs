@@ -238,6 +238,26 @@ mod tests {
         ) -> crate::error::Result<Option<crate::db::models::Track>> {
             Ok(None)
         }
+        async fn reassign_artist(&self, _: Uuid, _: Uuid) -> crate::error::Result<u64> {
+            Ok(0)
+        }
+        async fn reassign_album(&self, _: Uuid, _: Uuid) -> crate::error::Result<u64> {
+            Ok(0)
+        }
+        async fn set_album(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> crate::error::Result<Option<crate::db::models::Track>> {
+            Ok(None)
+        }
+        async fn set_single_release(
+            &self,
+            _: Uuid,
+            _: bool,
+        ) -> crate::error::Result<Option<crate::db::models::Track>> {
+            Ok(None)
+        }
     }
 
     fn svc(root: Option<PathBuf>) -> StreamingService {

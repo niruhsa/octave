@@ -24,6 +24,10 @@ pub fn router() -> Router<RestState> {
         .route("/artists/:id", get(get_artist).put(update_artist).delete(delete_artist))
         .route("/artists/:id/albums", get(list_albums_by_artist))
         .route("/artists/:id/image", get(serve_artist_image).post(upload_artist_image))
+        .route("/artists/:id/merge", post(merge_artists))
+        .route("/artists/:id/aliases", get(list_artist_aliases).post(add_artist_alias))
+        .route("/artists/:id/aliases/:alias_id", delete(remove_artist_alias))
+        .route("/artists/:id/primary-alias", put(set_primary_artist_alias))
         // Albums
         .route("/albums", post(create_album))
         .route("/albums/search", get(search_albums))
@@ -31,11 +35,17 @@ pub fn router() -> Router<RestState> {
         .route("/albums/:id/tracks", get(list_tracks_by_album))
         .route("/albums/:id/cover", get(serve_album_cover).post(upload_album_cover))
         .route("/albums/:id/artwork", post(fetch_album_artwork))
+        .route("/albums/:id/merge", post(merge_albums))
+        .route("/albums/:id/aliases", get(list_album_aliases).post(add_album_alias))
+        .route("/albums/:id/aliases/:alias_id", delete(remove_album_alias))
+        .route("/albums/:id/primary-alias", put(set_primary_album_alias))
         // Tracks
         .route("/tracks", post(create_track))
         .route("/tracks/search", get(search_tracks))
         .route("/tracks/:id", get(get_track).put(update_track).delete(delete_track))
         .route("/tracks/:id/metadata", patch(edit_track_metadata))
+        .route("/tracks/:id/move", post(move_track))
+        .route("/tracks/:id/single-release", post(set_track_single_release))
         // Scan
         .route("/library/scan", post(scan_library))
         .route("/library/rescan", post(rescan_library))
@@ -65,12 +75,43 @@ pub struct SearchQ {
     pub offset: Option<i64>,
 }
 
+/// One known spelling of an artist/album. `name` is the spelling (artist name
+/// or album title); `sort_name` is artist-only (`None` for albums).
+#[derive(Serialize)]
+pub struct AliasDto {
+    pub id: String,
+    pub name: String,
+    pub sort_name: Option<String>,
+    pub language: Option<String>,
+    pub is_primary: bool,
+}
+fn artist_alias_dto(a: m::ArtistAlias) -> AliasDto {
+    AliasDto {
+        id: a.id.to_string(),
+        name: a.name,
+        sort_name: a.sort_name,
+        language: a.language,
+        is_primary: a.is_primary,
+    }
+}
+fn album_alias_dto(a: m::AlbumAlias) -> AliasDto {
+    AliasDto {
+        id: a.id.to_string(),
+        name: a.title,
+        sort_name: None,
+        language: a.language,
+        is_primary: a.is_primary,
+    }
+}
+
 #[derive(Serialize)]
 pub struct ArtistDto {
     pub id: String,
     pub name: String,
     pub sort_name: Option<String>,
     pub image_path: Option<String>,
+    /// Every known spelling. Populated on single-entity reads/mutations only.
+    pub aliases: Vec<AliasDto>,
 }
 fn artist_dto(a: m::Artist) -> ArtistDto {
     ArtistDto {
@@ -78,6 +119,7 @@ fn artist_dto(a: m::Artist) -> ArtistDto {
         name: a.name,
         sort_name: a.sort_name,
         image_path: a.image_path,
+        aliases: Vec::new(),
     }
 }
 
@@ -88,6 +130,7 @@ pub struct AlbumDto {
     pub title: String,
     pub release_year: Option<i32>,
     pub cover_path: Option<String>,
+    pub aliases: Vec<AliasDto>,
 }
 fn album_dto(a: m::Album) -> AlbumDto {
     AlbumDto {
@@ -96,6 +139,7 @@ fn album_dto(a: m::Album) -> AlbumDto {
         title: a.title,
         release_year: a.release_year,
         cover_path: a.cover_path,
+        aliases: Vec::new(),
     }
 }
 
@@ -113,6 +157,7 @@ pub struct TrackDto {
     pub file_path: String,
     pub file_size: Option<i64>,
     pub metadata_json: String,
+    pub is_single_release: bool,
 }
 fn track_dto(t: m::Track) -> TrackDto {
     TrackDto {
@@ -128,7 +173,32 @@ fn track_dto(t: m::Track) -> TrackDto {
         file_path: t.file_path,
         file_size: t.file_size,
         metadata_json: t.metadata_json,
+        is_single_release: t.is_single_release,
     }
+}
+
+/// Build an `ArtistDto` with its alias list populated (single-entity paths).
+async fn artist_dto_full(
+    state: &RestState,
+    caller: &Identity,
+    a: m::Artist,
+) -> Result<ArtistDto, ApiError> {
+    let aliases = state.library.list_artist_aliases(caller, a.id).await?;
+    let mut dto = artist_dto(a);
+    dto.aliases = aliases.into_iter().map(artist_alias_dto).collect();
+    Ok(dto)
+}
+
+/// Build an `AlbumDto` with its alias list populated (single-entity paths).
+async fn album_dto_full(
+    state: &RestState,
+    caller: &Identity,
+    a: m::Album,
+) -> Result<AlbumDto, ApiError> {
+    let aliases = state.library.list_album_aliases(caller, a.id).await?;
+    let mut dto = album_dto(a);
+    dto.aliases = aliases.into_iter().map(album_alias_dto).collect();
+    Ok(dto)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +263,7 @@ async fn get_artist(
 ) -> Result<Json<ArtistDto>, ApiError> {
     let caller = id(&req)?;
     let a = state.library.get_artist(&caller, id_path).await?;
-    Ok(Json(artist_dto(a)))
+    Ok(Json(artist_dto_full(&state, &caller, a).await?))
 }
 
 async fn update_artist(
@@ -207,7 +277,7 @@ async fn update_artist(
         .library
         .update_artist(&caller, id_path, &body.name, body.sort_name.as_deref())
         .await?;
-    Ok(Json(artist_dto(a)))
+    Ok(Json(artist_dto_full(&state, &caller, a).await?))
 }
 
 async fn delete_artist(
@@ -297,7 +367,7 @@ async fn get_album(
 ) -> Result<Json<AlbumDto>, ApiError> {
     let caller = id(&req)?;
     let a = state.library.get_album(&caller, id_path).await?;
-    Ok(Json(album_dto(a)))
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
 }
 
 async fn update_album(
@@ -317,7 +387,7 @@ async fn update_album(
             body.cover_path.as_deref(),
         )
         .await?;
-    Ok(Json(album_dto(a)))
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
 }
 
 async fn delete_album(
@@ -557,6 +627,209 @@ async fn serve_album_cover(
         None => cover_path,
     };
     image_file_response(&serve_path).await
+}
+
+// ---------------------------------------------------------------------------
+// Merge + aliases (Phase 10; Manager+ gated, audited)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct MergeBody {
+    pub duplicate_id: Uuid,
+}
+
+async fn merge_artists(
+    State(state): State<RestState>,
+    Path(survivor_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<ArtistDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: MergeBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .merge_artists(&caller, survivor_id, body.duplicate_id)
+        .await?;
+    Ok(Json(artist_dto_full(&state, &caller, a).await?))
+}
+
+async fn merge_albums(
+    State(state): State<RestState>,
+    Path(survivor_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<AlbumDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: MergeBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .merge_albums(&caller, survivor_id, body.duplicate_id)
+        .await?;
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
+}
+
+#[derive(Deserialize)]
+pub struct MoveTrackBody {
+    pub album_id: Uuid,
+    #[serde(default)]
+    pub single_release: bool,
+}
+
+async fn move_track(
+    State(state): State<RestState>,
+    Path(track_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: MoveTrackBody = crate::rest::parse_json(req).await?;
+    let t = state
+        .library
+        .move_track(&caller, track_id, body.album_id, body.single_release)
+        .await?;
+    Ok(Json(track_dto(t)))
+}
+
+#[derive(Deserialize)]
+pub struct SingleReleaseBody {
+    pub single_release: bool,
+}
+
+async fn set_track_single_release(
+    State(state): State<RestState>,
+    Path(track_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: SingleReleaseBody = crate::rest::parse_json(req).await?;
+    let t = state
+        .library
+        .set_track_single_release(&caller, track_id, body.single_release)
+        .await?;
+    Ok(Json(track_dto(t)))
+}
+
+#[derive(Deserialize)]
+pub struct AddArtistAliasBody {
+    pub name: String,
+    pub sort_name: Option<String>,
+    pub language: Option<String>,
+}
+
+async fn list_artist_aliases(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<Vec<AliasDto>>, ApiError> {
+    let caller = id(&req)?;
+    let rows = state.library.list_artist_aliases(&caller, artist_id).await?;
+    Ok(Json(rows.into_iter().map(artist_alias_dto).collect()))
+}
+
+async fn add_artist_alias(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<ArtistDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: AddArtistAliasBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .add_artist_alias(
+            &caller,
+            artist_id,
+            &body.name,
+            body.sort_name.as_deref(),
+            body.language.as_deref(),
+        )
+        .await?;
+    Ok(Json(artist_dto_full(&state, &caller, a).await?))
+}
+
+async fn remove_artist_alias(
+    State(state): State<RestState>,
+    Path((artist_id, alias_id)): Path<(Uuid, Uuid)>,
+    req: Request<Body>,
+) -> Result<Json<ArtistDto>, ApiError> {
+    let caller = id(&req)?;
+    let a = state
+        .library
+        .remove_artist_alias(&caller, artist_id, alias_id)
+        .await?;
+    Ok(Json(artist_dto_full(&state, &caller, a).await?))
+}
+
+#[derive(Deserialize)]
+pub struct SetPrimaryAliasBody {
+    pub alias_id: Uuid,
+}
+
+async fn set_primary_artist_alias(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<ArtistDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: SetPrimaryAliasBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .set_primary_artist_alias(&caller, artist_id, body.alias_id)
+        .await?;
+    Ok(Json(artist_dto_full(&state, &caller, a).await?))
+}
+
+#[derive(Deserialize)]
+pub struct AddAlbumAliasBody {
+    pub title: String,
+    pub language: Option<String>,
+}
+
+async fn list_album_aliases(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<Vec<AliasDto>>, ApiError> {
+    let caller = id(&req)?;
+    let rows = state.library.list_album_aliases(&caller, album_id).await?;
+    Ok(Json(rows.into_iter().map(album_alias_dto).collect()))
+}
+
+async fn add_album_alias(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<AlbumDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: AddAlbumAliasBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .add_album_alias(&caller, album_id, &body.title, body.language.as_deref())
+        .await?;
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
+}
+
+async fn remove_album_alias(
+    State(state): State<RestState>,
+    Path((album_id, alias_id)): Path<(Uuid, Uuid)>,
+    req: Request<Body>,
+) -> Result<Json<AlbumDto>, ApiError> {
+    let caller = id(&req)?;
+    let a = state
+        .library
+        .remove_album_alias(&caller, album_id, alias_id)
+        .await?;
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
+}
+
+async fn set_primary_album_alias(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<AlbumDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: SetPrimaryAliasBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .set_primary_album_alias(&caller, album_id, body.alias_id)
+        .await?;
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
 }
 
 // ---------------------------------------------------------------------------

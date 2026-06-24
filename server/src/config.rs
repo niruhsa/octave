@@ -65,6 +65,11 @@ pub struct Config {
     /// How often the background optimize-all pass runs, in seconds.
     /// `IMAGE_OPTIMIZE_INTERVAL_SECS`, default 21600 (6h); 0 disables it.
     pub image_optimize_interval_secs: u64,
+    /// Language whose spelling is shown as the canonical artist/album name when
+    /// merged duplicates carry multiple spellings. `PRIMARY_LANGUAGE`
+    /// (normalized to a label like `"English"`); defaults to `"English"`.
+    /// A per-user setting later; an env var for now.
+    pub primary_language: String,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
@@ -117,6 +122,14 @@ impl Config {
         let image_quality = env_u64("IMAGE_QUALITY", 82).clamp(1, 100) as u8;
         let image_optimize_interval_secs = env_u64("IMAGE_OPTIMIZE_INTERVAL_SECS", 21_600);
 
+        // Primary display language: normalize a set value to a canonical label
+        // (so `en`/`english`/`English` all work); default English.
+        let primary_language = env::var("PRIMARY_LANGUAGE")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| crate::services::tag::normalize_language(&v))
+            .unwrap_or_else(|| "English".to_string());
+
         if let Some(p) = &library_path {
             debug!(resolved = %p.display(), "LIBRARY_PATH resolved");
         }
@@ -139,6 +152,7 @@ impl Config {
             image_max_dim,
             image_quality,
             image_optimize_interval_secs,
+            primary_language,
             config_anchor: anchor,
         })
     }

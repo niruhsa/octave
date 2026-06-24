@@ -1,4 +1,4 @@
-package dev.niruhsa.music.app
+package dev.niruhsa.octave
 
 import android.app.Activity
 import android.graphics.Bitmap

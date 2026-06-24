@@ -3,9 +3,9 @@
 //! prune logic that the manager delegates to and that runs regardless of
 //! transport.
 
-use music_app_lib::cache::model::{Album, AlbumArt, Artist, Track};
-use music_app_lib::cache::repo;
-use music_app_lib::db;
+use octave_lib::cache::model::{Album, AlbumArt, Artist, Track};
+use octave_lib::cache::repo;
+use octave_lib::db;
 
 fn now() -> String {
     "2026-06-20T12:00:00.000Z".to_string()
@@ -87,20 +87,30 @@ async fn settings_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
     let pool = db::open(&tmp.path().join("c.sqlite")).await.unwrap();
 
-    assert_eq!(repo::get_setting(&pool, "downloads_dir").await.unwrap(), None);
-    repo::set_setting(&pool, "downloads_dir", "/srv/music").await.unwrap();
+    assert_eq!(
+        repo::get_setting(&pool, "downloads_dir").await.unwrap(),
+        None
+    );
+    repo::set_setting(&pool, "downloads_dir", "/srv/music")
+        .await
+        .unwrap();
     assert_eq!(
         repo::get_setting(&pool, "downloads_dir").await.unwrap(),
         Some("/srv/music".into())
     );
     // Upsert overwrites.
-    repo::set_setting(&pool, "downloads_dir", "/srv/other").await.unwrap();
+    repo::set_setting(&pool, "downloads_dir", "/srv/other")
+        .await
+        .unwrap();
     assert_eq!(
         repo::get_setting(&pool, "downloads_dir").await.unwrap(),
         Some("/srv/other".into())
     );
     repo::delete_setting(&pool, "downloads_dir").await.unwrap();
-    assert_eq!(repo::get_setting(&pool, "downloads_dir").await.unwrap(), None);
+    assert_eq!(
+        repo::get_setting(&pool, "downloads_dir").await.unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -111,12 +121,16 @@ async fn count_tracks_for_album_drives_cover_prune() {
 
     // Two tracks under al1 → cover stays.
     assert_eq!(
-        repo::count_downloaded_tracks_for_album(&pool, "al1").await.unwrap(),
+        repo::count_downloaded_tracks_for_album(&pool, "al1")
+            .await
+            .unwrap(),
         2
     );
     repo::delete_track(&pool, "t1").await.unwrap();
     assert_eq!(
-        repo::count_downloaded_tracks_for_album(&pool, "al1").await.unwrap(),
+        repo::count_downloaded_tracks_for_album(&pool, "al1")
+            .await
+            .unwrap(),
         1
     );
     // Still has a track → cover + album row remain.
@@ -126,7 +140,9 @@ async fn count_tracks_for_album_drives_cover_prune() {
     repo::delete_track(&pool, "t2").await.unwrap();
     // Now empty → the manager's delete_track would prune cover + album.
     assert_eq!(
-        repo::count_downloaded_tracks_for_album(&pool, "al1").await.unwrap(),
+        repo::count_downloaded_tracks_for_album(&pool, "al1")
+            .await
+            .unwrap(),
         0
     );
 }

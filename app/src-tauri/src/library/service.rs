@@ -143,6 +143,34 @@ impl<'a> LibraryService<'a> {
         Ok(LibraryView::cache(items))
     }
 
+    /// Fetch a single artist, server-first (with its full alias set) and
+    /// falling back to the offline cache (which carries no aliases). Used by
+    /// the Artist route to show the canonical name + "Also known as" + drive
+    /// the merge/alias controls.
+    pub async fn get_artist(&self, id: &str) -> AppResult<MergedArtist> {
+        match self.try_server_get_artist(id).await {
+            Ok(Some(a)) => Ok(a),
+            Ok(None) => self.get_artist_from_cache(id).await,
+            Err(e) if is_offline_signal(&e) => self.get_artist_from_cache(id).await,
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn try_server_get_artist(&self, id: &str) -> AppResult<Option<MergedArtist>> {
+        let cred = self.auth.credential().await?;
+        match self.auth.server().get_artist(&cred, id).await? {
+            Some(a) => Ok(Some(self.to_merged_artist(a).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_artist_from_cache(&self, id: &str) -> AppResult<MergedArtist> {
+        let a = repo::get_artist(self.pool, id)
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("artist {id} not found")))?;
+        Ok(MergedArtist::from_cache(a))
+    }
+
     // ----- albums --------------------------------------------------------
 
     pub async fn list_albums_by_artist(
@@ -194,6 +222,34 @@ impl<'a> LibraryService<'a> {
             out.push(MergedAlbum::from_cache(a, art));
         }
         Ok(LibraryView::cache(out))
+    }
+
+    /// Fetch a single album, server-first (with its alias set) and cache
+    /// fallback. Used by the Album route for the title + "Also known as" +
+    /// merge controls.
+    pub async fn get_album(&self, id: &str) -> AppResult<MergedAlbum> {
+        match self.try_server_get_album(id).await {
+            Ok(Some(a)) => Ok(a),
+            Ok(None) => self.get_album_from_cache(id).await,
+            Err(e) if is_offline_signal(&e) => self.get_album_from_cache(id).await,
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn try_server_get_album(&self, id: &str) -> AppResult<Option<MergedAlbum>> {
+        let cred = self.auth.credential().await?;
+        match self.auth.server().get_album(&cred, id).await? {
+            Some(a) => Ok(Some(self.to_merged_album(a).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_album_from_cache(&self, id: &str) -> AppResult<MergedAlbum> {
+        let a = repo::get_album(self.pool, id)
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("album {id} not found")))?;
+        let art = repo::get_album_art(self.pool, id).await?;
+        Ok(MergedAlbum::from_cache(a, art))
     }
 
     pub async fn search_albums(
@@ -405,7 +461,131 @@ impl<'a> LibraryService<'a> {
         Ok(MergedTrack::from_server(updated, local_file_path))
     }
 
+    // ----- Merge + aliases (Phase 10; Manager+, server-authoritative) ------
+    //
+    // These re-shape the catalog (re-point children, delete a row, preserve
+    // spellings), so they require a live server and aren't queued offline. The
+    // server result is returned as a Merged* entity; the offline cache
+    // reconciles on the next sync (the UI also invalidates + refetches).
+
+    pub async fn merge_artists(
+        &self,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<MergedArtist> {
+        let a = self.auth.merge_artists(survivor_id, duplicate_id).await?;
+        self.to_merged_artist(a).await
+    }
+
+    pub async fn merge_albums(
+        &self,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<MergedAlbum> {
+        let a = self.auth.merge_albums(survivor_id, duplicate_id).await?;
+        self.to_merged_album(a).await
+    }
+
+    pub async fn move_track(
+        &self,
+        track_id: &str,
+        album_id: &str,
+        single_release: bool,
+    ) -> AppResult<MergedTrack> {
+        let t = self.auth.move_track(track_id, album_id, single_release).await?;
+        self.to_merged_track(t).await
+    }
+
+    pub async fn set_track_single_release(
+        &self,
+        track_id: &str,
+        single_release: bool,
+    ) -> AppResult<MergedTrack> {
+        let t = self.auth.set_track_single_release(track_id, single_release).await?;
+        self.to_merged_track(t).await
+    }
+
+    pub async fn add_artist_alias(
+        &self,
+        artist_id: &str,
+        name: &str,
+        sort_name: Option<&str>,
+        language: Option<&str>,
+    ) -> AppResult<MergedArtist> {
+        let a = self.auth.add_artist_alias(artist_id, name, sort_name, language).await?;
+        self.to_merged_artist(a).await
+    }
+
+    pub async fn remove_artist_alias(
+        &self,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<MergedArtist> {
+        let a = self.auth.remove_artist_alias(artist_id, alias_id).await?;
+        self.to_merged_artist(a).await
+    }
+
+    pub async fn set_primary_artist_alias(
+        &self,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<MergedArtist> {
+        let a = self.auth.set_primary_artist_alias(artist_id, alias_id).await?;
+        self.to_merged_artist(a).await
+    }
+
+    pub async fn add_album_alias(
+        &self,
+        album_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<MergedAlbum> {
+        let a = self.auth.add_album_alias(album_id, title, language).await?;
+        self.to_merged_album(a).await
+    }
+
+    pub async fn remove_album_alias(
+        &self,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<MergedAlbum> {
+        let a = self.auth.remove_album_alias(album_id, alias_id).await?;
+        self.to_merged_album(a).await
+    }
+
+    pub async fn set_primary_album_alias(
+        &self,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<MergedAlbum> {
+        let a = self.auth.set_primary_album_alias(album_id, alias_id).await?;
+        self.to_merged_album(a).await
+    }
+
     // ----- helpers -------------------------------------------------------
+
+    /// Build a `MergedArtist` from a server row, filling the `downloaded` flag
+    /// from the offline cache.
+    async fn to_merged_artist(&self, a: crate::transport::Artist) -> AppResult<MergedArtist> {
+        let downloaded = self
+            .downloaded_artist_ids(&[a.id.as_str()])
+            .await?
+            .contains(a.id.as_str());
+        Ok(MergedArtist::from_server(a, downloaded))
+    }
+
+    /// Build a `MergedAlbum` from a server row, filling local-cover/downloaded.
+    async fn to_merged_album(&self, a: crate::transport::Album) -> AppResult<MergedAlbum> {
+        let local = self.local_covers(&[a.id.as_str()]).await?.get(&a.id).cloned();
+        let downloaded = local.is_some();
+        Ok(MergedAlbum::from_server(a, local, downloaded))
+    }
+
+    /// Build a `MergedTrack` from a server row, filling the local file path.
+    async fn to_merged_track(&self, t: crate::transport::Track) -> AppResult<MergedTrack> {
+        let lp = self.local_track_paths(&[t.id.as_str()]).await?.get(&t.id).cloned();
+        Ok(MergedTrack::from_server(t, lp))
+    }
 
     /// Which of the given artist IDs have at least one cached track? Used
     /// to populate the `downloaded` flag on server-sourced artist rows.

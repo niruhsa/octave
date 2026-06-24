@@ -391,6 +391,172 @@ impl ServerClient {
         self.rest.edit_track_metadata(cred, id, edit).await
     }
 
+    // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------
+
+    pub async fn merge_artists(
+        &self,
+        cred: &Credential,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<Artist> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.merge_artists(cred, survivor_id, duplicate_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("merge_artists", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.merge_artists(cred, survivor_id, duplicate_id).await
+    }
+
+    pub async fn merge_albums(
+        &self,
+        cred: &Credential,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<Album> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.merge_albums(cred, survivor_id, duplicate_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("merge_albums", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.merge_albums(cred, survivor_id, duplicate_id).await
+    }
+
+    pub async fn move_track(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        album_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.move_track(cred, track_id, album_id, single_release).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("move_track", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.move_track(cred, track_id, album_id, single_release).await
+    }
+
+    pub async fn set_track_single_release(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_track_single_release(cred, track_id, single_release).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("set_track_single_release", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_track_single_release(cred, track_id, single_release).await
+    }
+
+    pub async fn add_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        name: &str,
+        sort_name: Option<&str>,
+        language: Option<&str>,
+    ) -> AppResult<Artist> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.add_artist_alias(cred, artist_id, name, sort_name, language).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("add_artist_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.add_artist_alias(cred, artist_id, name, sort_name, language).await
+    }
+
+    pub async fn remove_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.remove_artist_alias(cred, artist_id, alias_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("remove_artist_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.remove_artist_alias(cred, artist_id, alias_id).await
+    }
+
+    pub async fn set_primary_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_primary_artist_alias(cred, artist_id, alias_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("set_primary_artist_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_primary_artist_alias(cred, artist_id, alias_id).await
+    }
+
+    pub async fn add_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Album> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.add_album_alias(cred, album_id, title, language).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("add_album_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.add_album_alias(cred, album_id, title, language).await
+    }
+
+    pub async fn remove_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.remove_album_alias(cred, album_id, alias_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("remove_album_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.remove_album_alias(cred, album_id, alias_id).await
+    }
+
+    pub async fn set_primary_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_primary_album_alias(cred, album_id, alias_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("set_primary_album_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_primary_album_alias(cred, album_id, alias_id).await
+    }
+
     // ----- Image upload (Phase 9) ------------------------------------------
     //
     // REST-only: binary blob upload, mirroring the REST-only cover *serving*

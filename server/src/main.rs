@@ -49,8 +49,11 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
+        Arc::new(repos.clone()),
+        Arc::new(repos.clone()),
     )
-    .with_library_root(config.library_path.clone());
+    .with_library_root(config.library_path.clone())
+    .with_primary_language(config.primary_language.clone());
     let scan = ScanService::new(library.clone(), config.library_path.clone());
     let streaming = StreamingService::new(Arc::new(repos.clone()), config.library_path.clone());
     let playlists = PlaylistService::new(

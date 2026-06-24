@@ -61,6 +61,9 @@ pub trait AlbumRepo: Send + Sync {
     /// `(id, cover_path)` for every album that has a cover set. Used by the
     /// image-optimization pass.
     async fn all_cover_paths(&self) -> Result<Vec<(Uuid, String)>>;
+    /// Re-point every album owned by `from_artist` onto `to_artist`. Used when
+    /// merging a duplicate artist into a survivor. Returns the number moved.
+    async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<u64>;
     async fn delete(&self, id: Uuid) -> Result<()>;
 }
 
@@ -80,6 +83,17 @@ pub trait TrackRepo: Send + Sync {
     ) -> Result<Option<Track>>;
     async fn find_by_file_path(&self, file_path: &str) -> Result<Option<Track>>;
     async fn delete(&self, id: Uuid) -> Result<()>;
+    /// Re-point every track owned by `from_artist` onto `to_artist` (artist
+    /// merge). Returns the number moved.
+    async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<u64>;
+    /// Re-point every track in `from_album` onto `to_album` (album merge).
+    /// Returns the number moved.
+    async fn reassign_album(&self, from_album: Uuid, to_album: Uuid) -> Result<u64>;
+    /// Move a single track to `album_id` (the "single release" move). Returns
+    /// the updated row.
+    async fn set_album(&self, id: Uuid, album_id: Uuid) -> Result<Option<Track>>;
+    /// Set (or clear) the single-release flag on a track. Returns the updated row.
+    async fn set_single_release(&self, id: Uuid, is_single_release: bool) -> Result<Option<Track>>;
     /// Return every track's (id, file_path, duration_ms) for bulk rescan.
     async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>>;
     /// Overwrite the duration of a single track.  Returns the updated row.
@@ -141,6 +155,37 @@ pub trait FollowRepo: Send + Sync {
     async fn unfollow(&self, user_id: Uuid, artist_id: Uuid) -> Result<()>;
     async fn followers_of(&self, artist_id: Uuid) -> Result<Vec<Uuid>>;
     async fn following(&self, user_id: Uuid) -> Result<Vec<Uuid>>;
+    /// Move every follow of `from_artist` onto `to_artist`, de-duplicating any
+    /// user who already follows both (artist merge).
+    async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<()>;
+}
+
+/// Alias rows preserve every known spelling of an artist / album so a merge
+/// never loses the original name. See [`ArtistAlias`] / [`AlbumAlias`].
+#[async_trait]
+pub trait AliasRepo: Send + Sync {
+    // ----- Artist aliases -----
+    async fn list_artist_aliases(&self, artist_id: Uuid) -> Result<Vec<ArtistAlias>>;
+    /// Insert (or return the existing row, on a `(artist_id, name)` conflict)
+    /// an alias. The conflict path leaves the stored row untouched.
+    async fn add_artist_alias(&self, new: NewArtistAlias) -> Result<ArtistAlias>;
+    async fn get_artist_alias(&self, id: Uuid) -> Result<Option<ArtistAlias>>;
+    async fn delete_artist_alias(&self, id: Uuid) -> Result<()>;
+    /// Mark `alias_id` primary and clear the flag on every other alias of the
+    /// same artist (single primary per artist).
+    async fn set_primary_artist_alias(&self, artist_id: Uuid, alias_id: Uuid) -> Result<()>;
+    /// Move every alias of `from_artist` onto `to_artist`, skipping names that
+    /// already exist on the target (artist merge). Reassigned aliases are no
+    /// longer primary (the survivor keeps its own primary).
+    async fn reassign_artist_aliases(&self, from_artist: Uuid, to_artist: Uuid) -> Result<()>;
+
+    // ----- Album aliases -----
+    async fn list_album_aliases(&self, album_id: Uuid) -> Result<Vec<AlbumAlias>>;
+    async fn add_album_alias(&self, new: NewAlbumAlias) -> Result<AlbumAlias>;
+    async fn get_album_alias(&self, id: Uuid) -> Result<Option<AlbumAlias>>;
+    async fn delete_album_alias(&self, id: Uuid) -> Result<()>;
+    async fn set_primary_album_alias(&self, album_id: Uuid, alias_id: Uuid) -> Result<()>;
+    async fn reassign_album_aliases(&self, from_album: Uuid, to_album: Uuid) -> Result<()>;
 }
 
 #[async_trait]

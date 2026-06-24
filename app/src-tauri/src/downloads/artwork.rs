@@ -20,8 +20,11 @@ use crate::error::AppResult;
 
 /// MusicBrainz wants a real UA + a contact. Hard-coded here so the client
 /// doesn't ship a config knob for it.
-const USER_AGENT: &str =
-    concat!("music-app/", env!("CARGO_PKG_VERSION"), " (https://github.com/drwhite/music-server)");
+const USER_AGENT: &str = concat!(
+    "octave/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/drwhite/music-server)"
+);
 
 /// Try to fetch a front cover for `artist` / `album` into `dest`.
 ///
@@ -29,12 +32,7 @@ const USER_AGENT: &str =
 /// resolved (no MBID, no CAA entry, decode failure). Never returns `Err`
 /// for "no cover found" — only for transport-level problems the caller
 /// might want to retry. In practice the caller treats both as "skip".
-pub async fn fetch_cover(
-    http: &Client,
-    artist: &str,
-    album: &str,
-    dest: &Path,
-) -> AppResult<bool> {
+pub async fn fetch_cover(http: &Client, artist: &str, album: &str, dest: &Path) -> AppResult<bool> {
     let Some(mbid) = resolve_mbid(http, artist, album).await? else {
         return Ok(false);
     };

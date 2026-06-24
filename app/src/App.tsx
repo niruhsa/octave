@@ -1,5 +1,9 @@
 import { useEffect, useCallback } from "react";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { RouterProvider, createBrowserRouter, Outlet } from "react-router-dom";
 import Home from "./routes/Home";
 import Login from "./routes/Login";
@@ -44,8 +48,10 @@ function useQuerySync() {
   const qc = useQueryClient();
   useEffect(() => {
     try {
-      const ch = new BroadcastChannel("music-app-query-sync");
-      const handler = (e: MessageEvent<{ type: string; queryKey: string[] }>) => {
+      const ch = new BroadcastChannel("octave-query-sync");
+      const handler = (
+        e: MessageEvent<{ type: string; queryKey: string[] }>,
+      ) => {
         if (e.data?.type === "invalidate" && e.data.queryKey) {
           qc.invalidateQueries({ queryKey: e.data.queryKey });
         }
@@ -67,7 +73,7 @@ function useQuerySync() {
 let _bc: BroadcastChannel | null = null;
 function bc(): BroadcastChannel | null {
   if (typeof BroadcastChannel === "undefined") return null;
-  if (!_bc) _bc = new BroadcastChannel("music-app-query-sync");
+  if (!_bc) _bc = new BroadcastChannel("octave-query-sync");
   return _bc;
 }
 

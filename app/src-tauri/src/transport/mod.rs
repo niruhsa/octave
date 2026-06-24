@@ -31,6 +31,17 @@ use serde::{Deserialize, Serialize};
 /// Server's view of an artist. Distinct from `crate::cache::model::Artist`
 /// because the cache row carries an `updated_at` only the cache writes,
 /// and the server's REST/gRPC payloads don't include it on these reads.
+/// One known spelling of an artist/album, preserved across merges. `name` is
+/// the spelling (artist name or album title); `sort_name` is artist-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliasInfo {
+    pub id: String,
+    pub name: String,
+    pub sort_name: Option<String>,
+    pub language: Option<String>,
+    pub is_primary: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artist {
     pub id: String,
@@ -40,6 +51,10 @@ pub struct Artist {
     /// The client renders it via `GET /artists/:id/image` (proxied through
     /// the `cover://` scheme); the path itself isn't used directly.
     pub image_path: Option<String>,
+    /// Every known spelling (Korean + English, etc.). Populated on
+    /// single-entity reads/mutations; empty on list/search rows.
+    #[serde(default)]
+    pub aliases: Vec<AliasInfo>,
 }
 
 /// Server's view of an album. `cover_path` is server-relative — not yet
@@ -51,6 +66,8 @@ pub struct Album {
     pub title: String,
     pub release_year: Option<i64>,
     pub cover_path: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<AliasInfo>,
 }
 
 /// Server's view of a track. `file_path` is the server-side path; the
@@ -69,6 +86,9 @@ pub struct Track {
     pub file_path: String,
     pub file_size: Option<i64>,
     pub metadata_json: String,
+    /// `true` when this track is a single release within its album.
+    #[serde(default)]
+    pub is_single_release: bool,
 }
 
 /// Server's view of a playlist (no timestamps in the wire DTO).
@@ -390,5 +410,61 @@ mod tests {
         assert_eq!(edit.disc_no, Some(2));
         assert!(edit.title.is_none());
         assert!(edit.year.is_none());
+    }
+
+    #[test]
+    fn artist_aliases_round_trip() {
+        // An artist carries its preserved spellings; the primary one is the
+        // displayed name. JSON survives a round-trip into the frontend.
+        let artist = Artist {
+            id: "a1".into(),
+            name: "YUQI".into(),
+            sort_name: None,
+            image_path: None,
+            aliases: vec![
+                AliasInfo {
+                    id: "x".into(),
+                    name: "YUQI".into(),
+                    sort_name: None,
+                    language: Some("English".into()),
+                    is_primary: true,
+                },
+                AliasInfo {
+                    id: "y".into(),
+                    name: "우기 ((여자)아이들)".into(),
+                    sort_name: None,
+                    language: Some("Korean".into()),
+                    is_primary: false,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&artist).unwrap();
+        let back: Artist = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.aliases.len(), 2);
+        assert_eq!(back.name, "YUQI");
+        assert!(back.aliases[0].is_primary);
+        assert_eq!(back.aliases[1].name, "우기 ((여자)아이들)");
+    }
+
+    #[test]
+    fn track_single_release_defaults_false_when_absent() {
+        // A server payload that predates the field (or list/search rows)
+        // deserialises `is_single_release` to its `#[serde(default)]` false;
+        // `aliases` likewise defaults to empty.
+        let t: Track = serde_json::from_str(
+            r#"{ "id":"t1","album_id":"al","artist_id":"ar","title":"x",
+                 "track_no":null,"disc_no":null,"duration_ms":1000,"codec":"flac",
+                 "bitrate_kbps":null,"file_path":"/x.flac","file_size":null,
+                 "metadata_json":"{}" }"#,
+        )
+        .unwrap();
+        assert!(!t.is_single_release);
+
+        let a: Album = serde_json::from_str(
+            r#"{ "id":"al","artist_id":"ar","title":"X","release_year":null,
+                 "cover_path":null }"#,
+        )
+        .unwrap();
+        assert!(a.aliases.is_empty());
     }
 }

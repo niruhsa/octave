@@ -21,7 +21,7 @@ use crate::transport::PermissionTier;
 /// Service name used in the OS keychain. Matches Tauri's app identifier so
 /// uninstalling the app cleanly removes the entry on platforms that scope
 /// keychain entries to the bundle id (macOS).
-pub const KEYRING_SERVICE: &str = "dev.niruhsa.music.app";
+pub const KEYRING_SERVICE: &str = "dev.niruhsa.octave";
 /// Single keychain entry name — we store one credential at a time.
 pub const KEYRING_USER: &str = "default";
 
@@ -125,8 +125,8 @@ impl SecureStore for FileStore {
             // Best-effort owner-only perms on Unix.
             #[cfg(unix)]
             {
-                use std::os::unix::fs::OpenOptionsExt;
                 use std::io::Write;
+                use std::os::unix::fs::OpenOptionsExt;
                 let mut f = std::fs::OpenOptions::new()
                     .write(true)
                     .create(true)

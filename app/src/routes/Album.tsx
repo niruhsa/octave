@@ -9,10 +9,16 @@ import {
   downloadTrack,
   libraryDeleteAlbum,
   libraryDeleteTrack,
+  libraryGetAlbum,
   libraryListTracksByAlbum,
+  libraryMergeAlbums,
+  libraryMoveTrack,
+  librarySetTrackSingleRelease,
 } from "../ipc";
 import { Cover } from "../components/Cover";
 import { SourceBadge } from "../components/SourceBadge";
+import { Aliases } from "../components/Aliases";
+import { EntityPicker } from "../components/EntityPicker";
 import { EqBars } from "../components/EqBars";
 import { formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
@@ -21,10 +27,11 @@ import { usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { broadcastInvalidate } from "../App";
 import { useAppStore } from "../store";
-import { btnDanger, btnGhost, btnPrimary, errorBox } from "../lib/ui";
+import { btnDanger, btnGhost, btnGhostSm, btnPrimary, errorBox } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
 import { SkeletonHero, SkeletonTracks } from "../components/Skeleton";
 import {
+  DiscIcon,
   DownloadIcon,
   EditIcon,
   PlayIcon,
@@ -61,6 +68,14 @@ export default function Album() {
     queryFn: () => cacheGetAlbum(id),
     enabled: !!id,
   });
+  // Server-backed album (canonical title + preserved-spelling aliases). Falls
+  // back to the cache title when offline.
+  const albumQ = useQuery({
+    queryKey: ["library", "album", id],
+    queryFn: () => libraryGetAlbum(id),
+    enabled: !!id,
+  });
+  const album = albumQ.data;
 
   const playTrack = usePlayerStore((s) => s.playTrack);
   const playQueue = usePlayerStore((s) => s.playQueue);
@@ -76,10 +91,27 @@ export default function Album() {
   // Cover-art uploader (Manager+) + a cache-bust token bumped after upload.
   const [editCover, setEditCover] = useState(false);
   const [coverVersion, setCoverVersion] = useState(0);
+  // Merge-album picker + per-track "move to album" picker (Manager+).
+  const [mergingAlbum, setMergingAlbum] = useState(false);
+  const [moveTrack, setMoveTrack] = useState<MergedTrack | null>(null);
+  const [moveAsSingle, setMoveAsSingle] = useState(false);
 
   async function onMetaSaved() {
     await qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] });
     broadcastInvalidate(["library"]);
+  }
+  function refreshAlbum() {
+    void qc.invalidateQueries({ queryKey: ["library"] });
+    broadcastInvalidate(["library"]);
+  }
+  async function toggleSingle(track: MergedTrack) {
+    try {
+      await librarySetTrackSingleRelease(track.id, !track.is_single_release);
+      await qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] });
+      broadcastInvalidate(["library"]);
+    } catch (e) {
+      alert(formatError(e));
+    }
   }
   function onCoverUploaded() {
     setCoverVersion(Date.now());
@@ -90,7 +122,7 @@ export default function Album() {
   const items = q.data?.items ?? [];
   const totalMs = items.reduce((s, t) => s + t.duration_ms, 0);
   const anyDownloaded = items.some((t) => t.downloaded);
-  const title = meta.data?.title ?? "Album";
+  const title = album?.title ?? meta.data?.title ?? "Album";
 
   async function dlTrack(track: MergedTrack) {
     try {
@@ -189,6 +221,18 @@ export default function Album() {
       </header>
       )}
 
+      {/* Preserved title spellings + manager alias controls. */}
+      {(album?.aliases?.length || isManager) && (
+        <Aliases
+          kind="album"
+          entityId={id}
+          aliases={album?.aliases ?? []}
+          online={online}
+          isManager={isManager}
+          onChanged={refreshAlbum}
+        />
+      )}
+
       {/* actions */}
       {items.length > 0 && (
         <div className="flex flex-wrap items-center gap-3">
@@ -221,6 +265,13 @@ export default function Album() {
                 {...offlineAttrs(online, false, "Edit metadata for all tracks")}
               >
                 <EditIcon size={14} /> Edit tags
+              </button>
+              <button
+                onClick={() => setMergingAlbum(true)}
+                className={btnGhostSm}
+                {...offlineAttrs(online, false, "Merge a duplicate album into this one")}
+              >
+                Merge album…
               </button>
               <button onClick={delAlbum} className={btnDanger} {...offlineAttrs(online)}>
                 <TrashIcon size={14} /> Delete album
@@ -267,6 +318,14 @@ export default function Album() {
                       <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
                         {t.title}
                       </span>
+                      {t.is_single_release && (
+                        <span
+                          className="shrink-0 rounded-full border border-oct-accent/40 bg-oct-accent/10 px-1.5 py-px font-mono text-[9px] tracking-wide text-oct-accent"
+                          title="Single release within this album"
+                        >
+                          SINGLE
+                        </span>
+                      )}
                       {t.downloaded && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-oct-accent" title="downloaded" />}
                     </span>
                     <span className="hidden font-mono text-[11px] text-oct-subtle sm:block">
@@ -289,6 +348,23 @@ export default function Album() {
                         {isManager && (
                           <>
                             <EditMetaButton online={online} onClick={() => setEditTracks([t])} />
+                            <button
+                              onClick={() => void toggleSingle(t)}
+                              {...offlineAttrs(online, false, t.is_single_release ? "Unmark single release" : "Mark as single release")}
+                              className={`disabled:opacity-30 ${t.is_single_release ? "text-oct-accent hover:text-oct-accent-bright" : "text-oct-dim hover:text-oct-text"}`}
+                            >
+                              {t.is_single_release ? "★" : "☆"}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setMoveAsSingle(t.is_single_release);
+                                setMoveTrack(t);
+                              }}
+                              {...offlineAttrs(online, false, "Move to another album")}
+                              className="text-oct-dim hover:text-oct-text disabled:opacity-30"
+                            >
+                              <DiscIcon size={14} />
+                            </button>
                             <button onClick={() => void delTrack(t)} {...offlineAttrs(online, false, "Delete from server")} className="text-oct-dim hover:text-oct-danger disabled:opacity-30">
                               <TrashIcon size={14} />
                             </button>
@@ -324,6 +400,49 @@ export default function Album() {
           currentUrl={coverUrl(id, coverVersion || undefined)}
           onClose={() => setEditCover(false)}
           onUploaded={onCoverUploaded}
+        />
+      )}
+
+      {mergingAlbum && (
+        <EntityPicker
+          kind="album"
+          excludeId={id}
+          title="Merge album"
+          hint={`Pick a duplicate album to fold into "${title}". Its tracks move here and every title spelling is preserved.`}
+          online={online}
+          onPick={async (dupId) => {
+            await libraryMergeAlbums(id, dupId);
+            refreshAlbum();
+          }}
+          onClose={() => setMergingAlbum(false)}
+        />
+      )}
+
+      {moveTrack && (
+        <EntityPicker
+          kind="album"
+          excludeId={moveTrack.album_id}
+          title="Move track to album"
+          hint={`Move "${moveTrack.title}" into another album. Its source album is removed if it's left empty.`}
+          online={online}
+          extra={
+            <label className="flex items-center gap-2 text-[12.5px] text-oct-muted">
+              <input
+                type="checkbox"
+                checked={moveAsSingle}
+                onChange={(e) => setMoveAsSingle(e.target.checked)}
+                className="accent-oct-accent"
+              />
+              Mark as a single release in the destination album
+            </label>
+          }
+          onPick={async (destId) => {
+            const trackId = moveTrack.id;
+            await libraryMoveTrack(trackId, destId, moveAsSingle);
+            refreshAlbum();
+            navigate(`/albums/${destId}`);
+          }}
+          onClose={() => setMoveTrack(null)}
         />
       )}
     </section>

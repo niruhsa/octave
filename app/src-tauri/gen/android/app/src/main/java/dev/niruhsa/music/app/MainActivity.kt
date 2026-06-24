@@ -1,4 +1,4 @@
-package dev.niruhsa.music.app
+package dev.niruhsa.octave
 
 import android.os.Bundle
 import android.view.View

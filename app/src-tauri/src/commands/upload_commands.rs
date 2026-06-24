@@ -214,8 +214,12 @@ fn manifest_path(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 /// Persist the resume manifest atomically (temp + rename).
 fn write_manifest(app: &AppHandle, m: &ResumeManifest) {
-    let Some(path) = manifest_path(app) else { return };
-    let Ok(json) = serde_json::to_vec(m) else { return };
+    let Some(path) = manifest_path(app) else {
+        return;
+    };
+    let Ok(json) = serde_json::to_vec(m) else {
+        return;
+    };
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, &json).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
@@ -276,8 +280,12 @@ fn clear_staging(app: &AppHandle, key: &str) {
 /// Remove every staging subdir except `keep` (orphans from a crash before a
 /// terminal cleanup). Called on startup so abandoned copies don't accumulate.
 fn sweep_staging(app: &AppHandle, keep: Option<&str>) {
-    let Some(root) = staging_root(app) else { return };
-    let Ok(entries) = std::fs::read_dir(&root) else { return };
+    let Some(root) = staging_root(app) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
     for e in entries.flatten() {
         let name = e.file_name();
         if keep.map(|k| name.to_string_lossy() == k).unwrap_or(false) {
@@ -609,7 +617,10 @@ fn prepare_file(
 
 /// The server's current state string for a session, or `None` if unreachable.
 async fn session_state(auth: &AuthManager, upload_id: &str) -> Option<String> {
-    auth.get_upload(upload_id.to_string()).await.ok().map(|v| v.state)
+    auth.get_upload(upload_id.to_string())
+        .await
+        .ok()
+        .map(|v| v.state)
 }
 
 /// Outcome of a resilient chunk send.
@@ -655,7 +666,12 @@ async fn send_chunk_resilient(
         }
 
         match auth
-            .put_chunk(ctl.upload_id.clone(), file_index, chunk_index, bytes.clone())
+            .put_chunk(
+                ctl.upload_id.clone(),
+                file_index,
+                chunk_index,
+                bytes.clone(),
+            )
             .await
         {
             Ok(ack) => {
@@ -974,7 +990,15 @@ async fn run_job(
     // Bridge the gap between hashing the last file and the first chunk landing
     // (the session-declare round-trip), so the UI doesn't freeze on the last
     // "Hashing …" line.
-    prepare_status(&app, &job_id, notif_id, total_files, total_files, "", "Starting upload…");
+    prepare_status(
+        &app,
+        &job_id,
+        notif_id,
+        total_files,
+        total_files,
+        "",
+        "Starting upload…",
+    );
 
     // Phase 2: declare the session.
     let view = match auth
@@ -1020,7 +1044,10 @@ async fn run_job(
         },
     );
 
-    drive_upload(app, auth, job_id, notif_id, view, sources, started, skipped, errors).await;
+    drive_upload(
+        app, auth, job_id, notif_id, view, sources, started, skipped, errors,
+    )
+    .await;
 }
 
 /// Drive the chunk-upload phase of a session to completion: register pause/cancel
@@ -1223,7 +1250,12 @@ async fn drive_upload(
             skipped,
             errors,
         );
-        notify_complete(&app, notif_id, "Upload cancelled", "The upload was cancelled.");
+        notify_complete(
+            &app,
+            notif_id,
+            "Upload cancelled",
+            "The upload was cancelled.",
+        );
         return;
     }
 
@@ -1244,7 +1276,12 @@ async fn drive_upload(
             skipped,
             errors,
         );
-        notify_complete(&app, notif_id, "Upload failed", "Could not read a file from disk.");
+        notify_complete(
+            &app,
+            notif_id,
+            "Upload failed",
+            "Could not read a file from disk.",
+        );
         return;
     }
 
@@ -1386,7 +1423,17 @@ async fn run_resume_job(app: AppHandle, auth: Arc<AuthManager>, manifest: Resume
         // Already terminal server-side — nothing to resume.
         Ok(v) if v.state == "completed" || v.state == "cancelled" => {
             clear_resume_state(&app);
-            emit_done(&app, &job_id, Some(&upload_id), &v.state, total, 0, 0, 0, vec![]);
+            emit_done(
+                &app,
+                &job_id,
+                Some(&upload_id),
+                &v.state,
+                total,
+                0,
+                0,
+                0,
+                vec![],
+            );
             return;
         }
         Ok(v) => v,
@@ -1414,7 +1461,18 @@ async fn run_resume_job(app: AppHandle, auth: Arc<AuthManager>, manifest: Resume
     };
 
     // Phase 3+4: drive only the remaining chunks (shared with a fresh upload).
-    drive_upload(app, auth, job_id, notif_id, view, sources, started, 0, vec![]).await;
+    drive_upload(
+        app,
+        auth,
+        job_id,
+        notif_id,
+        view,
+        sources,
+        started,
+        0,
+        vec![],
+    )
+    .await;
 }
 
 fn report_u64(v: &UploadView, key: &str) -> u64 {
@@ -1558,7 +1616,14 @@ impl Drop for JobCtlGuard {
 /// Emit a preparing-phase status to the **frontend only** (file `current` of
 /// `total`, with a `message` like "Hashing file 2/10 · 40%"). Used for the
 /// throttled intra-file hashing percent — too frequent for the notification.
-fn emit_prepare(app: &AppHandle, job_id: &str, current: u64, total: u64, file: &str, message: &str) {
+fn emit_prepare(
+    app: &AppHandle,
+    job_id: &str,
+    current: u64,
+    total: u64,
+    file: &str,
+    message: &str,
+) {
     emit(
         app,
         ProgressEvent {
@@ -1780,7 +1845,10 @@ pub async fn uploads_resume_pending(
     let manifest = read_manifest(&app);
     // Clean up staging copies orphaned by a crash — keep the one we're about to
     // resume (if any). Safe here: no upload is active (checked above).
-    sweep_staging(&app, manifest.as_ref().and_then(|m| m.staging_key.as_deref()));
+    sweep_staging(
+        &app,
+        manifest.as_ref().and_then(|m| m.staging_key.as_deref()),
+    );
     let Some(manifest) = manifest else {
         // Nothing to resume — release the flag we just claimed.
         app.state::<UploadControl>()
@@ -1858,10 +1926,19 @@ mod tests {
         let control = UploadControl::default();
         let ctl = Arc::new(JobCtl::new("up-1".into(), "job-1".into(), 7));
         control.set(ctl.clone());
-        assert!(control.get("up-1").is_some(), "matching id resolves the job");
-        assert!(control.get("other").is_none(), "a different id does not match");
+        assert!(
+            control.get("up-1").is_some(),
+            "matching id resolves the job"
+        );
+        assert!(
+            control.get("other").is_none(),
+            "a different id does not match"
+        );
         control.clear();
-        assert!(control.get("up-1").is_none(), "cleared slot resolves nothing");
+        assert!(
+            control.get("up-1").is_none(),
+            "cleared slot resolves nothing"
+        );
     }
 
     #[test]
@@ -1871,8 +1948,7 @@ mod tests {
             job_id: "job-1".into(),
             staging_key: Some("stage-abc".into()),
             files: vec![ResumeFile {
-                path: "/data/data/dev.niruhsa.music.app/files/upload_staging/stage-abc/0.flac"
-                    .into(),
+                path: "/data/data/dev.niruhsa.octave/files/upload_staging/stage-abc/0.flac".into(),
                 name_hint: "song.flac".into(),
                 hash: "a".repeat(64),
             }],
@@ -1906,9 +1982,14 @@ mod tests {
         // The single-pass hash reports progress per chunk; assert it lands on the
         // exact byte total at the end (and is monotonic).
         let mut ticks: Vec<(u64, u64)> = Vec::new();
-        let f = prepare_file("x.flac".into(), &data, |done, total| ticks.push((done, total)));
+        let f = prepare_file("x.flac".into(), &data, |done, total| {
+            ticks.push((done, total))
+        });
         assert_eq!(ticks.len(), 2);
-        assert_eq!(ticks.last().copied(), Some((CHUNK_SIZE + 100, CHUNK_SIZE + 100)));
+        assert_eq!(
+            ticks.last().copied(),
+            Some((CHUNK_SIZE + 100, CHUNK_SIZE + 100))
+        );
         assert_eq!(f.total_chunks, 2);
         assert_eq!(f.total_size, CHUNK_SIZE + 100);
         assert_eq!(f.chunks[0].start, 0);

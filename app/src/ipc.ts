@@ -157,6 +157,16 @@ export type LibraryView<T> = {
   total?: number;
 };
 
+/** One known spelling of an artist/album, preserved across merges. `name` is
+ * the spelling (artist name or album title); `sort_name` is artist-only. */
+export type AliasInfo = {
+  id: string;
+  name: string;
+  sort_name: string | null;
+  language: string | null;
+  is_primary: boolean;
+};
+
 export type MergedArtist = {
   id: string;
   name: string;
@@ -164,6 +174,9 @@ export type MergedArtist = {
   /** Server-side artist image path when set; drives whether the UI renders
    * the image (served via `artistImageUrl`). `null` for cache-only rows. */
   image_path: string | null;
+  /** Every known spelling (e.g. Korean + English). Populated on single-entity
+   * reads (the Artist route); empty for list/search/cache rows. */
+  aliases: AliasInfo[];
   downloaded: boolean;
 };
 
@@ -174,6 +187,8 @@ export type MergedAlbum = {
   release_year: number | null;
   cover_path: string | null;
   local_cover_path: string | null;
+  /** Every known title spelling. See `MergedArtist.aliases`. */
+  aliases: AliasInfo[];
   downloaded: boolean;
 };
 
@@ -190,6 +205,8 @@ export type MergedTrack = {
   file_path: string;
   file_size: number | null;
   local_file_path: string | null;
+  /** `true` when this track is a single release within its album. */
+  is_single_release: boolean;
   downloaded: boolean;
 };
 
@@ -209,6 +226,13 @@ export const librarySearchAlbums = (query: string, page: Page = {}) =>
 
 export const libraryListTracksByAlbum = (albumId: string) =>
   invoke<LibraryView<MergedTrack>>("library_list_tracks_by_album", { albumId });
+
+/** Fetch a single artist/album with its alias set (server-first; cache
+ * fallback returns empty `aliases`). Used by the Artist/Album routes. */
+export const libraryGetArtist = (id: string) =>
+  invoke<MergedArtist>("library_get_artist", { id });
+export const libraryGetAlbum = (id: string) =>
+  invoke<MergedAlbum>("library_get_album", { id });
 
 export const librarySearchTracks = (query: string, page: Page = {}) =>
   invoke<LibraryView<MergedTrack>>("library_search_tracks", { query, ...page });
@@ -251,6 +275,62 @@ export type MetadataEdit = {
  */
 export const libraryEditTrackMetadata = (id: string, edit: MetadataEdit) =>
   invoke<MergedTrack>("library_edit_track_metadata", { id, edit });
+
+// ---------------------------------------------------------------------------
+// merge + aliases (Phase 10 — Manager+ gated server-side)
+//
+// Merge folds a duplicate artist/album into a survivor, preserving every
+// spelling as an alias; the survivor's display name follows the server's
+// PRIMARY_LANGUAGE. `libraryMoveTrack` moves a track into another album and
+// optionally flags it a single release. All require a live server.
+// ---------------------------------------------------------------------------
+
+export const libraryMergeArtists = (survivorId: string, duplicateId: string) =>
+  invoke<MergedArtist>("library_merge_artists", { survivorId, duplicateId });
+
+export const libraryMergeAlbums = (survivorId: string, duplicateId: string) =>
+  invoke<MergedAlbum>("library_merge_albums", { survivorId, duplicateId });
+
+export const libraryMoveTrack = (
+  trackId: string,
+  albumId: string,
+  singleRelease: boolean,
+) => invoke<MergedTrack>("library_move_track", { trackId, albumId, singleRelease });
+
+export const librarySetTrackSingleRelease = (trackId: string, singleRelease: boolean) =>
+  invoke<MergedTrack>("library_set_track_single_release", { trackId, singleRelease });
+
+export const libraryAddArtistAlias = (
+  artistId: string,
+  name: string,
+  sortName?: string,
+  language?: string,
+) =>
+  invoke<MergedArtist>("library_add_artist_alias", {
+    artistId,
+    name,
+    sortName: sortName ?? null,
+    language: language ?? null,
+  });
+
+export const libraryRemoveArtistAlias = (artistId: string, aliasId: string) =>
+  invoke<MergedArtist>("library_remove_artist_alias", { artistId, aliasId });
+
+export const librarySetPrimaryArtistAlias = (artistId: string, aliasId: string) =>
+  invoke<MergedArtist>("library_set_primary_artist_alias", { artistId, aliasId });
+
+export const libraryAddAlbumAlias = (albumId: string, title: string, language?: string) =>
+  invoke<MergedAlbum>("library_add_album_alias", {
+    albumId,
+    title,
+    language: language ?? null,
+  });
+
+export const libraryRemoveAlbumAlias = (albumId: string, aliasId: string) =>
+  invoke<MergedAlbum>("library_remove_album_alias", { albumId, aliasId });
+
+export const librarySetPrimaryAlbumAlias = (albumId: string, aliasId: string) =>
+  invoke<MergedAlbum>("library_set_primary_album_alias", { albumId, aliasId });
 
 /**
  * Upload a cover image (album) / image (artist) from a locally-picked file

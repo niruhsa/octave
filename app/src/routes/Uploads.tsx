@@ -48,6 +48,7 @@ function reportTrackToMerged(t: ReportTrack): MergedTrack {
     file_path: "",
     file_size: null,
     local_file_path: null,
+    is_single_release: false,
     downloaded: false,
   };
 }

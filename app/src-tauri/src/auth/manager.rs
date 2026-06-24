@@ -12,9 +12,9 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    ChunkAck, Credential, MetadataEdit, PermissionTier, RescanReport, ServerClient, ServerConfig,
-    Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
-    UploadResult, UploadSummary, UploadView,
+    Album, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier, RescanReport, ServerClient,
+    ServerConfig, Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest,
+    UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
@@ -313,6 +313,86 @@ impl AuthManager {
     ) -> AppResult<Track> {
         let cred = self.credential().await?;
         self.server.edit_track_metadata(&cred, id, edit).await
+    }
+
+    // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------
+
+    pub async fn merge_artists(&self, survivor_id: &str, duplicate_id: &str) -> AppResult<Artist> {
+        let cred = self.credential().await?;
+        self.server.merge_artists(&cred, survivor_id, duplicate_id).await
+    }
+
+    pub async fn merge_albums(&self, survivor_id: &str, duplicate_id: &str) -> AppResult<Album> {
+        let cred = self.credential().await?;
+        self.server.merge_albums(&cred, survivor_id, duplicate_id).await
+    }
+
+    pub async fn move_track(
+        &self,
+        track_id: &str,
+        album_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.move_track(&cred, track_id, album_id, single_release).await
+    }
+
+    pub async fn set_track_single_release(
+        &self,
+        track_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.set_track_single_release(&cred, track_id, single_release).await
+    }
+
+    pub async fn add_artist_alias(
+        &self,
+        artist_id: &str,
+        name: &str,
+        sort_name: Option<&str>,
+        language: Option<&str>,
+    ) -> AppResult<Artist> {
+        let cred = self.credential().await?;
+        self.server.add_artist_alias(&cred, artist_id, name, sort_name, language).await
+    }
+
+    pub async fn remove_artist_alias(&self, artist_id: &str, alias_id: &str) -> AppResult<Artist> {
+        let cred = self.credential().await?;
+        self.server.remove_artist_alias(&cred, artist_id, alias_id).await
+    }
+
+    pub async fn set_primary_artist_alias(
+        &self,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        let cred = self.credential().await?;
+        self.server.set_primary_artist_alias(&cred, artist_id, alias_id).await
+    }
+
+    pub async fn add_album_alias(
+        &self,
+        album_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Album> {
+        let cred = self.credential().await?;
+        self.server.add_album_alias(&cred, album_id, title, language).await
+    }
+
+    pub async fn remove_album_alias(&self, album_id: &str, alias_id: &str) -> AppResult<Album> {
+        let cred = self.credential().await?;
+        self.server.remove_album_alias(&cred, album_id, alias_id).await
+    }
+
+    pub async fn set_primary_album_alias(
+        &self,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        let cred = self.credential().await?;
+        self.server.set_primary_album_alias(&cred, album_id, alias_id).await
     }
 
     /// Upload a cover image for an album. Manager+ gated server-side.

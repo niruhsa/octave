@@ -638,6 +638,7 @@ mod tests {
                 file_path: format!("/fake/{id}.flac"),
                 file_size: None,
                 metadata_json: "{}".into(),
+                is_single_release: false,
                 created_at: now(),
                 updated_at: now(),
             }
@@ -692,6 +693,18 @@ mod tests {
             _: Option<i32>,
             _: Option<i64>,
         ) -> Result<Option<Track>> {
+            Ok(None)
+        }
+        async fn reassign_artist(&self, _: Uuid, _: Uuid) -> Result<u64> {
+            Ok(0)
+        }
+        async fn reassign_album(&self, _: Uuid, _: Uuid) -> Result<u64> {
+            Ok(0)
+        }
+        async fn set_album(&self, _: Uuid, _: Uuid) -> Result<Option<Track>> {
+            Ok(None)
+        }
+        async fn set_single_release(&self, _: Uuid, _: bool) -> Result<Option<Track>> {
             Ok(None)
         }
     }

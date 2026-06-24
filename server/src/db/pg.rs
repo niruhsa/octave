@@ -374,6 +374,16 @@ impl AlbumRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<u64> {
+        let res = sqlx::query("UPDATE albums SET artist_id = $2, updated_at = now() WHERE artist_id = $1")
+            .bind(from_artist)
+            .bind(to_artist)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(res.rows_affected())
+    }
+
     async fn delete(&self, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM albums WHERE id = $1")
             .bind(id)
@@ -398,7 +408,7 @@ impl TrackRepo for PgRepos {
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
-                         metadata_json, created_at, updated_at"#,
+                         metadata_json, is_single_release, created_at, updated_at"#,
         )
         .bind(new.album_id)
         .bind(new.artist_id)
@@ -420,7 +430,7 @@ impl TrackRepo for PgRepos {
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
-                       metadata_json, created_at, updated_at
+                       metadata_json, is_single_release, created_at, updated_at
                FROM tracks WHERE id = $1"#,
         )
         .bind(id)
@@ -433,7 +443,7 @@ impl TrackRepo for PgRepos {
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
-                       metadata_json, created_at, updated_at
+                       metadata_json, is_single_release, created_at, updated_at
                FROM tracks WHERE album_id = $1
                ORDER BY disc_no NULLS FIRST, track_no NULLS LAST, title"#,
         )
@@ -448,7 +458,7 @@ impl TrackRepo for PgRepos {
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
-                       metadata_json, created_at, updated_at
+                       metadata_json, is_single_release, created_at, updated_at
                FROM tracks
                WHERE title ILIKE $1
                ORDER BY title
@@ -477,7 +487,7 @@ impl TrackRepo for PgRepos {
                WHERE id = $1
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
-                         metadata_json, created_at, updated_at"#,
+                         metadata_json, is_single_release, created_at, updated_at"#,
         )
         .bind(id)
         .bind(title)
@@ -493,7 +503,7 @@ impl TrackRepo for PgRepos {
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
-                       metadata_json, created_at, updated_at
+                       metadata_json, is_single_release, created_at, updated_at
                FROM tracks WHERE file_path = $1 LIMIT 1"#,
         )
         .bind(file_path)
@@ -527,7 +537,7 @@ impl TrackRepo for PgRepos {
                WHERE id = $1
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
-                         metadata_json, created_at, updated_at"#,
+                         metadata_json, is_single_release, created_at, updated_at"#,
         )
         .bind(id)
         .bind(duration_ms)
@@ -549,12 +559,64 @@ impl TrackRepo for PgRepos {
                WHERE id = $1
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
-                         metadata_json, created_at, updated_at"#,
+                         metadata_json, is_single_release, created_at, updated_at"#,
         )
         .bind(id)
         .bind(codec)
         .bind(bitrate_kbps)
         .bind(file_size)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<u64> {
+        let res = sqlx::query("UPDATE tracks SET artist_id = $2, updated_at = now() WHERE artist_id = $1")
+            .bind(from_artist)
+            .bind(to_artist)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn reassign_album(&self, from_album: Uuid, to_album: Uuid) -> Result<u64> {
+        let res = sqlx::query("UPDATE tracks SET album_id = $2, updated_at = now() WHERE album_id = $1")
+            .bind(from_album)
+            .bind(to_album)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn set_album(&self, id: Uuid, album_id: Uuid) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET album_id = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         metadata_json, is_single_release, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(album_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_single_release(&self, id: Uuid, is_single_release: bool) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET is_single_release = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         metadata_json, is_single_release, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(is_single_release)
         .fetch_optional(&self.pool)
         .await
         .map_err(db)
@@ -902,6 +964,209 @@ impl FollowRepo for PgRepos {
                 .await
                 .map_err(db)?;
         Ok(rows.into_iter().map(|(a,)| a).collect())
+    }
+
+    async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<()> {
+        // Re-point follows, skipping users who already follow the survivor
+        // (the `(user_id, artist_id)` PK would collide), then drop the
+        // now-redundant rows still pointing at the merged-away artist.
+        sqlx::query(
+            r#"UPDATE follows SET artist_id = $2
+               WHERE artist_id = $1
+                 AND user_id NOT IN (SELECT user_id FROM follows WHERE artist_id = $2)"#,
+        )
+        .bind(from_artist)
+        .bind(to_artist)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        sqlx::query("DELETE FROM follows WHERE artist_id = $1")
+            .bind(from_artist)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AliasRepo
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl AliasRepo for PgRepos {
+    async fn list_artist_aliases(&self, artist_id: Uuid) -> Result<Vec<ArtistAlias>> {
+        sqlx::query_as::<_, ArtistAlias>(
+            r#"SELECT id, artist_id, name, sort_name, language, is_primary, created_at
+               FROM artist_aliases WHERE artist_id = $1
+               ORDER BY is_primary DESC, created_at"#,
+        )
+        .bind(artist_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn add_artist_alias(&self, new: NewArtistAlias) -> Result<ArtistAlias> {
+        // Idempotent on (artist_id, name): a conflict returns the existing row
+        // unchanged (a no-op update lets RETURNING fire on conflict too).
+        sqlx::query_as::<_, ArtistAlias>(
+            r#"INSERT INTO artist_aliases (artist_id, name, sort_name, language, is_primary)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (artist_id, name)
+               DO UPDATE SET name = artist_aliases.name
+               RETURNING id, artist_id, name, sort_name, language, is_primary, created_at"#,
+        )
+        .bind(new.artist_id)
+        .bind(&new.name)
+        .bind(&new.sort_name)
+        .bind(&new.language)
+        .bind(new.is_primary)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_artist_alias(&self, id: Uuid) -> Result<Option<ArtistAlias>> {
+        sqlx::query_as::<_, ArtistAlias>(
+            r#"SELECT id, artist_id, name, sort_name, language, is_primary, created_at
+               FROM artist_aliases WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn delete_artist_alias(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM artist_aliases WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn set_primary_artist_alias(&self, artist_id: Uuid, alias_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE artist_aliases
+               SET is_primary = (id = $2)
+               WHERE artist_id = $1"#,
+        )
+        .bind(artist_id)
+        .bind(alias_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn reassign_artist_aliases(&self, from_artist: Uuid, to_artist: Uuid) -> Result<()> {
+        // Move aliases that don't already exist on the survivor; reassigned
+        // rows lose their primary flag (the survivor keeps its own primary).
+        sqlx::query(
+            r#"UPDATE artist_aliases
+               SET artist_id = $2, is_primary = false
+               WHERE artist_id = $1
+                 AND name NOT IN (SELECT name FROM artist_aliases WHERE artist_id = $2)"#,
+        )
+        .bind(from_artist)
+        .bind(to_artist)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        // Drop any leftover (duplicate-name) aliases still on the source; they
+        // cascade anyway when the source artist is deleted, but clear them now
+        // so the source row count is accurate if the caller inspects it.
+        sqlx::query("DELETE FROM artist_aliases WHERE artist_id = $1")
+            .bind(from_artist)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn list_album_aliases(&self, album_id: Uuid) -> Result<Vec<AlbumAlias>> {
+        sqlx::query_as::<_, AlbumAlias>(
+            r#"SELECT id, album_id, title, language, is_primary, created_at
+               FROM album_aliases WHERE album_id = $1
+               ORDER BY is_primary DESC, created_at"#,
+        )
+        .bind(album_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn add_album_alias(&self, new: NewAlbumAlias) -> Result<AlbumAlias> {
+        sqlx::query_as::<_, AlbumAlias>(
+            r#"INSERT INTO album_aliases (album_id, title, language, is_primary)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (album_id, title)
+               DO UPDATE SET title = album_aliases.title
+               RETURNING id, album_id, title, language, is_primary, created_at"#,
+        )
+        .bind(new.album_id)
+        .bind(&new.title)
+        .bind(&new.language)
+        .bind(new.is_primary)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_album_alias(&self, id: Uuid) -> Result<Option<AlbumAlias>> {
+        sqlx::query_as::<_, AlbumAlias>(
+            r#"SELECT id, album_id, title, language, is_primary, created_at
+               FROM album_aliases WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn delete_album_alias(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM album_aliases WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn set_primary_album_alias(&self, album_id: Uuid, alias_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE album_aliases
+               SET is_primary = (id = $2)
+               WHERE album_id = $1"#,
+        )
+        .bind(album_id)
+        .bind(alias_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn reassign_album_aliases(&self, from_album: Uuid, to_album: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE album_aliases
+               SET album_id = $2, is_primary = false
+               WHERE album_id = $1
+                 AND title NOT IN (SELECT title FROM album_aliases WHERE album_id = $2)"#,
+        )
+        .bind(from_album)
+        .bind(to_album)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        sqlx::query("DELETE FROM album_aliases WHERE album_id = $1")
+            .bind(from_album)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
     }
 }
 

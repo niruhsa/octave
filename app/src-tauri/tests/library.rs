@@ -7,9 +7,9 @@
 //! via small helpers. This keeps the contract tested without needing an
 //! HTTP/gRPC mock layer.
 
-use music_app_lib::cache::model::{Album, AlbumArt, Artist, Track};
-use music_app_lib::cache::repo;
-use music_app_lib::db;
+use octave_lib::cache::model::{Album, AlbumArt, Artist, Track};
+use octave_lib::cache::repo;
+use octave_lib::db;
 
 fn now() -> String {
     "2026-06-19T12:00:00.000Z".into()

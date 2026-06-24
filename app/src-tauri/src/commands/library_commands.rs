@@ -130,6 +130,139 @@ pub async fn library_edit_track_metadata(
     svc.edit_track_metadata(&id, &edit).await
 }
 
+/// Fetch a single artist (server-first, with its alias set; cache fallback).
+#[tauri::command]
+pub async fn library_get_artist(
+    state: State<'_, AppStateHandle>,
+    id: String,
+) -> AppResult<MergedArtist> {
+    let svc = service(&state).await?;
+    svc.get_artist(&id).await
+}
+
+/// Fetch a single album (server-first, with its alias set; cache fallback).
+#[tauri::command]
+pub async fn library_get_album(
+    state: State<'_, AppStateHandle>,
+    id: String,
+) -> AppResult<MergedAlbum> {
+    let svc = service(&state).await?;
+    svc.get_album(&id).await
+}
+
+// ---------------------------------------------------------------------------
+// merge + aliases (Phase 10 — Manager+ gated server-side)
+//
+// Merge folds a duplicate artist/album into a survivor (re-pointing its
+// catalog, preserving every spelling as an alias). `library_move_track` moves
+// a track into another album, optionally flagging it a single release. Alias
+// commands edit the preserved-spelling set + which one displays.
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn library_merge_artists(
+    state: State<'_, AppStateHandle>,
+    survivor_id: String,
+    duplicate_id: String,
+) -> AppResult<MergedArtist> {
+    let svc = service(&state).await?;
+    svc.merge_artists(&survivor_id, &duplicate_id).await
+}
+
+#[tauri::command]
+pub async fn library_merge_albums(
+    state: State<'_, AppStateHandle>,
+    survivor_id: String,
+    duplicate_id: String,
+) -> AppResult<MergedAlbum> {
+    let svc = service(&state).await?;
+    svc.merge_albums(&survivor_id, &duplicate_id).await
+}
+
+#[tauri::command]
+pub async fn library_move_track(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+    album_id: String,
+    single_release: bool,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.move_track(&track_id, &album_id, single_release).await
+}
+
+#[tauri::command]
+pub async fn library_set_track_single_release(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+    single_release: bool,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.set_track_single_release(&track_id, single_release).await
+}
+
+#[tauri::command]
+pub async fn library_add_artist_alias(
+    state: State<'_, AppStateHandle>,
+    artist_id: String,
+    name: String,
+    sort_name: Option<String>,
+    language: Option<String>,
+) -> AppResult<MergedArtist> {
+    let svc = service(&state).await?;
+    svc.add_artist_alias(&artist_id, &name, sort_name.as_deref(), language.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn library_remove_artist_alias(
+    state: State<'_, AppStateHandle>,
+    artist_id: String,
+    alias_id: String,
+) -> AppResult<MergedArtist> {
+    let svc = service(&state).await?;
+    svc.remove_artist_alias(&artist_id, &alias_id).await
+}
+
+#[tauri::command]
+pub async fn library_set_primary_artist_alias(
+    state: State<'_, AppStateHandle>,
+    artist_id: String,
+    alias_id: String,
+) -> AppResult<MergedArtist> {
+    let svc = service(&state).await?;
+    svc.set_primary_artist_alias(&artist_id, &alias_id).await
+}
+
+#[tauri::command]
+pub async fn library_add_album_alias(
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+    title: String,
+    language: Option<String>,
+) -> AppResult<MergedAlbum> {
+    let svc = service(&state).await?;
+    svc.add_album_alias(&album_id, &title, language.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn library_remove_album_alias(
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+    alias_id: String,
+) -> AppResult<MergedAlbum> {
+    let svc = service(&state).await?;
+    svc.remove_album_alias(&album_id, &alias_id).await
+}
+
+#[tauri::command]
+pub async fn library_set_primary_album_alias(
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+    alias_id: String,
+) -> AppResult<MergedAlbum> {
+    let svc = service(&state).await?;
+    svc.set_primary_album_alias(&album_id, &alias_id).await
+}
+
 // ---------------------------------------------------------------------------
 // rescan (Manager+ gated server-side)
 // ---------------------------------------------------------------------------

@@ -19,9 +19,11 @@ use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
 use super::proto::auth::{ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse};
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
-    DeleteAlbumRequest, DeleteArtistRequest, DeleteTrackRequest, EditTrackMetadataRequest,
-    GetAlbumRequest, GetArtistRequest, GetTrackRequest, ListAlbumsByArtistRequest,
-    ListArtistsRequest, ListTracksByAlbumRequest, Pagination, SearchRequest,
+    AddAlbumAliasRequest, AddArtistAliasRequest, DeleteAlbumRequest, DeleteArtistRequest,
+    DeleteTrackRequest, EditTrackMetadataRequest, GetAlbumRequest, GetArtistRequest,
+    GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest, ListTracksByAlbumRequest,
+    MergeRequest, MoveTrackRequest, Pagination, RemoveAliasRequest, SearchRequest,
+    SetPrimaryAliasRequest, SetSingleReleaseRequest,
 };
 use super::proto::playlist::playlist_service_client::PlaylistServiceClient;
 use super::proto::playlist::{
@@ -468,6 +470,216 @@ impl GrpcClient {
             .map_err(map_mutation_err("edit_track_metadata"))?
             .into_inner();
         Ok(track_from_proto(resp))
+    }
+
+    // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------
+
+    pub async fn merge_artists(
+        &self,
+        cred: &Credential,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<Artist> {
+        let mut req = Request::new(MergeRequest {
+            survivor_id: survivor_id.to_string(),
+            duplicate_id: duplicate_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .merge_artists(req)
+            .await
+            .map_err(map_mutation_err("merge_artists"))?
+            .into_inner();
+        Ok(artist_from_proto(resp))
+    }
+
+    pub async fn merge_albums(
+        &self,
+        cred: &Credential,
+        survivor_id: &str,
+        duplicate_id: &str,
+    ) -> AppResult<Album> {
+        let mut req = Request::new(MergeRequest {
+            survivor_id: survivor_id.to_string(),
+            duplicate_id: duplicate_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .merge_albums(req)
+            .await
+            .map_err(map_mutation_err("merge_albums"))?
+            .into_inner();
+        Ok(album_from_proto(resp))
+    }
+
+    pub async fn move_track(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        album_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(MoveTrackRequest {
+            track_id: track_id.to_string(),
+            album_id: album_id.to_string(),
+            single_release,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .move_track(req)
+            .await
+            .map_err(map_mutation_err("move_track"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
+    }
+
+    pub async fn set_track_single_release(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        single_release: bool,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(SetSingleReleaseRequest {
+            track_id: track_id.to_string(),
+            single_release,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .set_track_single_release(req)
+            .await
+            .map_err(map_mutation_err("set_track_single_release"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
+    }
+
+    pub async fn add_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        name: &str,
+        sort_name: Option<&str>,
+        language: Option<&str>,
+    ) -> AppResult<Artist> {
+        let mut req = Request::new(AddArtistAliasRequest {
+            artist_id: artist_id.to_string(),
+            name: name.to_string(),
+            sort_name: sort_name.unwrap_or_default().to_string(),
+            language: language.unwrap_or_default().to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .add_artist_alias(req)
+            .await
+            .map_err(map_mutation_err("add_artist_alias"))?
+            .into_inner();
+        Ok(artist_from_proto(resp))
+    }
+
+    pub async fn remove_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        let mut req = Request::new(RemoveAliasRequest {
+            entity_id: artist_id.to_string(),
+            alias_id: alias_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .remove_artist_alias(req)
+            .await
+            .map_err(map_mutation_err("remove_artist_alias"))?
+            .into_inner();
+        Ok(artist_from_proto(resp))
+    }
+
+    pub async fn set_primary_artist_alias(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Artist> {
+        let mut req = Request::new(SetPrimaryAliasRequest {
+            entity_id: artist_id.to_string(),
+            alias_id: alias_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .set_primary_artist_alias(req)
+            .await
+            .map_err(map_mutation_err("set_primary_artist_alias"))?
+            .into_inner();
+        Ok(artist_from_proto(resp))
+    }
+
+    pub async fn add_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Album> {
+        let mut req = Request::new(AddAlbumAliasRequest {
+            album_id: album_id.to_string(),
+            title: title.to_string(),
+            language: language.unwrap_or_default().to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .add_album_alias(req)
+            .await
+            .map_err(map_mutation_err("add_album_alias"))?
+            .into_inner();
+        Ok(album_from_proto(resp))
+    }
+
+    pub async fn remove_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        let mut req = Request::new(RemoveAliasRequest {
+            entity_id: album_id.to_string(),
+            alias_id: alias_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .remove_album_alias(req)
+            .await
+            .map_err(map_mutation_err("remove_album_alias"))?
+            .into_inner();
+        Ok(album_from_proto(resp))
+    }
+
+    pub async fn set_primary_album_alias(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Album> {
+        let mut req = Request::new(SetPrimaryAliasRequest {
+            entity_id: album_id.to_string(),
+            alias_id: alias_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .set_primary_album_alias(req)
+            .await
+            .map_err(map_mutation_err("set_primary_album_alias"))?
+            .into_inner();
+        Ok(album_from_proto(resp))
     }
 
     // ----- Playlists (sync pull + push) ----------------------------------
@@ -1073,12 +1285,23 @@ fn opt_i64(v: i64) -> Option<i64> {
     if v == 0 { None } else { Some(v) }
 }
 
+fn alias_from_proto(a: super::proto::library::AliasInfo) -> super::AliasInfo {
+    super::AliasInfo {
+        id: a.id,
+        name: a.name,
+        sort_name: opt_str(a.sort_name),
+        language: opt_str(a.language),
+        is_primary: a.is_primary,
+    }
+}
+
 fn artist_from_proto(a: super::proto::library::Artist) -> Artist {
     Artist {
         id: a.id,
         name: a.name,
         sort_name: opt_str(a.sort_name),
         image_path: opt_str(a.image_path),
+        aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
     }
 }
 
@@ -1089,6 +1312,7 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         title: a.title,
         release_year: opt_i32(a.release_year),
         cover_path: opt_str(a.cover_path),
+        aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
     }
 }
 
@@ -1122,6 +1346,7 @@ fn track_from_proto(t: super::proto::library::Track) -> Track {
         file_path: t.file_path,
         file_size: opt_i64(t.file_size),
         metadata_json: t.metadata_json,
+        is_single_release: t.is_single_release,
     }
 }
 

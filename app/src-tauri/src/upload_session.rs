@@ -55,10 +55,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let handle: Option<PluginHandle<R>> = {
                 #[cfg(target_os = "android")]
                 {
-                    Some(_api.register_android_plugin(
-                        "dev.niruhsa.music.app",
-                        "UploadServicePlugin",
-                    )?)
+                    Some(_api.register_android_plugin("dev.niruhsa.octave", "UploadServicePlugin")?)
                 }
                 #[cfg(not(target_os = "android"))]
                 {

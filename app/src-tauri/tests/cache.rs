@@ -7,9 +7,11 @@
 //! Uses a tempdir DB so each run starts clean and nothing leaks into the
 //! actual app-data dir.
 
-use music_app_lib::cache::model::{Album, AlbumArt, Artist, Playlist, PlaylistTrack, SyncState, Track};
-use music_app_lib::cache::repo;
-use music_app_lib::db;
+use octave_lib::cache::model::{
+    Album, AlbumArt, Artist, Playlist, PlaylistTrack, SyncState, Track,
+};
+use octave_lib::cache::repo;
+use octave_lib::db;
 
 fn now() -> String {
     "2026-06-19T12:00:00.000Z".to_string()
@@ -70,11 +72,16 @@ async fn cache_roundtrip_persists_downloaded_items() {
     let fetched_artist = repo::get_artist(&pool, &artist.id).await.unwrap().unwrap();
     assert_eq!(fetched_artist.name, artist.name);
 
-    let by_artist = repo::list_albums_by_artist(&pool, &artist.id).await.unwrap();
+    let by_artist = repo::list_albums_by_artist(&pool, &artist.id)
+        .await
+        .unwrap();
     assert_eq!(by_artist.len(), 1);
     assert_eq!(by_artist[0].title, album.title);
 
-    let cover = repo::get_album_art(&pool, &album.id).await.unwrap().unwrap();
+    let cover = repo::get_album_art(&pool, &album.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(cover.local_cover_path, art.local_cover_path);
 
     let by_album = repo::list_tracks_by_album(&pool, &album.id).await.unwrap();
@@ -88,7 +95,13 @@ async fn cache_roundtrip_persists_downloaded_items() {
     repo::upsert_track(&pool, &updated).await.unwrap();
     let again = repo::get_track(&pool, &track.id).await.unwrap().unwrap();
     assert_eq!(again.title, "Roygbiv (alt mix)");
-    assert_eq!(repo::list_tracks_by_album(&pool, &album.id).await.unwrap().len(), 1);
+    assert_eq!(
+        repo::list_tracks_by_album(&pool, &album.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     // --- playlists + tracks --------------------------------------------
 
@@ -111,7 +124,9 @@ async fn cache_roundtrip_persists_downloaded_items() {
     )
     .await
     .unwrap();
-    let entries = repo::list_playlist_tracks(&pool, &playlist.id).await.unwrap();
+    let entries = repo::list_playlist_tracks(&pool, &playlist.id)
+        .await
+        .unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].track_id, track.id);
 
@@ -125,7 +140,10 @@ async fn cache_roundtrip_persists_downloaded_items() {
         last_synced_at: now(),
     };
     repo::upsert_sync_state(&pool, &sync).await.unwrap();
-    let fetched_sync = repo::get_sync_state(&pool, "track", &track.id).await.unwrap().unwrap();
+    let fetched_sync = repo::get_sync_state(&pool, "track", &track.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(fetched_sync.server_etag.as_deref(), Some("abc123"));
 
     // --- cascade on album delete ---------------------------------------
@@ -137,7 +155,10 @@ async fn cache_roundtrip_persists_downloaded_items() {
     repo::delete_album(&pool, &album.id).await.unwrap();
     assert!(repo::get_album(&pool, &album.id).await.unwrap().is_none());
     assert!(repo::get_track(&pool, &track.id).await.unwrap().is_none());
-    assert!(repo::get_album_art(&pool, &album.id).await.unwrap().is_none());
+    assert!(repo::get_album_art(&pool, &album.id)
+        .await
+        .unwrap()
+        .is_none());
 
     // Artist now safe to delete (no tracks left).
     repo::delete_artist(&pool, &artist.id).await.unwrap();

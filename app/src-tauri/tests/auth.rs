@@ -6,10 +6,8 @@
 //! keychain in CI would require an unlocked login session, and the file
 //! store is the same trait surface.
 
-use music_app_lib::auth::store::{
-    FileStore, SecureStore, StoredCredential, StoredCredentialKind,
-};
-use music_app_lib::transport::{PermissionTier, ServerConfig};
+use octave_lib::auth::store::{FileStore, SecureStore, StoredCredential, StoredCredentialKind};
+use octave_lib::transport::{PermissionTier, ServerConfig};
 
 fn cred_bearer(token: &str) -> StoredCredential {
     StoredCredential {
@@ -44,7 +42,10 @@ async fn file_store_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let store = FileStore::new(tmp.path().join("cred.json"));
 
-    assert!(store.load().await.unwrap().is_none(), "empty store reads None");
+    assert!(
+        store.load().await.unwrap().is_none(),
+        "empty store reads None"
+    );
 
     let cred = cred_bearer("opaque-token-xyz");
     store.save(&cred).await.unwrap();
@@ -98,7 +99,7 @@ fn server_config_derives_grpc_port_from_rest() {
 
 #[test]
 fn permission_tier_from_proto() {
-    use music_app_lib::transport::PermissionTier;
+    use octave_lib::transport::PermissionTier;
     assert_eq!(PermissionTier::from_proto(3), PermissionTier::Admin);
     assert_eq!(PermissionTier::from_proto(2), PermissionTier::Manager);
     assert_eq!(PermissionTier::from_proto(1), PermissionTier::User);

@@ -8,6 +8,7 @@
 //! - [`auth`]     — credential storage + session manager.
 //! - [`error`]    — shared `AppError` / `AppResult` types.
 
+pub mod assets;
 pub mod auth;
 pub mod cache;
 pub mod commands;
@@ -18,7 +19,6 @@ pub mod library;
 pub mod media_session;
 pub mod player;
 pub mod playlists;
-pub mod assets;
 pub mod sync;
 pub mod transport;
 pub mod upload_session;
@@ -44,15 +44,15 @@ pub struct AppStateHandle {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Structured logs; override via `RUST_LOG=music_app_lib=debug`.
+    // Structured logs; override via `RUST_LOG=octave_lib=debug`.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,music_app_lib=debug")),
+                .unwrap_or_else(|_| EnvFilter::new("info,octave_lib=debug")),
         )
         .try_init();
 
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting music-app");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting octave");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -190,6 +190,20 @@ pub fn run() {
             commands::library_commands::library_edit_track_metadata,
             commands::library_commands::library_upload_album_cover,
             commands::library_commands::library_upload_artist_image,
+            // single-entity fetch (with alias set) for the Artist/Album routes
+            commands::library_commands::library_get_artist,
+            commands::library_commands::library_get_album,
+            // merge + aliases (Phase 10 — Manager+ gated server-side)
+            commands::library_commands::library_merge_artists,
+            commands::library_commands::library_merge_albums,
+            commands::library_commands::library_move_track,
+            commands::library_commands::library_set_track_single_release,
+            commands::library_commands::library_add_artist_alias,
+            commands::library_commands::library_remove_artist_alias,
+            commands::library_commands::library_set_primary_artist_alias,
+            commands::library_commands::library_add_album_alias,
+            commands::library_commands::library_remove_album_alias,
+            commands::library_commands::library_set_primary_album_alias,
             // library delete (Phase 8+ — Manager+ gated server-side)
             commands::library_commands::library_delete_artist,
             commands::library_commands::library_delete_album,

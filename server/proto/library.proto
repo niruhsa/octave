@@ -39,11 +39,41 @@ service LibraryService {
   rpc EditTrackMetadata(EditTrackMetadataRequest) returns (Track);
   // Fetch + cache album artwork from an external source (Manager+).
   rpc FetchAlbumArtwork(FetchAlbumArtworkRequest) returns (FetchAlbumArtworkResponse);
+
+  // Merge + aliases (Phase 10). All Manager+, all audited.
+  // Merge the duplicate into the survivor (re-points its catalog, preserves
+  // every spelling as an alias, deletes the duplicate). Returns the survivor.
+  rpc MergeArtists(MergeRequest) returns (Artist);
+  rpc MergeAlbums(MergeRequest) returns (Album);
+  // Move a track to another album, optionally flagging it a single release.
+  rpc MoveTrack(MoveTrackRequest) returns (Track);
+  // Toggle a track's single-release flag in place.
+  rpc SetTrackSingleRelease(SetSingleReleaseRequest) returns (Track);
+  // Artist alias editing. Each returns the refreshed Artist.
+  rpc ListArtistAliases(GetArtistRequest) returns (ListAliasesResponse);
+  rpc AddArtistAlias(AddArtistAliasRequest) returns (Artist);
+  rpc RemoveArtistAlias(RemoveAliasRequest) returns (Artist);
+  rpc SetPrimaryArtistAlias(SetPrimaryAliasRequest) returns (Artist);
+  // Album alias editing. Each returns the refreshed Album.
+  rpc ListAlbumAliases(GetAlbumRequest) returns (ListAliasesResponse);
+  rpc AddAlbumAlias(AddAlbumAliasRequest) returns (Album);
+  rpc RemoveAlbumAlias(RemoveAliasRequest) returns (Album);
+  rpc SetPrimaryAlbumAlias(SetPrimaryAliasRequest) returns (Album);
 }
 
 // ---------------------------------------------------------------------------
 // Entities
 // ---------------------------------------------------------------------------
+
+// One known spelling of an artist / album. `language` is the inferred or
+// declared label (e.g. "English", "Korean"); empty = unknown/infer.
+message AliasInfo {
+  string id = 1;
+  string name = 2;             // the spelling (artist name or album title)
+  string sort_name = 3;        // artists only; empty for albums
+  string language = 4;
+  bool is_primary = 5;
+}
 
 message Artist {
   string id = 1;
@@ -52,6 +82,9 @@ message Artist {
   string created_at = 4;       // RFC3339
   string updated_at = 5;
   string image_path = 6;       // server-side path; empty = no image
+  // Every known spelling. Populated on single-entity reads/mutations only
+  // (empty on list/search rows).
+  repeated AliasInfo aliases = 7;
 }
 
 message Album {
@@ -62,6 +95,7 @@ message Album {
   string cover_path = 5;
   string created_at = 6;
   string updated_at = 7;
+  repeated AliasInfo aliases = 8;  // see Artist.aliases
 }
 
 message Track {
@@ -79,6 +113,7 @@ message Track {
   string metadata_json = 12;
   string created_at = 13;
   string updated_at = 14;
+  bool is_single_release = 15; // a single release within its album
 }
 
 // ---------------------------------------------------------------------------
@@ -208,4 +243,48 @@ message FetchAlbumArtworkRequest { string album_id = 1; }
 message FetchAlbumArtworkResponse {
   bool found = 1;
   string cover_path = 2;       // empty when found == false
+}
+
+// ---- Merge + aliases (Phase 10) ----
+
+// `survivor_id` is kept; `duplicate_id` is merged in and deleted.
+message MergeRequest {
+  string survivor_id = 1;
+  string duplicate_id = 2;
+}
+
+message MoveTrackRequest {
+  string track_id = 1;
+  string album_id = 2;         // destination album
+  bool single_release = 3;     // flag the track a single release in the dest
+}
+
+message SetSingleReleaseRequest {
+  string track_id = 1;
+  bool single_release = 2;
+}
+
+message ListAliasesResponse { repeated AliasInfo aliases = 1; }
+
+message AddArtistAliasRequest {
+  string artist_id = 1;
+  string name = 2;
+  string sort_name = 3;        // optional
+  string language = 4;         // optional; inferred from the name when empty
+}
+
+message AddAlbumAliasRequest {
+  string album_id = 1;
+  string title = 2;
+  string language = 3;         // optional; inferred from the title when empty
+}
+
+// `entity_id` is the owning artist/album; `alias_id` the alias row.
+message RemoveAliasRequest {
+  string entity_id = 1;
+  string alias_id = 2;
+}
+message SetPrimaryAliasRequest {
+  string entity_id = 1;
+  string alias_id = 2;
 }

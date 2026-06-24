@@ -740,6 +740,7 @@ fn stub_track(track_id: &str) -> MergedTrack {
         file_path: String::new(),
         file_size: None,
         local_file_path: None,
+        is_single_release: false,
         downloaded: false,
     }
 }
