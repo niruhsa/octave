@@ -221,8 +221,9 @@ export default function Album() {
       </header>
       )}
 
-      {/* Preserved title spellings + manager alias controls. */}
-      {(album?.aliases?.length || isManager) && (
+      {/* Preserved title spellings + manager alias controls.
+          Hidden for a single spelling unless a manager can add more. */}
+      {((album?.aliases?.length ?? 0) > 1 || isManager) && (
         <Aliases
           kind="album"
           entityId={id}

@@ -121,8 +121,9 @@ export default function Artist() {
         </div>
       </header>
 
-      {/* Preserved spellings (Korean + English, etc.) + manager controls. */}
-      {(artist?.aliases?.length || isManager) && (
+      {/* Preserved spellings (Korean + English, etc.) + manager controls.
+          Hidden for a single spelling unless a manager can add more. */}
+      {((artist?.aliases?.length ?? 0) > 1 || isManager) && (
         <Aliases
           kind="artist"
           entityId={id}

@@ -37,8 +37,11 @@ export function Aliases({ kind, entityId, aliases, online, isManager, onChanged 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Nothing to show and nothing to do.
-  if (aliases.length === 0 && !isManager) return null;
+  // "Also known as" is only meaningful with more than one spelling — a single
+  // spelling is just the displayed name. Hide the label + chips below that
+  // threshold; managers still get a compact "add spelling" affordance.
+  const showList = aliases.length > 1;
+  if (!showList && !isManager) return null;
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -81,8 +84,10 @@ export function Aliases({ kind, entityId, aliases, online, isManager, onChanged 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[10px] tracking-[0.16em] text-oct-faint">ALSO KNOWN AS</span>
-        {aliases.map((a) => (
+        {showList && (
+          <>
+            <span className="font-mono text-[10px] tracking-[0.16em] text-oct-faint">ALSO KNOWN AS</span>
+            {aliases.map((a) => (
           <span
             key={a.id}
             className={`group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] ${
@@ -118,7 +123,9 @@ export function Aliases({ kind, entityId, aliases, online, isManager, onChanged 
               </span>
             )}
           </span>
-        ))}
+            ))}
+          </>
+        )}
         {isManager && !adding && (
           <button
             onClick={() => setAdding(true)}
