@@ -5,11 +5,13 @@
 // refreshes the library no matter where you are. This route just drives the
 // pickers, renders the store's live progress, and offers cancel.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import {
+  storageHasAllFilesAccess,
+  storageRequestAllFilesAccess,
   uploadFiles,
   uploadFolder,
   uploadsCancel,
@@ -58,6 +60,25 @@ export default function Upload() {
   const [err, setErr] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [pausing, setPausing] = useState(false);
+
+  // Android "All files access" (MANAGE_EXTERNAL_STORAGE) status. `null` = unknown
+  // (or non-Android, where it's always effectively granted). Re-checked when the
+  // window regains focus, so returning from the settings screen updates it.
+  const [allFilesAccess, setAllFilesAccess] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isAndroid) return;
+    let cancelled = false;
+    const check = () =>
+      storageHasAllFilesAccess()
+        .then((g) => !cancelled && setAllFilesAccess(g))
+        .catch(() => {});
+    void check();
+    window.addEventListener("focus", check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", check);
+    };
+  }, []);
 
   async function startJob(starter: () => Promise<string | null>) {
     setErr(null);
@@ -164,6 +185,25 @@ export default function Upload() {
           verified by hash; uploads run in the background with a progress notification.
         </p>
 
+        {/* All-files-access prompt (Android) — needed to read music from
+            anywhere on the device. */}
+        {isAndroid && allFilesAccess === false && (
+          <div className={`${card} mb-4 flex flex-col gap-2 p-4`}>
+            <p className="text-sm font-semibold">Grant access to all files</p>
+            <p className="text-[12.5px] text-oct-subtle">
+              To upload music from anywhere on your device, give the app “All files
+              access”. You’ll be taken to a system settings screen — enable it, then
+              come back.
+            </p>
+            <button
+              onClick={() => void storageRequestAllFilesAccess()}
+              className={`${btnPrimary} mt-1 self-start`}
+            >
+              Open settings
+            </button>
+          </div>
+        )}
+
         {/* pickers */}
         <div className={`${card} mb-4 flex flex-col items-center gap-4 p-8 text-center`}>
           <span className="grid h-14 w-14 place-items-center rounded-full bg-oct-elevated text-oct-accent">
@@ -262,13 +302,18 @@ export default function Upload() {
                     ? "Upload finished with errors"
                     : "Upload complete"}
             </div>
+            {/* Prominent reason for a non-success outcome (e.g. a resumed upload
+                cancelled because a file's contents changed since it started). */}
+            {lastComplete.state !== "completed" && lastComplete.errors[0] && (
+              <p className="mb-2 text-xs text-oct-danger">{lastComplete.errors[0]}</p>
+            )}
             <ul className="list-inside list-disc text-xs opacity-90">
               <li>Files: {lastComplete.totalFiles}</li>
               <li>Tracks ingested: {lastComplete.tracksIngested}</li>
               {lastComplete.filesFailed > 0 && <li>Files failed: {lastComplete.filesFailed}</li>}
               {lastComplete.skipped > 0 && <li>Skipped (empty): {lastComplete.skipped}</li>}
             </ul>
-            {lastComplete.errors.length > 0 && (
+            {lastComplete.errors.length > 1 && (
               <details className="mt-2">
                 <summary className="cursor-pointer text-xs text-oct-danger">{lastComplete.errors.length} error(s)</summary>
                 <ul className="mt-1 list-inside list-disc text-xs text-oct-danger">

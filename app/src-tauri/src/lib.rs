@@ -234,7 +234,11 @@ pub fn run() {
             commands::upload_commands::uploads_cancel,
             commands::upload_commands::uploads_pause,
             commands::upload_commands::uploads_resume,
+            commands::upload_commands::uploads_resume_pending,
             commands::upload_commands::uploads_subscribe,
+            // Android "All files access" (MANAGE_EXTERNAL_STORAGE) check + request.
+            upload_session::storage_has_all_files_access,
+            upload_session::storage_request_all_files_access,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

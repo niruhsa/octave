@@ -121,26 +121,199 @@ impl JobCtl {
 
 /// Managed Tauri state holding the active upload job's control handle (if any).
 #[derive(Default)]
-pub struct UploadControl(Mutex<Option<Arc<JobCtl>>>);
+pub struct UploadControl {
+    slot: Mutex<Option<Arc<JobCtl>>>,
+    /// Set while a resume job is verifying files / starting up, *before* it
+    /// registers its `JobCtl` — so a second `uploads_resume_pending` (the resume
+    /// trigger can re-fire) can't double-spawn during the verify window.
+    resuming: AtomicBool,
+}
 
 impl UploadControl {
     fn set(&self, ctl: Arc<JobCtl>) {
-        if let Ok(mut g) = self.0.lock() {
+        if let Ok(mut g) = self.slot.lock() {
             *g = Some(ctl);
         }
     }
     fn clear(&self) {
-        if let Ok(mut g) = self.0.lock() {
+        if let Ok(mut g) = self.slot.lock() {
             *g = None;
         }
     }
     /// The active control handle iff it matches `upload_id`.
     fn get(&self, upload_id: &str) -> Option<Arc<JobCtl>> {
-        self.0
+        self.slot
             .lock()
             .ok()
             .and_then(|g| g.as_ref().filter(|c| c.upload_id == upload_id).cloned())
     }
+    /// Whether an upload job is currently registered (running).
+    fn is_active(&self) -> bool {
+        self.slot.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+}
+
+/// Clears the `resuming` flag when the resume job ends (any exit path), so a
+/// later resume can proceed.
+struct ResumingGuard {
+    app: AppHandle,
+}
+
+impl Drop for ResumingGuard {
+    fn drop(&mut self) {
+        self.app
+            .state::<UploadControl>()
+            .resuming
+            .store(false, Ordering::Release);
+    }
+}
+
+// ── Resume manifest (crash-safe local upload state) ───────────────────────────
+
+/// Local resume state, persisted to app-private storage so an upload survives an
+/// accidental process kill (e.g. the OS evicting the backgrounded app). Only the
+/// minimum is stored — the server is the source of truth for the chunk map +
+/// which chunks already landed (fetched via `get_upload` on resume); locally we
+/// just need to know which **source file** maps to each `file_index` and its
+/// whole-file hash so we can re-verify it hasn't changed. One upload runs at a
+/// time, so a single manifest file suffices.
+const RESUME_FILE: &str = "upload_resume.json";
+
+/// App-private staging root. Picked Android `content://` URIs are **copied** here
+/// at upload start so they survive a process kill (a SAF read grant doesn't) and
+/// the upload reads chunks from these always-accessible files. Each session gets
+/// a `<staging_root>/<staging_key>/` subdir, removed on every terminal outcome.
+const STAGING_DIR: &str = "upload_staging";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResumeManifest {
+    upload_id: String,
+    job_id: String,
+    /// Staging-subdir key (UUID) to clean up; `None` when nothing was staged
+    /// (desktop reads original paths directly).
+    #[serde(default)]
+    staging_key: Option<String>,
+    files: Vec<ResumeFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResumeFile {
+    /// Effective source path to read on resume — a **staged copy** in app-private
+    /// storage (for an Android `content://` source) or the original path (desktop).
+    /// Either way it's a real, accessible filesystem path.
+    path: String,
+    name_hint: String,
+    /// Whole-file SHA-256 captured when the upload started — re-checked on resume
+    /// to detect a file whose contents changed since (→ cancel as corrupted).
+    hash: String,
+}
+
+fn manifest_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(RESUME_FILE))
+}
+
+/// Persist the resume manifest atomically (temp + rename).
+fn write_manifest(app: &AppHandle, m: &ResumeManifest) {
+    let Some(path) = manifest_path(app) else { return };
+    let Ok(json) = serde_json::to_vec(m) else { return };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, &json).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    } else {
+        tracing::warn!("failed to persist upload resume manifest");
+    }
+}
+
+fn read_manifest(app: &AppHandle) -> Option<ResumeManifest> {
+    let path = manifest_path(app)?;
+    let data = std::fs::read(&path).ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
+fn clear_manifest(app: &AppHandle) {
+    if let Some(path) = manifest_path(app) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+// ── Staging (app-private copies of picked sources) ────────────────────────────
+
+fn staging_root(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(STAGING_DIR))
+}
+
+fn staging_dir(app: &AppHandle, key: &str) -> Option<std::path::PathBuf> {
+    staging_root(app).map(|r| r.join(key))
+}
+
+/// Copy a picked source's bytes into `<staging>/<key>/<index>.<ext>` and return
+/// that path. The upload then reads chunks from here instead of the (revocable)
+/// `content://` URI.
+fn stage_file(
+    app: &AppHandle,
+    key: &str,
+    index: usize,
+    filename: &str,
+    data: &[u8],
+) -> Result<String, String> {
+    let dir = staging_dir(app, key).ok_or_else(|| "no app data dir".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create staging dir: {e}"))?;
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let path = dir.join(format!("{index}.{ext}"));
+    std::fs::write(&path, data).map_err(|e| format!("write staged file: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn clear_staging(app: &AppHandle, key: &str) {
+    if let Some(d) = staging_dir(app, key) {
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// Remove every staging subdir except `keep` (orphans from a crash before a
+/// terminal cleanup). Called on startup so abandoned copies don't accumulate.
+fn sweep_staging(app: &AppHandle, keep: Option<&str>) {
+    let Some(root) = staging_root(app) else { return };
+    let Ok(entries) = std::fs::read_dir(&root) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        if keep.map(|k| name.to_string_lossy() == k).unwrap_or(false) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(e.path());
+    }
+}
+
+/// Clear all local resume state for the active upload: its staging copies (from
+/// the manifest's `staging_key`) + the manifest itself. Called on every terminal
+/// outcome (complete / cancel / corrupted).
+fn clear_resume_state(app: &AppHandle) {
+    if let Some(key) = read_manifest(app).and_then(|m| m.staging_key) {
+        clear_staging(app, &key);
+    }
+    clear_manifest(app);
+}
+
+/// Read `[start, end)` of a staged/source file on a blocking thread — how chunks
+/// are pulled for upload, so whole files never sit in memory.
+async fn read_range(path: &str, start: u64, end: u64) -> Result<Vec<u8>, String> {
+    let path = path.to_string();
+    let path_for_err = path.clone();
+    let len = (end.saturating_sub(start)) as usize;
+    tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(&path)?;
+        f.seek(SeekFrom::Start(start))?;
+        let mut buf = vec![0u8; len];
+        f.read_exact(&mut buf)?;
+        Ok(buf)
+    })
+    .await
+    .map_err(|e| format!("read task: {e}"))?
+    .map_err(|e| format!("{path_for_err}: {e}"))
 }
 
 // ── Input / output types ─────────────────────────────────────────────────────
@@ -447,6 +620,9 @@ enum ChunkSend {
     Cancelled,
     /// The session is already `completed` (benign post-finalize lost-ack race).
     AlreadyComplete,
+    /// The local staged/source file couldn't be read (vanished / disk error) —
+    /// fatal for this upload.
+    ReadError(String),
 }
 
 /// Send one chunk, retrying transient failures **indefinitely** with capped
@@ -667,6 +843,9 @@ async fn run_job(
 
     let started = std::time::Instant::now();
     let total_items = items.len() as u64;
+    // Unique staging key for this session's app-private source copies (Android).
+    // Cleaned up on any terminal outcome; orphans are swept on next startup.
+    let staging_key = uuid::Uuid::new_v4().to_string();
 
     // Phase 1: read every source natively + compute hashes/chunk maps.
     emit(
@@ -681,7 +860,11 @@ async fn run_job(
     notify_progress(&app, notif_id, "Uploading music", "Preparing files…", -1);
 
     let mut files_init: Vec<UploadFileInit> = Vec::new();
-    let mut datas: Vec<(String, Vec<u8>)> = Vec::new(); // (hint, bytes), parallel to files_init
+    // (hint, effective source path), parallel to files_init. Chunks are read from
+    // these paths at upload time — a staged copy (content://) or the original.
+    let mut sources: Vec<(String, String)> = Vec::new();
+    let mut manifest_files: Vec<ResumeFile> = Vec::new(); // parallel to files_init (resume)
+    let mut staged_any = false;
     let mut skipped: u64 = 0;
     let mut errors: Vec<String> = Vec::new();
 
@@ -746,8 +929,33 @@ async fn run_job(
                 last = std::time::Instant::now();
             }
         });
+        // Resolve the effective source path. An Android `content://` URI is
+        // **copied** into app-private staging now (while the SAF read grant is
+        // still valid) so a later resume — after a force-quit dropped the grant —
+        // reads an always-accessible file. Desktop paths persist, so use them
+        // directly. Either way, chunks stream from this path (no whole file in RAM).
+        let effective_path = if is_uri(&raw) {
+            match stage_file(&app, &staging_key, idx, &file_init.filename, &data) {
+                Ok(p) => {
+                    staged_any = true;
+                    p
+                }
+                Err(e) => {
+                    errors.push(format!("{hint}: {e}"));
+                    continue;
+                }
+            }
+        } else {
+            raw.clone()
+        };
+        manifest_files.push(ResumeFile {
+            path: effective_path.clone(),
+            name_hint: hint.clone(),
+            hash: file_init.hash.clone(),
+        });
         files_init.push(file_init);
-        datas.push((hint, data));
+        sources.push((hint, effective_path));
+        // `data` is dropped here — chunks are re-read from `effective_path`.
     }
 
     if files_init.is_empty() {
@@ -762,7 +970,6 @@ async fn run_job(
     }
 
     let total_files = files_init.len() as u64;
-    let session_total: u64 = files_init.iter().map(|f| f.total_size).sum();
 
     // Bridge the gap between hashing the last file and the first chunk landing
     // (the session-declare round-trip), so the UI doesn't freeze on the last
@@ -797,6 +1004,50 @@ async fn run_job(
     };
     let upload_id = view.id.clone();
 
+    // Persist a resume manifest so an accidental process kill can resume this
+    // upload — without re-uploading already-sent chunks, or re-hashing then
+    // starting over. Cleared once the upload reaches a terminal state (in
+    // `drive_upload`). The server owns the chunk map + received-set (fetched via
+    // `get_upload` on resume); locally we keep only the source→file_index mapping
+    // + each file's whole-file hash (re-checked on resume to detect a change).
+    write_manifest(
+        &app,
+        &ResumeManifest {
+            upload_id: upload_id.clone(),
+            job_id: job_id.clone(),
+            staging_key: staged_any.then(|| staging_key.clone()),
+            files: manifest_files,
+        },
+    );
+
+    drive_upload(app, auth, job_id, notif_id, view, sources, started, skipped, errors).await;
+}
+
+/// Drive the chunk-upload phase of a session to completion: register pause/cancel
+/// control + the stall monitor, upload every missing chunk (resilient send),
+/// then fetch + announce the report. Shared by a fresh upload ([`run_job`]) and
+/// a resumed one ([`run_resume_job`]) — both arrive here with a server
+/// [`UploadView`] (authoritative chunk map + received-set) and the effective
+/// source paths (`sources`, indexed by `file_index`) that chunks are **read from
+/// disk** as they're sent (so whole files never sit in RAM). Clears all resume
+/// state (manifest + staged copies) on every terminal exit. The caller owns the
+/// foreground-service guard (kept alive across this call).
+#[allow(clippy::too_many_arguments)]
+async fn drive_upload(
+    app: AppHandle,
+    auth: Arc<AuthManager>,
+    job_id: String,
+    notif_id: i32,
+    view: UploadView,
+    sources: Vec<(String, String)>,
+    started: std::time::Instant,
+    skipped: u64,
+    mut errors: Vec<String>,
+) {
+    let upload_id = view.id.clone();
+    let total_files = view.files.len() as u64;
+    let session_total: u64 = view.files.iter().map(|f| f.total_size).sum();
+
     // Register pause/cancel control for this session + start the stall monitor.
     // One upload runs at a time, so a single control slot suffices. The guard
     // clears the slot + stops the monitor on every exit path below.
@@ -808,6 +1059,19 @@ async fn run_job(
     };
     spawn_stall_monitor(app.clone(), auth.clone(), ctl.clone());
 
+    // If we're picking up a session the server already marked `paused` — typically
+    // its stall sweeper paused it while this client was force-quit, and we're now
+    // resuming — flip it back to `uploading`. A fresh `JobCtl` has `auto_paused =
+    // false`, so the Ok-arm's auto-resume wouldn't fire on its own; resume it
+    // explicitly now (best-effort), and if that call can't land (offline at
+    // resume start) arm `auto_paused` so the first successful chunk re-asserts it.
+    if view.state == "paused" {
+        match auth.resume_upload(upload_id.clone()).await {
+            Ok(_) => emit_resumed(&app, &job_id, &upload_id),
+            Err(_) => ctl.auto_paused.store(true, Ordering::Release),
+        }
+    }
+
     // Phase 3: upload missing chunks (up to CHUNK_CONCURRENCY in flight). A chunk
     // send now retries transient failures **indefinitely** (a ≥60s stall
     // auto-pauses instead of failing), parks while manually paused, and only
@@ -817,24 +1081,24 @@ async fn run_job(
     let mut last_notif = std::time::Instant::now();
     let mut complete = false;
     let mut cancelled = false;
+    let mut read_error: Option<String> = None;
 
-    'outer: for (fi, (hint, data)) in datas.into_iter().enumerate() {
-        let file_init = &files_init[fi];
-        // Chunks the server already holds (resume within a session).
-        let already: std::collections::HashSet<u32> = view
-            .files
-            .get(fi)
-            .map(|f| {
-                f.chunks
-                    .iter()
-                    .filter(|c| c.received)
-                    .map(|c| c.index)
-                    .collect()
-            })
-            .unwrap_or_default();
+    'outer: for (fi, (hint, path)) in sources.into_iter().enumerate() {
+        // Authoritative chunk map + received-set from the server view — works
+        // for a fresh session (nothing received) and a resumed one (some
+        // already received, which we skip).
+        let Some(file_view) = view.files.iter().find(|f| f.file_index == fi as u32) else {
+            continue;
+        };
+        let already: std::collections::HashSet<u32> = file_view
+            .chunks
+            .iter()
+            .filter(|c| c.received)
+            .map(|c| c.index)
+            .collect();
         let mut file_received: u64 = 0;
         // Account already-uploaded chunks (resume) up-front.
-        for chunk in &file_init.chunks {
+        for chunk in &file_view.chunks {
             if already.contains(&chunk.index) {
                 let len = chunk.end - chunk.start;
                 file_received += len;
@@ -846,10 +1110,11 @@ async fn run_job(
         // (`buffer_unordered`); the acks are consumed sequentially in this loop,
         // so the progress counters stay single-writer and need no locking. Each
         // chunk future owns its inputs (so the spawned job stays `Send + 'static`):
-        // the file bytes are shared cheaply via an `Arc`, a chunk-sized copy is
-        // sliced off inside the future, and the per-job `JobCtl` is `Arc`-shared.
-        let data = std::sync::Arc::new(data);
-        let missing: Vec<(u32, u64, u64)> = file_init
+        // the source path is shared cheaply via an `Arc`, the chunk bytes are read
+        // from disk inside the future (≤ `CHUNK_CONCURRENCY × CHUNK_SIZE` live at
+        // once), and the per-job `JobCtl` is `Arc`-shared.
+        let path = std::sync::Arc::new(path);
+        let missing: Vec<(u32, u64, u64)> = file_view
             .chunks
             .iter()
             .filter(|c| !already.contains(&c.index))
@@ -859,11 +1124,15 @@ async fn run_job(
             futures_util::stream::iter(missing.into_iter().map(|(index, start, end)| {
                 let auth = auth.clone();
                 let ctl = ctl.clone();
-                let data = data.clone();
+                let path = path.clone();
                 let len = end - start;
                 async move {
-                    let bytes = data[start as usize..end as usize].to_vec();
-                    let res = send_chunk_resilient(&auth, &ctl, fi as u32, index, bytes).await;
+                    let res = match read_range(&path, start, end).await {
+                        Ok(bytes) => {
+                            send_chunk_resilient(&auth, &ctl, fi as u32, index, bytes).await
+                        }
+                        Err(e) => ChunkSend::ReadError(e),
+                    };
                     (len, res)
                 }
             }))
@@ -891,7 +1160,7 @@ async fn run_job(
                             total: total_files,
                             file: Some(hint.clone()),
                             received: Some(file_received),
-                            bytes_total: Some(file_init.total_size),
+                            bytes_total: Some(file_view.total_size),
                             session_received: Some(session_received),
                             session_total: Some(session_total),
                             bytes_per_sec: Some(speed),
@@ -925,11 +1194,15 @@ async fn run_job(
                     cancelled = true;
                     break;
                 }
+                ChunkSend::ReadError(e) => {
+                    read_error = Some(e);
+                    break;
+                }
             }
         }
         // Drop the stream to cancel any still-in-flight chunk futures.
         drop(chunks);
-        if complete || cancelled {
+        if complete || cancelled || read_error.is_some() {
             break 'outer;
         }
     }
@@ -938,6 +1211,7 @@ async fn run_job(
     // The server is already cancelled (by the command or remotely), so we don't
     // re-cancel; just announce.
     if cancelled {
+        clear_resume_state(&app); // terminal — don't resume a cancelled upload
         emit_done(
             &app,
             &job_id,
@@ -950,6 +1224,27 @@ async fn run_job(
             errors,
         );
         notify_complete(&app, notif_id, "Upload cancelled", "The upload was cancelled.");
+        return;
+    }
+
+    // A local read failure (the staged/source file vanished mid-upload) is fatal:
+    // cancel the session + clear resume state so we don't loop on a dead file.
+    if let Some(e) = read_error {
+        let _ = auth.cancel_upload(upload_id.clone()).await;
+        clear_resume_state(&app);
+        errors.push(format!("Could not read a file to upload — {e}"));
+        emit_done(
+            &app,
+            &job_id,
+            Some(&upload_id),
+            "cancelled",
+            total_files,
+            0,
+            total_files,
+            skipped,
+            errors,
+        );
+        notify_complete(&app, notif_id, "Upload failed", "Could not read a file from disk.");
         return;
     }
 
@@ -1007,6 +1302,119 @@ async fn run_job(
         body.push_str(&format!(" · {skipped} skipped"));
     }
     notify_complete(&app, notif_id, title, &body);
+    clear_resume_state(&app); // terminal — upload finished
+}
+
+/// Resume an upload persisted by a previous app session (its resume manifest).
+///
+/// 1. **Re-verify** every source file's whole-file SHA-256 against the manifest.
+///    If **any** file changed (or is no longer readable), the whole session is
+///    **cancelled** as corrupted with a clear reason — we never upload mismatched
+///    bytes onto a half-finished session.
+/// 2. **Fetch** the server view (authoritative chunk map + which chunks already
+///    landed). A transient/offline failure keeps the manifest for a later launch;
+///    a gone/forbidden session drops it.
+/// 3. **Drive** only the missing chunks (shared [`drive_upload`]) — no re-upload
+///    of already-sent chunks, no re-hash-then-start-over.
+async fn run_resume_job(app: AppHandle, auth: Arc<AuthManager>, manifest: ResumeManifest) {
+    // Releases the `resuming` flag on every exit (incl. the early corrupted /
+    // unreachable returns, before `drive_upload` registers the real `JobCtl`).
+    let _resuming_guard = ResumingGuard { app: app.clone() };
+    ensure_channels(&app);
+    crate::upload_session::start(&app, "Resuming upload", "Checking files…", -1);
+    let _fg = UploadForegroundGuard { app: app.clone() };
+
+    let (job_id, notif_id) = next_job();
+    let started = std::time::Instant::now();
+    let total = manifest.files.len() as u64;
+    let upload_id = manifest.upload_id.clone();
+
+    // Phase 1: re-read + re-hash each file (the staged copy on Android, or the
+    // original path on desktop), verifying it hasn't changed since the upload
+    // started. We pass the path (not the bytes) on to `drive_upload`, which reads
+    // chunks from disk.
+    let mut sources: Vec<(String, String)> = Vec::with_capacity(manifest.files.len());
+    let mut corrupted: Vec<String> = Vec::new();
+    for (idx, f) in manifest.files.iter().enumerate() {
+        let fileno = idx as u64 + 1;
+        prepare_status(
+            &app,
+            &job_id,
+            notif_id,
+            idx as u64,
+            total,
+            &f.name_hint,
+            &format!("Verifying file {fileno}/{total}"),
+        );
+        match read_source(app.clone(), f.path.clone()).await {
+            Ok(bytes) if sha256_hex(&bytes) == f.hash => {
+                sources.push((f.name_hint.clone(), f.path.clone()))
+            }
+            Ok(_) => corrupted.push(format!(
+                "{}: contents changed since the upload started",
+                f.name_hint
+            )),
+            Err(e) => corrupted.push(format!("{}: no longer readable ({e})", f.name_hint)),
+        }
+    }
+
+    // Any changed/unreadable file → cancel the whole session as corrupted.
+    if !corrupted.is_empty() {
+        let _ = auth.cancel_upload(upload_id.clone()).await;
+        clear_resume_state(&app);
+        let reason = format!(
+            "File(s) changed/corrupted since the upload started — {}",
+            corrupted.join("; ")
+        );
+        emit_done(
+            &app,
+            &job_id,
+            Some(&upload_id),
+            "cancelled",
+            total,
+            0,
+            total,
+            0,
+            vec![reason.clone()],
+        );
+        notify_complete(&app, notif_id, "Upload cancelled — file changed", &reason);
+        return;
+    }
+
+    // Phase 2: fetch the authoritative server view (chunk map + received-set).
+    let view = match auth.get_upload(upload_id.clone()).await {
+        // Already terminal server-side — nothing to resume.
+        Ok(v) if v.state == "completed" || v.state == "cancelled" => {
+            clear_resume_state(&app);
+            emit_done(&app, &job_id, Some(&upload_id), &v.state, total, 0, 0, 0, vec![]);
+            return;
+        }
+        Ok(v) => v,
+        Err(e) => {
+            // Keep the manifest only for a transient/offline failure (retry on a
+            // later launch); a gone/forbidden session drops it so we don't spin.
+            let keep = matches!(e, AppError::Transport(_));
+            if !keep {
+                clear_resume_state(&app);
+            }
+            tracing::warn!(upload_id = %upload_id, keep, error = %e, "resume: could not fetch session");
+            emit_done(
+                &app,
+                &job_id,
+                Some(&upload_id),
+                "error",
+                total,
+                0,
+                0,
+                0,
+                vec![format!("Couldn't resume upload: {e}")],
+            );
+            return;
+        }
+    };
+
+    // Phase 3+4: drive only the remaining chunks (shared with a fresh upload).
+    drive_upload(app, auth, job_id, notif_id, view, sources, started, 0, vec![]).await;
 }
 
 fn report_u64(v: &UploadView, key: &str) -> u64 {
@@ -1210,6 +1618,9 @@ pub async fn upload_files(
     if items.is_empty() {
         return Err(AppError::Internal("no files selected".into()));
     }
+    // Android: persist read access to the picked `content://` URIs so the upload
+    // can be re-read + resumed after an accidental process kill. No-op elsewhere.
+    crate::upload_session::persist_uri_access(&app, items.iter().map(|i| i.path.clone()).collect());
     let (job_id, notif_id) = next_job();
     let jid = job_id.clone();
     tauri::async_runtime::spawn(async move {
@@ -1345,6 +1756,45 @@ pub async fn uploads_resume(
     auth.resume_upload(id).await
 }
 
+/// Resume an upload left in flight by a previous app session, if any. Call once
+/// on startup (after the session is restored). Returns `true` if a resume was
+/// started. No-ops when there's no manifest or an upload is already active, so
+/// it's safe to call more than once. The actual work (file re-verification +
+/// resuming the remaining chunks) runs as a background job, exactly like a fresh
+/// upload — progress + completion arrive over the same `upload-progress` /
+/// `upload-complete` events.
+#[tauri::command]
+pub async fn uploads_resume_pending(
+    state: tauri::State<'_, crate::AppStateHandle>,
+    app: AppHandle,
+) -> AppResult<bool> {
+    let auth = resolve_auth(&state).await?;
+    // Atomically claim the resume slot: skip if an upload is already running, or
+    // a resume is already in its verify window (`swap` returns the prior value).
+    {
+        let control = app.state::<UploadControl>();
+        if control.is_active() || control.resuming.swap(true, Ordering::AcqRel) {
+            return Ok(false);
+        }
+    }
+    let manifest = read_manifest(&app);
+    // Clean up staging copies orphaned by a crash — keep the one we're about to
+    // resume (if any). Safe here: no upload is active (checked above).
+    sweep_staging(&app, manifest.as_ref().and_then(|m| m.staging_key.as_deref()));
+    let Some(manifest) = manifest else {
+        // Nothing to resume — release the flag we just claimed.
+        app.state::<UploadControl>()
+            .resuming
+            .store(false, Ordering::Release);
+        return Ok(false);
+    };
+    tracing::info!(upload_id = %manifest.upload_id, files = manifest.files.len(), "resuming upload from a previous session");
+    tauri::async_runtime::spawn(async move {
+        run_resume_job(app, auth, manifest).await;
+    });
+    Ok(true)
+}
+
 /// Subscribe to the live `uploads` channel (gRPC stream primary, WS fallback).
 /// Spawns a reader that re-emits each event as a Tauri `upload-event`.
 #[tauri::command]
@@ -1412,6 +1862,31 @@ mod tests {
         assert!(control.get("other").is_none(), "a different id does not match");
         control.clear();
         assert!(control.get("up-1").is_none(), "cleared slot resolves nothing");
+    }
+
+    #[test]
+    fn resume_manifest_round_trips() {
+        let m = ResumeManifest {
+            upload_id: "up-1".into(),
+            job_id: "job-1".into(),
+            staging_key: Some("stage-abc".into()),
+            files: vec![ResumeFile {
+                path: "/data/data/dev.niruhsa.music.app/files/upload_staging/stage-abc/0.flac"
+                    .into(),
+                name_hint: "song.flac".into(),
+                hash: "a".repeat(64),
+            }],
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let back: ResumeManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.upload_id, "up-1");
+        assert_eq!(back.staging_key.as_deref(), Some("stage-abc"));
+        assert_eq!(back.files.len(), 1);
+        assert_eq!(back.files[0].hash, "a".repeat(64));
+        // A pre-staging manifest (no `staging_key`) still deserializes (serde default).
+        let old: ResumeManifest =
+            serde_json::from_str(r#"{"upload_id":"u","job_id":"j","files":[]}"#).unwrap();
+        assert_eq!(old.staging_key, None);
     }
 
     #[test]

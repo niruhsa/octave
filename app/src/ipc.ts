@@ -811,6 +811,25 @@ export const uploadsPause = (id: string) =>
 export const uploadsResume = (id: string) =>
   invoke<UploadReport>("uploads_resume", { id });
 
+/**
+ * Resume an upload left in flight by a previous app session (after an accidental
+ * kill). No-ops if there's nothing to resume or an upload is already running.
+ * Returns true if a resume was started; progress arrives over the usual events.
+ */
+export const uploadsResumePending = () =>
+  invoke<boolean>("uploads_resume_pending");
+
+/**
+ * Whether the app has full "All files access" (Android `MANAGE_EXTERNAL_STORAGE`).
+ * Always true on desktop / Android ≤10.
+ */
+export const storageHasAllFilesAccess = () =>
+  invoke<boolean>("storage_has_all_files_access");
+
+/** Open the system "All files access" settings screen to grant it (Android 11+). */
+export const storageRequestAllFilesAccess = () =>
+  invoke<void>("storage_request_all_files_access");
+
 /** Open the live `uploads` channel; events arrive via `onUploadEvent`. */
 export const uploadsSubscribe = () => invoke<void>("uploads_subscribe");
 

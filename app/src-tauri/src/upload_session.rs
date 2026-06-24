@@ -126,3 +126,61 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str, progress:
 pub fn stop<R: Runtime>(app: &AppHandle<R>) {
     run(app, "stop", serde_json::json!({}));
 }
+
+/// Take **persistable** read permission on the given `content://` URIs (Android)
+/// so they stay readable after a process kill — required to resume an upload
+/// from disk. No-op on desktop / for non-content paths (the Kotlin side filters
+/// by scheme and swallows non-persistable grants).
+pub fn persist_uri_access<R: Runtime>(app: &AppHandle<R>, uris: Vec<String>) {
+    run(app, "persistUriPermissions", UriArgs { uris });
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UriArgs {
+    uris: Vec<String>,
+}
+
+/// Call a plugin command that returns a value, deserializing it. Android-only
+/// (the only caller, the all-files-access check, is gated to Android).
+#[cfg(target_os = "android")]
+fn run_get<R: Runtime, T: serde::de::DeserializeOwned>(
+    app: &AppHandle<R>,
+    command: &str,
+) -> Option<T> {
+    let state = app.state::<UploadSessionHandle<R>>();
+    let guard = state.0.lock().ok()?;
+    let h = guard.as_ref()?;
+    h.run_mobile_plugin::<T>(command, ()).ok()
+}
+
+/// Whether the app holds full **"All files access"** on Android
+/// (`MANAGE_EXTERNAL_STORAGE`, granted from a system settings screen). Always
+/// `true` on desktop (the process already has full filesystem access) and on
+/// Android ≤10 (no such mode; legacy read grants apply).
+#[tauri::command]
+pub fn storage_has_all_files_access<R: Runtime>(app: AppHandle<R>) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        #[derive(serde::Deserialize)]
+        struct Granted {
+            granted: bool,
+        }
+        run_get::<R, Granted>(&app, "hasAllFilesAccess")
+            .map(|g| g.granted)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        true
+    }
+}
+
+/// Open the system **"All files access"** settings screen so the user can grant
+/// `MANAGE_EXTERNAL_STORAGE` (it can't be granted by a normal runtime dialog).
+/// No-op on desktop / when already granted.
+#[tauri::command]
+pub fn storage_request_all_files_access<R: Runtime>(app: AppHandle<R>) {
+    run(&app, "requestAllFilesAccess", serde_json::json!({}));
+}

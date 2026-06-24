@@ -18,7 +18,7 @@ import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
 import MobileTopBar from "./components/MobileTopBar";
 import PlayerBar from "./components/PlayerBar";
-import { authSession } from "./ipc";
+import { authSession, uploadsResumePending } from "./ipc";
 import { useAppStore } from "./store";
 import { useSyncScheduler } from "./sync/useSync";
 import { useDownloadListener } from "./downloads/useDownloads";
@@ -121,6 +121,16 @@ function RootLayout() {
       cancelled = true;
     };
   }, [setSession]);
+
+  // Once a session is available (auth configured — via boot restore or a fresh
+  // login), pick up any upload left in flight by a previous run (e.g. the OS
+  // killed the backgrounded app). The command no-ops when there's nothing to
+  // resume or an upload is already running, so re-firing on session change is
+  // safe.
+  const session = useAppStore((s) => s.session);
+  useEffect(() => {
+    if (session) void uploadsResumePending().catch(() => {});
+  }, [session]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-oct-bg text-oct-text">
