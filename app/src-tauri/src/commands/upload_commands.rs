@@ -43,7 +43,7 @@ const AUDIO_EXTS: &[&str] = &[
 
 /// Chunk size for resumable uploads (128 KiB). Each chunk carries its own hash so
 /// the server can verify it on arrival.
-const CHUNK_SIZE: u64 = 512 * 1024;
+const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
 /// How many times to re-send a chunk the server rejects (e.g. in-transit
 /// corruption → hash mismatch) before giving up on the session.
@@ -54,7 +54,7 @@ const CHUNK_RETRIES: u32 = 3;
 /// received-count, single-finalizer election), so this just trades a little
 /// memory (`CHUNK_CONCURRENCY × CHUNK_SIZE`) for throughput on high-latency
 /// links.
-const CHUNK_CONCURRENCY: usize = 8;
+const CHUNK_CONCURRENCY: usize = 4;
 
 /// Monotonic job id source (also seeds the per-job notification id).
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
