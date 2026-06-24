@@ -639,6 +639,28 @@ impl ServerClient {
         self.rest.cancel_upload(cred, id).await
     }
 
+    pub async fn pause_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.pause_upload(cred, id).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("pause_upload", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.pause_upload(cred, id).await
+    }
+
+    pub async fn resume_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.resume_upload(cred, id).await {
+                Ok(r) => return Ok(r),
+                Err(e) if is_transport_error(&e) => fallback_log("resume_upload", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.resume_upload(cred, id).await
+    }
+
     /// Subscribe to the live `uploads` channel — gRPC server-stream primary,
     /// WebSocket fallback. Returns a receiver the caller drains for events.
     pub async fn subscribe_uploads(

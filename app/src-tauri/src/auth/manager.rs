@@ -268,6 +268,16 @@ impl AuthManager {
         self.server.cancel_upload(&cred, &id).await
     }
 
+    pub async fn pause_upload(&self, id: String) -> AppResult<UploadView> {
+        let cred = self.credential().await?;
+        self.server.pause_upload(&cred, &id).await
+    }
+
+    pub async fn resume_upload(&self, id: String) -> AppResult<UploadView> {
+        let cred = self.credential().await?;
+        self.server.resume_upload(&cred, &id).await
+    }
+
     pub async fn subscribe_uploads(&self) -> AppResult<tokio::sync::mpsc::Receiver<UploadEvent>> {
         let cred = self.credential().await?;
         self.server.subscribe_uploads(&cred).await

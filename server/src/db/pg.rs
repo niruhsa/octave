@@ -1050,7 +1050,7 @@ impl UploadRepo for PgRepos {
         // `IS NOT DISTINCT FROM` so a NULL owner (SECRET_KEY) matches NULL rows.
         let (n,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM uploads \
-             WHERE state IN ('initialized', 'uploading') \
+             WHERE state IN ('initialized', 'uploading', 'paused') \
                AND user_id IS NOT DISTINCT FROM $1",
         )
         .bind(user_id)

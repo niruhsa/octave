@@ -427,7 +427,12 @@ impl UploadsService {
                 .set_file_state(file.id, UploadFileState::Complete, None)
                 .await?;
         }
-        // initialized → uploading on the first chunk.
+        // initialized → uploading on the first chunk. A chunk landing while
+        // `paused` is still accepted + stored (paused is_active), but does NOT
+        // flip the state here: the client drives resume explicitly (manual, or
+        // its first successful chunk after a stall calls `resume`). This keeps a
+        // *manual* pause consistent — the few in-flight chunks at pause time land
+        // without spuriously un-pausing the session.
         if upload.state == UploadState::Initialized {
             self.repo
                 .set_upload_state(upload_id, UploadState::Uploading)
@@ -522,6 +527,48 @@ impl UploadsService {
         let upload = self.load(id).await?;
         let built = self.build_view(&upload).await?;
         self.publish_state(&upload, "cancelled", None, &built.files_models).await;
+        Ok(built.view)
+    }
+
+    /// Pause an in-flight session. The client stops sending chunks; the session
+    /// stays staged + resumable. Idempotent if already paused. A completed /
+    /// cancelled session can't be paused.
+    pub async fn pause(&self, caller: &Identity, id: Uuid) -> Result<UploadView> {
+        let upload = self.load(id).await?;
+        authorize_owner_or_admin(caller, &upload)?;
+        if !upload.state.is_active() {
+            return Err(AppError::InvalidArgument(format!(
+                "upload is {:?}; cannot pause",
+                upload.state
+            )));
+        }
+        if upload.state != UploadState::Paused {
+            self.repo.set_upload_state(id, UploadState::Paused).await?;
+        }
+        let upload = self.load(id).await?;
+        let built = self.build_view(&upload).await?;
+        self.publish_state(&upload, "paused", None, &built.files_models).await;
+        Ok(built.view)
+    }
+
+    /// Resume a paused session back to `uploading`. A chunk landing also
+    /// auto-resumes (see [`put_chunk`]); this is the explicit/manual path. Only
+    /// a paused session can be resumed (others are a no-op error).
+    ///
+    /// [`put_chunk`]: UploadsService::put_chunk
+    pub async fn resume(&self, caller: &Identity, id: Uuid) -> Result<UploadView> {
+        let upload = self.load(id).await?;
+        authorize_owner_or_admin(caller, &upload)?;
+        if upload.state != UploadState::Paused {
+            return Err(AppError::InvalidArgument(format!(
+                "upload is {:?}; not paused",
+                upload.state
+            )));
+        }
+        self.repo.set_upload_state(id, UploadState::Uploading).await?;
+        let upload = self.load(id).await?;
+        let built = self.build_view(&upload).await?;
+        self.publish_state(&upload, "resumed", None, &built.files_models).await;
         Ok(built.view)
     }
 
@@ -1071,6 +1118,20 @@ mod tests {
     #[test]
     fn hex_lower_pads() {
         assert_eq!(hex_lower(&[0x00, 0x0f, 0xff]), "000fff");
+    }
+
+    #[test]
+    fn paused_is_active_and_parses() {
+        // Paused is still in-flight: counts toward the one-at-a-time limit,
+        // is cancellable, and accepts chunks (auto-resume).
+        assert!(UploadState::Paused.is_active());
+        assert!(UploadState::Initialized.is_active());
+        assert!(UploadState::Uploading.is_active());
+        assert!(!UploadState::Completed.is_active());
+        assert!(!UploadState::Cancelled.is_active());
+        assert_eq!(UploadState::parse("paused"), Some(UploadState::Paused));
+        assert_eq!(UploadState::parse("PAUSED"), Some(UploadState::Paused));
+        assert_eq!(UploadState::parse("bogus"), None);
     }
 
     #[test]

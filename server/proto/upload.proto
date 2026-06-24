@@ -27,6 +27,10 @@ service UploadService {
   rpc ListUploads(ListUploadsRequest) returns (ListUploadsResponse);
   // Cancel an in-flight session; staged chunks are cleaned off disk.
   rpc CancelUpload(CancelUploadRequest) returns (UploadView);
+  // Pause an in-flight session (state -> paused; stays staged + resumable).
+  rpc PauseUpload(PauseUploadRequest) returns (UploadView);
+  // Resume a paused session (state -> uploading). A chunk landing also resumes.
+  rpc ResumeUpload(ResumeUploadRequest) returns (UploadView);
   // Live progress stream (gRPC clone of the WebSocket `uploads` channel).
   rpc StreamUploads(StreamUploadsRequest) returns (stream UploadEvent);
 }
@@ -69,11 +73,13 @@ message ChunkAck {
   uint32 total_chunks = 4;
   bool file_complete = 5;
   bool upload_complete = 6;
-  string state = 7; // initialized | uploading | completed | cancelled
+  string state = 7; // initialized | uploading | paused | completed | cancelled
 }
 
 message GetUploadRequest { string upload_id = 1; }
 message CancelUploadRequest { string upload_id = 1; }
+message PauseUploadRequest { string upload_id = 1; }
+message ResumeUploadRequest { string upload_id = 1; }
 
 message ListUploadsRequest {
   string user_id = 1; // empty = caller's own (admins: all)
@@ -135,7 +141,7 @@ message UploadView {
 message StreamUploadsRequest {}
 
 message UploadEvent {
-  string kind = 1;        // initialized | progress | completed | cancelled
+  string kind = 1;        // initialized | progress | paused | resumed | completed | cancelled
   string upload_id = 2;
   string owner_id = 3;    // empty when SECRET_KEY-owned
   string state = 4;

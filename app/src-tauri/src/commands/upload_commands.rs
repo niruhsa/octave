@@ -19,13 +19,13 @@
 //! enforced server-side.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_fs::{FilePath, FsExt};
 use tauri_plugin_notification::NotificationExt;
 
@@ -45,9 +45,14 @@ const AUDIO_EXTS: &[&str] = &[
 /// the server can verify it on arrival.
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
-/// How many times to re-send a chunk the server rejects (e.g. in-transit
-/// corruption → hash mismatch) before giving up on the session.
-const CHUNK_RETRIES: u32 = 3;
+/// Auto-pause threshold: if no chunk has succeeded for this long while the
+/// upload is running, the job auto-pauses (state → paused). It keeps retrying;
+/// a chunk landing again auto-resumes it. Replaces the old "give up + cancel
+/// after 3 retries" behaviour so a network blip pauses instead of failing.
+const STALL_THRESHOLD_MS: i64 = 60_000;
+
+/// How often the stall monitor re-checks the threshold.
+const STALL_CHECK_SECS: u64 = 5;
 
 /// How many chunks to upload concurrently (in flight at once) within a file.
 /// The server accepts concurrent chunks safely (per-chunk verify, atomic
@@ -58,6 +63,85 @@ const CHUNK_CONCURRENCY: usize = 4;
 
 /// Monotonic job id source (also seeds the per-job notification id).
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
+
+// ── Pause / cancel control ────────────────────────────────────────────────────
+
+/// Unix-epoch millis (best-effort; 0 on a pre-epoch clock).
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Per-job control shared between the running upload job (its chunk futures +
+/// stall monitor) and the `uploads_pause` / `uploads_resume` / `uploads_cancel`
+/// commands. One upload runs at a time, so a single slot suffices.
+pub struct JobCtl {
+    upload_id: String,
+    job_id: String,
+    notif_id: i32,
+    /// Unix-millis of the last successful chunk; drives stall detection.
+    last_success_ms: AtomicI64,
+    /// User pressed pause — chunk futures park (send nothing) until resumed.
+    manual_paused: AtomicBool,
+    /// Auto-paused after a ≥`STALL_THRESHOLD_MS` stall; cleared on the next
+    /// successful chunk (auto-resume).
+    auto_paused: AtomicBool,
+    /// Cancelled (locally via the command, or the session went terminal); the
+    /// job stops promptly.
+    cancelled: AtomicBool,
+    /// True only during the chunk-upload phase — gates the stall monitor's life.
+    active: AtomicBool,
+}
+
+impl JobCtl {
+    fn new(upload_id: String, job_id: String, notif_id: i32) -> Self {
+        Self {
+            upload_id,
+            job_id,
+            notif_id,
+            last_success_ms: AtomicI64::new(now_ms()),
+            manual_paused: AtomicBool::new(false),
+            auto_paused: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            active: AtomicBool::new(true),
+        }
+    }
+
+    fn touch_success(&self) {
+        self.last_success_ms.store(now_ms(), Ordering::Release);
+    }
+
+    fn stall_ms(&self) -> i64 {
+        now_ms() - self.last_success_ms.load(Ordering::Acquire)
+    }
+}
+
+/// Managed Tauri state holding the active upload job's control handle (if any).
+#[derive(Default)]
+pub struct UploadControl(Mutex<Option<Arc<JobCtl>>>);
+
+impl UploadControl {
+    fn set(&self, ctl: Arc<JobCtl>) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = Some(ctl);
+        }
+    }
+    fn clear(&self) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = None;
+        }
+    }
+    /// The active control handle iff it matches `upload_id`.
+    fn get(&self, upload_id: &str) -> Option<Arc<JobCtl>> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().filter(|c| c.upload_id == upload_id).cloned())
+    }
+}
 
 // ── Input / output types ─────────────────────────────────────────────────────
 
@@ -89,6 +173,11 @@ struct ProgressEvent {
     bytes_per_sec: Option<f64>,
     ok: Option<bool>,
     message: Option<String>,
+    /// Pause-state transitions: `Some(true)` = paused, `Some(false)` = resumed,
+    /// `None` = unchanged (a normal progress tick). Drives the UI pause badge.
+    paused: Option<bool>,
+    /// Why it paused: "manual" | "stalled". Only set alongside `paused: true`.
+    pause_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -288,12 +377,9 @@ async fn read_source(app: AppHandle, raw: String) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// SHA-256 of bytes, lowercase hex.
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(data);
-    let out = h.finalize();
+/// Lowercase-hex encode a digest (or any bytes).
+fn hex_digest(out: impl AsRef<[u8]>) -> String {
+    let out = out.as_ref();
     let mut s = String::with_capacity(out.len() * 2);
     for b in out {
         s.push_str(&format!("{b:02x}"));
@@ -301,24 +387,46 @@ fn sha256_hex(data: &[u8]) -> String {
     s
 }
 
-/// Build a file's chunk map (with per-chunk hashes) + whole-file hash.
-fn prepare_file(filename: String, data: &[u8]) -> UploadFileInit {
+/// SHA-256 of bytes, lowercase hex.
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(data);
+    hex_digest(h.finalize())
+}
+
+/// Build a file's chunk map (per-chunk hashes) + whole-file hash in a **single
+/// pass** over `data`, invoking `on_progress(bytes_hashed, total)` after each
+/// chunk. The whole-file digest is folded in incrementally (rather than a second
+/// `sha256_hex(data)` pass), and the callback lets the caller surface per-file
+/// hashing progress — hashing a large album file is otherwise a long, silent
+/// stall with no UI movement.
+fn prepare_file(
+    filename: String,
+    data: &[u8],
+    mut on_progress: impl FnMut(u64, u64),
+) -> UploadFileInit {
+    use sha2::{Digest, Sha256};
     let size = data.len() as u64;
     let total_chunks = size.div_ceil(CHUNK_SIZE).max(1);
     let mut chunks = Vec::with_capacity(total_chunks as usize);
+    let mut whole = Sha256::new();
     for i in 0..total_chunks {
         let start = i * CHUNK_SIZE;
         let end = (start + CHUNK_SIZE).min(size);
+        let slice = &data[start as usize..end as usize];
+        whole.update(slice);
         chunks.push(ChunkInit {
             index: i as u32,
             start,
             end,
-            hash: sha256_hex(&data[start as usize..end as usize]),
+            hash: sha256_hex(slice),
         });
+        on_progress(end, size);
     }
     UploadFileInit {
         filename,
-        hash: sha256_hex(data),
+        hash: hex_digest(whole.finalize()),
         total_size: size,
         chunk_size: CHUNK_SIZE,
         total_chunks: total_chunks as u32,
@@ -326,42 +434,75 @@ fn prepare_file(filename: String, data: &[u8]) -> UploadFileInit {
     }
 }
 
-/// Has the session already reached a terminal `completed` state? Used to tell a
-/// benign post-finalize chunk failure (lost ack + retry race) apart from a real
-/// upload failure, which matters once chunks upload concurrently.
-async fn session_completed(auth: &AuthManager, upload_id: &str) -> bool {
-    auth.get_upload(upload_id.to_string())
-        .await
-        .map(|v| v.state == "completed")
-        .unwrap_or(false)
+/// The server's current state string for a session, or `None` if unreachable.
+async fn session_state(auth: &AuthManager, upload_id: &str) -> Option<String> {
+    auth.get_upload(upload_id.to_string()).await.ok().map(|v| v.state)
 }
 
-/// Send one chunk, retrying a server-side rejection (corruption) a few times.
-async fn put_chunk_with_retry(
+/// Outcome of a resilient chunk send.
+enum ChunkSend {
+    /// Server accepted (+ verified) the chunk.
+    Ok(ChunkAck),
+    /// The job was cancelled (locally, or the session went terminal-cancelled).
+    Cancelled,
+    /// The session is already `completed` (benign post-finalize lost-ack race).
+    AlreadyComplete,
+}
+
+/// Send one chunk, retrying transient failures **indefinitely** with capped
+/// exponential backoff — a network blip then pauses (via the stall monitor)
+/// rather than failing the upload. Behaviours:
+///   * **cancel**: returns `Cancelled` promptly when `ctl.cancelled` is set.
+///   * **manual pause**: parks (sends nothing) while `ctl.manual_paused`.
+///   * **success**: stamps `last_success_ms` (feeds stall detection + resume).
+///   * **terminal session**: every few failures it polls the session; a
+///     `completed`/`cancelled` server state ends the retry loop cleanly.
+async fn send_chunk_resilient(
     auth: &AuthManager,
-    upload_id: &str,
+    ctl: &JobCtl,
     file_index: u32,
     chunk_index: u32,
     bytes: Vec<u8>,
-) -> AppResult<ChunkAck> {
-    let mut attempt = 0u32;
+) -> ChunkSend {
+    let mut backoff = Duration::from_millis(500);
+    let mut fails: u32 = 0;
     loop {
+        if ctl.cancelled.load(Ordering::Acquire) {
+            return ChunkSend::Cancelled;
+        }
+        // Park while manually paused (poll — cheap when idle, ~250 ms to resume).
+        while ctl.manual_paused.load(Ordering::Acquire) && !ctl.cancelled.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        if ctl.cancelled.load(Ordering::Acquire) {
+            return ChunkSend::Cancelled;
+        }
+
         match auth
-            .put_chunk(
-                upload_id.to_string(),
-                file_index,
-                chunk_index,
-                bytes.clone(),
-            )
+            .put_chunk(ctl.upload_id.clone(), file_index, chunk_index, bytes.clone())
             .await
         {
-            Ok(ack) => return Ok(ack),
-            Err(e) => {
-                attempt += 1;
-                if attempt >= CHUNK_RETRIES {
-                    return Err(e);
+            Ok(ack) => {
+                ctl.touch_success();
+                return ChunkSend::Ok(ack);
+            }
+            Err(_e) => {
+                fails += 1;
+                // Don't retry forever against a dead session: poll its state
+                // periodically (cheap relative to the backoff; skipped while the
+                // server is unreachable since the poll just returns None).
+                if fails.is_multiple_of(4) {
+                    match session_state(auth, &ctl.upload_id).await.as_deref() {
+                        Some("completed") => return ChunkSend::AlreadyComplete,
+                        Some("cancelled") => {
+                            ctl.cancelled.store(true, Ordering::Release);
+                            return ChunkSend::Cancelled;
+                        }
+                        _ => {}
+                    }
                 }
-                tokio::time::sleep(Duration::from_millis(150 * attempt as u64)).await;
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(10));
             }
         }
     }
@@ -439,20 +580,49 @@ fn notify_upload_progress(
     } else {
         format!("{bar}  {pct}%  ·  {speed}")
     };
-    notify_progress(app, id, "Uploading music", &body);
+    notify_progress(app, id, "Uploading music", &body, pct as i32);
 }
 
-fn notify_progress(app: &AppHandle, id: i32, title: &str, body: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .id(id)
-        .channel_id(PROGRESS_CHANNEL)
-        .silent()
-        .ongoing()
-        .show();
+/// Post / update the in-progress upload notification.
+///
+/// On **Android** this drives the foreground-service notification ([`UploadService`]):
+/// the service — not this notification — is what actually keeps the upload alive
+/// in the background, so the text/progress is pushed through it. On desktop /
+/// iOS there is no foreground service, so it falls back to a plain `ongoing`
+/// notification. `progress` is `0..=100` (determinate) or `< 0` (indeterminate).
+fn notify_progress(app: &AppHandle, id: i32, title: &str, body: &str, progress: i32) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = id;
+        crate::upload_session::update(app, title, body, progress);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = progress;
+        let _ = app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .id(id)
+            .channel_id(PROGRESS_CHANNEL)
+            .silent()
+            .ongoing()
+            .show();
+    }
+}
+
+/// RAII guard that stops the Android upload foreground service (releasing its
+/// wake / WiFi locks + persistent notification) when the job ends — on **any**
+/// exit path, including an early `return` or a panic unwind. No-op on desktop.
+struct UploadForegroundGuard {
+    app: AppHandle,
+}
+
+impl Drop for UploadForegroundGuard {
+    fn drop(&mut self) {
+        crate::upload_session::stop(&self.app);
+    }
 }
 
 fn notify_complete(app: &AppHandle, progress_id: i32, title: &str, body: &str) {
@@ -485,6 +655,16 @@ async fn run_job(
     items: Vec<UploadItem>,
 ) {
     ensure_channels(&app);
+
+    // Android: bring up the upload foreground service **first thing**, while the
+    // app is still foreground (the user just tapped upload — Android 12+ forbids
+    // starting a foreground service from the background). It keeps the process +
+    // network alive (persistent notification + wake/WiFi locks) so the upload
+    // survives the app being backgrounded or the screen locking. The guard stops
+    // it on every exit path below. No-op on desktop.
+    crate::upload_session::start(&app, "Uploading music", "Preparing files…", -1);
+    let _fg = UploadForegroundGuard { app: app.clone() };
+
     let started = std::time::Instant::now();
     let total_items = items.len() as u64;
 
@@ -498,16 +678,30 @@ async fn run_job(
             ..Default::default()
         },
     );
-    notify_progress(&app, notif_id, "Uploading music", "Preparing files…");
+    notify_progress(&app, notif_id, "Uploading music", "Preparing files…", -1);
 
     let mut files_init: Vec<UploadFileInit> = Vec::new();
     let mut datas: Vec<(String, Vec<u8>)> = Vec::new(); // (hint, bytes), parallel to files_init
     let mut skipped: u64 = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    for item in &items {
+    for (idx, item) in items.iter().enumerate() {
         let raw = item.path.clone();
         let hint = name_hint(&raw);
+        let fileno = idx as u64 + 1;
+
+        // Stage: reading the source bytes (native — slow for large files /
+        // Android `content://` URIs). The read itself runs on a blocking thread,
+        // so this status reaches the UI before the read starts.
+        prepare_status(
+            &app,
+            &job_id,
+            notif_id,
+            idx as u64,
+            total_items,
+            &hint,
+            &format!("Reading file {fileno}/{total_items}"),
+        );
         let data = match read_source(app.clone(), raw.clone()).await {
             Ok(d) => d,
             Err(e) => {
@@ -519,8 +713,40 @@ async fn run_job(
             skipped += 1;
             continue;
         }
+
+        // Stage: hashing + chunking (single pass over the bytes). Post the
+        // per-file stage to both the UI and the notification, then stream
+        // throttled intra-file percent to the UI so a large file shows movement
+        // instead of stalling silently.
+        prepare_status(
+            &app,
+            &job_id,
+            notif_id,
+            idx as u64,
+            total_items,
+            &hint,
+            &format!("Hashing file {fileno}/{total_items}"),
+        );
         let filename = determine_filename(Some(&hint), &std::path::PathBuf::from(&raw), &data);
-        files_init.push(prepare_file(filename, &data));
+        let app2 = app.clone();
+        let job2 = job_id.clone();
+        let hint2 = hint.clone();
+        let mut last = std::time::Instant::now();
+        let file_init = prepare_file(filename, &data, |done, total| {
+            if last.elapsed() >= Duration::from_millis(150) {
+                let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100);
+                emit_prepare(
+                    &app2,
+                    &job2,
+                    idx as u64,
+                    total_items,
+                    &hint2,
+                    &format!("Hashing file {fileno}/{total_items} · {pct}%"),
+                );
+                last = std::time::Instant::now();
+            }
+        });
+        files_init.push(file_init);
         datas.push((hint, data));
     }
 
@@ -537,6 +763,11 @@ async fn run_job(
 
     let total_files = files_init.len() as u64;
     let session_total: u64 = files_init.iter().map(|f| f.total_size).sum();
+
+    // Bridge the gap between hashing the last file and the first chunk landing
+    // (the session-declare round-trip), so the UI doesn't freeze on the last
+    // "Hashing …" line.
+    prepare_status(&app, &job_id, notif_id, total_files, total_files, "", "Starting upload…");
 
     // Phase 2: declare the session.
     let view = match auth
@@ -566,11 +797,26 @@ async fn run_job(
     };
     let upload_id = view.id.clone();
 
-    // Phase 3: upload missing chunks (up to CHUNK_CONCURRENCY in flight).
+    // Register pause/cancel control for this session + start the stall monitor.
+    // One upload runs at a time, so a single control slot suffices. The guard
+    // clears the slot + stops the monitor on every exit path below.
+    let ctl = Arc::new(JobCtl::new(upload_id.clone(), job_id.clone(), notif_id));
+    app.state::<UploadControl>().set(ctl.clone());
+    let _ctl_guard = JobCtlGuard {
+        app: app.clone(),
+        ctl: ctl.clone(),
+    };
+    spawn_stall_monitor(app.clone(), auth.clone(), ctl.clone());
+
+    // Phase 3: upload missing chunks (up to CHUNK_CONCURRENCY in flight). A chunk
+    // send now retries transient failures **indefinitely** (a ≥60s stall
+    // auto-pauses instead of failing), parks while manually paused, and only
+    // stops on cancel or a terminal session state.
     let mut sent_total: u64 = 0; // bytes transmitted this run (drives speed)
     let mut session_received: u64 = 0;
     let mut last_notif = std::time::Instant::now();
     let mut complete = false;
+    let mut cancelled = false;
 
     'outer: for (fi, (hint, data)) in datas.into_iter().enumerate() {
         let file_init = &files_init[fi];
@@ -600,9 +846,8 @@ async fn run_job(
         // (`buffer_unordered`); the acks are consumed sequentially in this loop,
         // so the progress counters stay single-writer and need no locking. Each
         // chunk future owns its inputs (so the spawned job stays `Send + 'static`):
-        // the file bytes are shared cheaply via an `Arc` and a chunk-sized copy
-        // is sliced off inside the future, keeping at most `CHUNK_CONCURRENCY`
-        // chunk buffers live at once.
+        // the file bytes are shared cheaply via an `Arc`, a chunk-sized copy is
+        // sliced off inside the future, and the per-job `JobCtl` is `Arc`-shared.
         let data = std::sync::Arc::new(data);
         let missing: Vec<(u32, u64, u64)> = file_init
             .chunks
@@ -613,13 +858,12 @@ async fn run_job(
         let mut chunks =
             futures_util::stream::iter(missing.into_iter().map(|(index, start, end)| {
                 let auth = auth.clone();
-                let upload_id = upload_id.clone();
+                let ctl = ctl.clone();
                 let data = data.clone();
                 let len = end - start;
                 async move {
                     let bytes = data[start as usize..end as usize].to_vec();
-                    let res =
-                        put_chunk_with_retry(&auth, &upload_id, fi as u32, index, bytes).await;
+                    let res = send_chunk_resilient(&auth, &ctl, fi as u32, index, bytes).await;
                     (len, res)
                 }
             }))
@@ -627,7 +871,12 @@ async fn run_job(
 
         while let Some((len, res)) = chunks.next().await {
             match res {
-                Ok(ack) => {
+                ChunkSend::Ok(ack) => {
+                    // A chunk landing after an auto-pause resumes the upload.
+                    if ctl.auto_paused.swap(false, Ordering::AcqRel) {
+                        let _ = auth.resume_upload(upload_id.clone()).await;
+                        emit_resumed(&app, &job_id, &upload_id);
+                    }
                     sent_total += len;
                     file_received += len;
                     session_received += len;
@@ -666,42 +915,47 @@ async fn run_job(
                         break;
                     }
                 }
-                Err(e) => {
-                    // A chunk can fail *after* the session already finalized —
-                    // e.g. a lost ack on a chunk the server did receive, then a
-                    // retry races the now-Completed session (more likely with
-                    // chunks in flight). Only fatal when the session isn't done.
-                    if complete || session_completed(&auth, &upload_id).await {
-                        complete = true;
-                        break;
-                    }
-                    // Unrecoverable: cancel so the one-active-upload slot frees up.
-                    errors.push(format!("{hint}: {e}"));
-                    let _ = auth.cancel_upload(upload_id.clone()).await;
-                    emit_done(
-                        &app,
-                        &job_id,
-                        Some(&upload_id),
-                        "cancelled",
-                        total_files,
-                        0,
-                        total_files,
-                        skipped,
-                        errors,
-                    );
-                    notify_complete(&app, notif_id, "Upload failed", &e.to_string());
-                    return;
+                ChunkSend::AlreadyComplete => {
+                    // Benign post-finalize lost-ack race: the server already
+                    // received every chunk (that's why it finalized).
+                    complete = true;
+                    break;
+                }
+                ChunkSend::Cancelled => {
+                    cancelled = true;
+                    break;
                 }
             }
         }
-        // Drop the stream to cancel any still-in-flight chunk futures. When
-        // `complete`, the server already received every chunk (that's why it
-        // finalized), so abandoning their unread acks is safe.
+        // Drop the stream to cancel any still-in-flight chunk futures.
         drop(chunks);
-        if complete {
+        if complete || cancelled {
             break 'outer;
         }
     }
+
+    // A cancel (local or remote) ends the job here — there's no report to fetch.
+    // The server is already cancelled (by the command or remotely), so we don't
+    // re-cancel; just announce.
+    if cancelled {
+        emit_done(
+            &app,
+            &job_id,
+            Some(&upload_id),
+            "cancelled",
+            total_files,
+            0,
+            total_files,
+            skipped,
+            errors,
+        );
+        notify_complete(&app, notif_id, "Upload cancelled", "The upload was cancelled.");
+        return;
+    }
+
+    // Chunk phase over — stop the stall monitor so the (quick) report fetch
+    // below can't trip an auto-pause. The guard also clears it on return.
+    ctl.active.store(false, Ordering::Release);
 
     // Phase 4: fetch the final report + announce.
     emit(
@@ -717,6 +971,7 @@ async fn run_job(
             ..Default::default()
         },
     );
+    notify_progress(&app, notif_id, "Uploading music", "Finalizing…", -1);
 
     let report_view = auth.get_upload(upload_id.clone()).await.ok();
     let (tracks, files_failed, state) = match &report_view {
@@ -804,6 +1059,129 @@ fn emit(app: &AppHandle, ev: ProgressEvent) {
     let _ = app.emit("upload-progress", ev);
 }
 
+/// Emit a pause-state transition (paused / resumed) for the UI badge. These
+/// carry only the pause flag — the store overlays them onto the live progress
+/// without clobbering the byte counters.
+fn emit_paused(app: &AppHandle, job_id: &str, upload_id: &str, reason: &str) {
+    emit(
+        app,
+        ProgressEvent {
+            job_id: job_id.to_string(),
+            upload_id: Some(upload_id.to_string()),
+            phase: "uploading".into(),
+            paused: Some(true),
+            pause_reason: Some(reason.to_string()),
+            ..Default::default()
+        },
+    );
+}
+
+fn emit_resumed(app: &AppHandle, job_id: &str, upload_id: &str) {
+    emit(
+        app,
+        ProgressEvent {
+            job_id: job_id.to_string(),
+            upload_id: Some(upload_id.to_string()),
+            phase: "uploading".into(),
+            paused: Some(false),
+            ..Default::default()
+        },
+    );
+}
+
+/// Watch the active job for a chunk stall: if no chunk has succeeded for
+/// `STALL_THRESHOLD_MS` while running and not already paused, auto-pause it
+/// (best-effort server pause + UI badge + notification). Auto-resume is handled
+/// on the next successful chunk (in the driving loop). Exits when the job's
+/// chunk phase ends or it's cancelled.
+fn spawn_stall_monitor(app: AppHandle, auth: Arc<AuthManager>, ctl: Arc<JobCtl>) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(STALL_CHECK_SECS)).await;
+            if !ctl.active.load(Ordering::Acquire) || ctl.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            // Already paused (manually or auto) → nothing to do.
+            if ctl.manual_paused.load(Ordering::Acquire) || ctl.auto_paused.load(Ordering::Acquire)
+            {
+                continue;
+            }
+            if ctl.stall_ms() >= STALL_THRESHOLD_MS
+                && ctl
+                    .auto_paused
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            {
+                tracing::warn!(
+                    upload_id = %ctl.upload_id,
+                    "upload stalled ≥{}s — auto-pausing",
+                    STALL_THRESHOLD_MS / 1000
+                );
+                // Best-effort: the server is often *why* we stalled (unreachable),
+                // so this may fail — the local paused state still surfaces.
+                let _ = auth.pause_upload(ctl.upload_id.clone()).await;
+                emit_paused(&app, &ctl.job_id, &ctl.upload_id, "stalled");
+                notify_progress(
+                    &app,
+                    ctl.notif_id,
+                    "Upload paused",
+                    "Stalled — waiting for a connection…",
+                    -1,
+                );
+            }
+        }
+    });
+}
+
+/// Clears the active [`UploadControl`] slot + stops the stall monitor when the
+/// chunk phase ends (any exit path, including a panic unwind).
+struct JobCtlGuard {
+    app: AppHandle,
+    ctl: Arc<JobCtl>,
+}
+
+impl Drop for JobCtlGuard {
+    fn drop(&mut self) {
+        self.ctl.active.store(false, Ordering::Release);
+        self.app.state::<UploadControl>().clear();
+    }
+}
+
+/// Emit a preparing-phase status to the **frontend only** (file `current` of
+/// `total`, with a `message` like "Hashing file 2/10 · 40%"). Used for the
+/// throttled intra-file hashing percent — too frequent for the notification.
+fn emit_prepare(app: &AppHandle, job_id: &str, current: u64, total: u64, file: &str, message: &str) {
+    emit(
+        app,
+        ProgressEvent {
+            job_id: job_id.to_string(),
+            phase: "scanning".into(),
+            current,
+            total,
+            file: Some(file.to_string()),
+            message: Some(message.to_string()),
+            ..Default::default()
+        },
+    );
+}
+
+/// Emit a preparing-phase status to **both** the frontend and the OS /
+/// foreground notification. Used for per-file stage transitions ("Reading file
+/// 2/10", "Hashing file 2/10") so the notification visibly advances per file.
+#[allow(clippy::too_many_arguments)]
+fn prepare_status(
+    app: &AppHandle,
+    job_id: &str,
+    notif_id: i32,
+    current: u64,
+    total: u64,
+    file: &str,
+    message: &str,
+) {
+    emit_prepare(app, job_id, current, total, file, message);
+    notify_progress(app, notif_id, "Uploading music", message, -1);
+}
+
 fn next_job() -> (String, i32) {
     let n = JOB_SEQ.fetch_add(1, Ordering::SeqCst);
     (format!("upload-{n}"), (n & 0x7fff_ffff) as i32)
@@ -868,7 +1246,7 @@ pub async fn upload_folder(
                 ..Default::default()
             },
         );
-        notify_progress(&app, notif_id, "Uploading music", "Scanning folder…");
+        notify_progress(&app, notif_id, "Uploading music", "Scanning folder…", -1);
 
         let items: Vec<UploadItem> = walkdir::WalkDir::new(&root)
             .follow_links(false)
@@ -909,14 +1287,62 @@ pub async fn uploads_get(
 }
 
 /// Cancel an in-flight upload (owner or admin). Staged chunks are cleaned off
-/// the server's disk.
+/// the server's disk. Also flips the local job's cancel flag so its chunk loop
+/// stops promptly (rather than waiting to notice the server rejection).
 #[tauri::command]
 pub async fn uploads_cancel(
     id: String,
     state: tauri::State<'_, crate::AppStateHandle>,
+    app: AppHandle,
 ) -> AppResult<UploadView> {
     let auth = resolve_auth(&state).await?;
+    if let Some(ctl) = app.state::<UploadControl>().get(&id) {
+        ctl.cancelled.store(true, Ordering::Release);
+    }
     auth.cancel_upload(id).await
+}
+
+/// Pause an in-flight upload (manual). Flips the local job flag so chunk sends
+/// park immediately, reflects the pause in the UI + notification, and tells the
+/// server (state → paused). Owner/admin gated server-side.
+#[tauri::command]
+pub async fn uploads_pause(
+    id: String,
+    state: tauri::State<'_, crate::AppStateHandle>,
+    app: AppHandle,
+) -> AppResult<UploadView> {
+    let auth = resolve_auth(&state).await?;
+    if let Some(ctl) = app.state::<UploadControl>().get(&id) {
+        ctl.manual_paused.store(true, Ordering::Release);
+        emit_paused(&app, &ctl.job_id, &ctl.upload_id, "manual");
+        notify_progress(
+            &app,
+            ctl.notif_id,
+            "Upload paused",
+            "Paused — tap the app to resume.",
+            -1,
+        );
+    }
+    auth.pause_upload(id).await
+}
+
+/// Resume a paused upload (manual). Clears the local pause flag (parked chunk
+/// sends wake within ~250 ms), resets the stall clock so it doesn't immediately
+/// re-pause, and tells the server (state → uploading).
+#[tauri::command]
+pub async fn uploads_resume(
+    id: String,
+    state: tauri::State<'_, crate::AppStateHandle>,
+    app: AppHandle,
+) -> AppResult<UploadView> {
+    let auth = resolve_auth(&state).await?;
+    if let Some(ctl) = app.state::<UploadControl>().get(&id) {
+        ctl.manual_paused.store(false, Ordering::Release);
+        ctl.auto_paused.store(false, Ordering::Release);
+        ctl.touch_success(); // restart the stall timer from "now"
+        emit_resumed(&app, &ctl.job_id, &ctl.upload_id);
+    }
+    auth.resume_upload(id).await
 }
 
 /// Subscribe to the live `uploads` channel (gRPC stream primary, WS fallback).
@@ -978,9 +1404,36 @@ mod tests {
     }
 
     #[test]
+    fn upload_control_matches_active_job_by_id() {
+        let control = UploadControl::default();
+        let ctl = Arc::new(JobCtl::new("up-1".into(), "job-1".into(), 7));
+        control.set(ctl.clone());
+        assert!(control.get("up-1").is_some(), "matching id resolves the job");
+        assert!(control.get("other").is_none(), "a different id does not match");
+        control.clear();
+        assert!(control.get("up-1").is_none(), "cleared slot resolves nothing");
+    }
+
+    #[test]
+    fn jobctl_flags_and_stall_reset() {
+        let ctl = JobCtl::new("u".into(), "j".into(), 1);
+        assert!(!ctl.manual_paused.load(Ordering::Acquire));
+        ctl.manual_paused.store(true, Ordering::Release);
+        assert!(ctl.manual_paused.load(Ordering::Acquire));
+        // touch_success keeps the stall window near zero (just stamped "now").
+        ctl.touch_success();
+        assert!(ctl.stall_ms() < 1_000);
+    }
+
+    #[test]
     fn prepare_file_builds_contiguous_chunk_map() {
         let data = vec![7u8; (CHUNK_SIZE + 100) as usize];
-        let f = prepare_file("x.flac".into(), &data);
+        // The single-pass hash reports progress per chunk; assert it lands on the
+        // exact byte total at the end (and is monotonic).
+        let mut ticks: Vec<(u64, u64)> = Vec::new();
+        let f = prepare_file("x.flac".into(), &data, |done, total| ticks.push((done, total)));
+        assert_eq!(ticks.len(), 2);
+        assert_eq!(ticks.last().copied(), Some((CHUNK_SIZE + 100, CHUNK_SIZE + 100)));
         assert_eq!(f.total_chunks, 2);
         assert_eq!(f.total_size, CHUNK_SIZE + 100);
         assert_eq!(f.chunks[0].start, 0);

@@ -795,6 +795,38 @@ impl RestClient {
             .map_err(rest_err("cancel_upload decode"))
     }
 
+    pub async fn pause_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let url = format!("{}/uploads/{id}/pause", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("pause_upload"))?;
+        check_status(resp)
+            .await?
+            .json::<UploadView>()
+            .await
+            .map_err(rest_err("pause_upload decode"))
+    }
+
+    pub async fn resume_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let url = format!("{}/uploads/{id}/resume", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("resume_upload"))?;
+        check_status(resp)
+            .await?
+            .json::<UploadView>()
+            .await
+            .map_err(rest_err("resume_upload decode"))
+    }
+
     /// Open the live `uploads` WebSocket (REST-side fallback for the gRPC
     /// stream). Spawns a reader that forwards permitted events to `tx` until
     /// the socket closes; the auth credential rides the handshake header.

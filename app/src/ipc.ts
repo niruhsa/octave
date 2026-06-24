@@ -720,6 +720,7 @@ export const cacheGetSyncState = (entityType: SyncEntityType, entityId: string) 
 export type UploadLifecycle =
   | "initialized"
   | "uploading"
+  | "paused"
   | "completed"
   | "cancelled";
 
@@ -802,6 +803,14 @@ export const uploadsGet = (id: string) =>
 export const uploadsCancel = (id: string) =>
   invoke<UploadReport>("uploads_cancel", { id });
 
+/** Pause an in-flight upload (owner/admin); the session stays staged + resumable. */
+export const uploadsPause = (id: string) =>
+  invoke<UploadReport>("uploads_pause", { id });
+
+/** Resume a paused upload (owner/admin); a chunk landing also auto-resumes. */
+export const uploadsResume = (id: string) =>
+  invoke<UploadReport>("uploads_resume", { id });
+
 /** Open the live `uploads` channel; events arrive via `onUploadEvent`. */
 export const uploadsSubscribe = () => invoke<void>("uploads_subscribe");
 
@@ -809,7 +818,13 @@ export const uploadsSubscribe = () => invoke<void>("uploads_subscribe");
 
 /** A live event broadcast over the `uploads` channel (gRPC stream / WS). */
 export type UploadLiveEvent = {
-  kind: "initialized" | "progress" | "completed" | "cancelled";
+  kind:
+    | "initialized"
+    | "progress"
+    | "paused"
+    | "resumed"
+    | "completed"
+    | "cancelled";
   upload_id: string;
   owner_id: string | null;
   state: UploadLifecycle;
@@ -838,6 +853,10 @@ export type UploadProgressEvent = {
   bytesPerSec: number | null;
   ok: boolean | null;
   message: string | null;
+  /** Pause transition: `true` = paused, `false` = resumed, `null` = unchanged. */
+  paused: boolean | null;
+  /** Why it paused: "manual" | "stalled" (set alongside `paused: true`). */
+  pauseReason: string | null;
 };
 
 export type UploadCompleteEvent = {

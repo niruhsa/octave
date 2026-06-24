@@ -21,6 +21,7 @@ pub mod playlists;
 pub mod assets;
 pub mod sync;
 pub mod transport;
+pub mod upload_session;
 
 use std::sync::Arc;
 
@@ -65,6 +66,11 @@ pub fn run() {
         // Binds the Kotlin `MediaSessionPlugin`; no-op on desktop. See
         // `media_session` for why a bare WebView needs this native bridge.
         .plugin(media_session::init())
+        // Native Android upload foreground service. Binds the Kotlin
+        // `UploadServicePlugin`; no-op on desktop. Keeps the upload process +
+        // network alive (persistent notification + wake/WiFi locks) while the
+        // app is backgrounded / screen-locked — see `upload_session`.
+        .plugin(upload_session::init())
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
         // (Playback no longer uses a custom protocol — see the loopback HTTP
@@ -84,6 +90,9 @@ pub fn run() {
                 pool,
                 auth: RwLock::new(None),
             });
+
+            // Pause/cancel control for the active upload job (one at a time).
+            app.manage(commands::upload_commands::UploadControl::default());
 
             // Phase 4 — Playback: start the in-app loopback HTTP server the
             // webview's `<audio>` element streams media from (see
@@ -223,6 +232,8 @@ pub fn run() {
             commands::upload_commands::uploads_list,
             commands::upload_commands::uploads_get,
             commands::upload_commands::uploads_cancel,
+            commands::upload_commands::uploads_pause,
+            commands::upload_commands::uploads_resume,
             commands::upload_commands::uploads_subscribe,
         ])
         .run(tauri::generate_context!())

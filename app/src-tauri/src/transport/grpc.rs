@@ -760,6 +760,34 @@ impl GrpcClient {
         Ok(view_from_pb(resp))
     }
 
+    pub async fn pause_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let mut r = Request::new(pb::PauseUploadRequest {
+            upload_id: id.to_string(),
+        });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .pause_upload(r)
+            .await
+            .map_err(map_uploads_err("pause_upload"))?
+            .into_inner();
+        Ok(view_from_pb(resp))
+    }
+
+    pub async fn resume_upload(&self, cred: &Credential, id: &str) -> AppResult<UploadView> {
+        let mut r = Request::new(pb::ResumeUploadRequest {
+            upload_id: id.to_string(),
+        });
+        attach_credential(&mut r, cred)?;
+        let resp = self
+            .uploads()
+            .resume_upload(r)
+            .await
+            .map_err(map_uploads_err("resume_upload"))?
+            .into_inner();
+        Ok(view_from_pb(resp))
+    }
+
     /// Open the live `uploads` stream (gRPC server-streaming). Yields
     /// `UploadEvent`s the caller is permitted to see; ends on transport error.
     pub async fn stream_uploads(

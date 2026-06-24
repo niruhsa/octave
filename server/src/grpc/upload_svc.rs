@@ -260,6 +260,28 @@ impl pb::upload_service_server::UploadService for UploadServer {
         Ok(Response::new(view_to_pb(view)))
     }
 
+    async fn pause_upload(
+        &self,
+        req: Request<pb::PauseUploadRequest>,
+    ) -> Result<Response<pb::UploadView>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let id = parse_uuid(&req.into_inner().upload_id)?;
+        let view = svc.pause(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(view_to_pb(view)))
+    }
+
+    async fn resume_upload(
+        &self,
+        req: Request<pb::ResumeUploadRequest>,
+    ) -> Result<Response<pb::UploadView>, Status> {
+        let caller = self.interceptor.resolve(&req).await?;
+        let svc = self.uploads_svc()?;
+        let id = parse_uuid(&req.into_inner().upload_id)?;
+        let view = svc.resume(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(view_to_pb(view)))
+    }
+
     type StreamUploadsStream = Pin<Box<dyn Stream<Item = Result<pb::UploadEvent, Status>> + Send>>;
 
     async fn stream_uploads(
@@ -335,6 +357,7 @@ fn state_str(s: UploadState) -> String {
     match s {
         UploadState::Initialized => "initialized",
         UploadState::Uploading => "uploading",
+        UploadState::Paused => "paused",
         UploadState::Completed => "completed",
         UploadState::Cancelled => "cancelled",
     }

@@ -13,6 +13,8 @@ import {
   uploadsCancel,
   uploadsGet,
   uploadsList,
+  uploadsPause,
+  uploadsResume,
   uploadsSubscribe,
   type MergedTrack,
   type UploadLifecycle,
@@ -50,7 +52,12 @@ function reportTrackToMerged(t: ReportTrack): MergedTrack {
   };
 }
 
-const STATES: (UploadLifecycle | "all")[] = ["all", "uploading", "initialized", "completed", "cancelled"];
+const STATES: (UploadLifecycle | "all")[] = ["all", "uploading", "paused", "initialized", "completed", "cancelled"];
+
+/** States in which an upload is still in flight (cancellable / pausable). */
+function isActiveState(state: string): boolean {
+  return state === "uploading" || state === "initialized" || state === "paused";
+}
 
 // One process-wide live subscription feeding `upload-event`.
 let subscribed = false;
@@ -69,6 +76,8 @@ function statePill(state: string): string {
       return `${base} bg-emerald-500/15 text-emerald-300`;
     case "uploading":
       return `${base} bg-oct-accent/15 text-oct-accent`;
+    case "paused":
+      return `${base} bg-sky-500/15 text-sky-300`;
     case "initialized":
       return `${base} bg-amber-500/15 text-amber-300`;
     case "cancelled":
@@ -147,6 +156,16 @@ function UploadList({ onOpen }: { onOpen: (id: string) => void }) {
     }
   }
 
+  async function togglePauseRow(uid: string, state: string) {
+    try {
+      if (state === "paused") await uploadsResume(uid);
+      else await uploadsPause(uid);
+      qc.invalidateQueries({ queryKey: ["uploads"] });
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+
   const rows = q.data ?? [];
 
   return (
@@ -202,7 +221,8 @@ function UploadList({ onOpen }: { onOpen: (id: string) => void }) {
             <p className="p-4 text-sm text-oct-subtle">No uploads.</p>
           ) : (
             rows.map((u: UploadSummary) => {
-              const active = u.state === "uploading" || u.state === "initialized";
+              const active = isActiveState(u.state);
+              const canPause = u.state === "uploading" || u.state === "paused";
               return (
                 <div key={u.id} className="group flex items-center gap-3 px-3 py-2.5 first:rounded-t-xl last:rounded-b-xl hover:bg-oct-elevated/50">
                   <button onClick={() => onOpen(u.id)} className="min-w-0 flex-1 text-left">
@@ -217,6 +237,14 @@ function UploadList({ onOpen }: { onOpen: (id: string) => void }) {
                       {u.error ? ` · ${u.error}` : ""}
                     </span>
                   </button>
+                  {canPause && (
+                    <button
+                      onClick={() => void togglePauseRow(u.id, u.state)}
+                      className="text-oct-dim opacity-0 transition-opacity hover:text-oct-accent group-hover:opacity-100 font-mono text-[11px]"
+                    >
+                      {u.state === "paused" ? "Resume" : "Pause"}
+                    </button>
+                  )}
                   {active && (
                     <button
                       onClick={() => void cancel(u.id)}
@@ -265,7 +293,7 @@ function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
     queryFn: () => uploadsGet(id),
     refetchInterval: (query) => {
       const s = query.state.data?.state;
-      return s === "uploading" || s === "initialized" ? 1500 : false;
+      return s && isActiveState(s) ? 1500 : false;
     },
   });
 
@@ -287,8 +315,19 @@ function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
     }
   }
 
+  async function togglePause(state: string) {
+    try {
+      if (state === "paused") await uploadsResume(id);
+      else await uploadsPause(id);
+      qc.invalidateQueries({ queryKey: ["uploads", "detail", id] });
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+
   const u: UploadReport | undefined = q.data;
-  const active = u?.state === "uploading" || u?.state === "initialized";
+  const active = isActiveState(u?.state ?? "");
+  const canPause = u?.state === "uploading" || u?.state === "paused";
   const pct = u && u.total_bytes > 0 ? Math.round(Math.min(u.bytes_received / u.total_bytes, 1) * 100) : 0;
   const report = (u?.report ?? null) as unknown as
     | { files?: ReportFile[]; tracks_ingested?: number; files_failed?: number }
@@ -300,11 +339,21 @@ function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
         <button onClick={onBack} className={btnGhostSm}>
           ← Back
         </button>
-        {active && (
-          <button onClick={() => void cancel()} className="font-mono text-[11px] text-oct-danger hover:underline">
-            Cancel upload
-          </button>
-        )}
+        <div className="flex items-center gap-4">
+          {canPause && u && (
+            <button
+              onClick={() => void togglePause(u.state)}
+              className="font-mono text-[11px] text-oct-accent hover:underline"
+            >
+              {u.state === "paused" ? "Resume upload" : "Pause upload"}
+            </button>
+          )}
+          {active && (
+            <button onClick={() => void cancel()} className="font-mono text-[11px] text-oct-danger hover:underline">
+              Cancel upload
+            </button>
+          )}
+        </div>
       </header>
 
       {q.isLoading && <SkeletonList rows={4} />}
@@ -320,7 +369,10 @@ function UploadDetail({ id, onBack }: { id: string; onBack: () => void }) {
               </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-oct-line">
-              <div className="h-full rounded-full bg-oct-accent transition-all duration-300" style={{ width: `${pct}%` }} />
+              <div
+                className={`h-full rounded-full bg-oct-accent transition-all duration-300 ${u.state === "paused" ? "opacity-50" : ""}`}
+                style={{ width: `${pct}%` }}
+              />
             </div>
             <p className="mt-2 font-mono text-[10.5px] text-oct-faint">
               created {fmtDate(u.created_at)} · updated {fmtDate(u.updated_at)}

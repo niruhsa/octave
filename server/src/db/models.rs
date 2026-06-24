@@ -208,24 +208,32 @@ pub struct NewSession {
 
 /// Lifecycle of an upload session. Stored as TEXT (portable to SQLite).
 ///
-/// `initialized` → `uploading` → `completed`, or `cancelled` from either
-/// active state. Per-chunk hash failures don't advance state (the chunk POST
-/// just fails); whole-file/ingest errors are captured in the completion report.
+/// `initialized` → `uploading` → `completed`, or `cancelled` from any active
+/// state. `uploading` ⇄ `paused` (manual pause/resume, or an auto-pause when a
+/// client's chunk uploads stall/fail for ≥1 min; a chunk landing resumes it).
+/// Per-chunk hash failures don't advance state (the chunk POST just fails);
+/// whole-file/ingest errors are captured in the completion report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum UploadState {
     Initialized,
     Uploading,
+    Paused,
     Completed,
     Cancelled,
 }
 
 impl UploadState {
-    /// The two states in which an upload is still in flight (counts toward the
-    /// one-active-upload-per-user limit; cancellable).
+    /// The states in which an upload is still in flight (counts toward the
+    /// one-active-upload-per-user limit; cancellable; accepts chunks). `paused`
+    /// is active — it's resumable and a chunk landing transitions it back to
+    /// `uploading`.
     pub fn is_active(self) -> bool {
-        matches!(self, UploadState::Initialized | UploadState::Uploading)
+        matches!(
+            self,
+            UploadState::Initialized | UploadState::Uploading | UploadState::Paused
+        )
     }
 
     /// Parse a wire/query string into a state, for `?state=` filters.
@@ -233,6 +241,7 @@ impl UploadState {
         match s.to_ascii_lowercase().as_str() {
             "initialized" => Some(UploadState::Initialized),
             "uploading" => Some(UploadState::Uploading),
+            "paused" => Some(UploadState::Paused),
             "completed" => Some(UploadState::Completed),
             "cancelled" => Some(UploadState::Cancelled),
             _ => None,

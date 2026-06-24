@@ -48,6 +48,8 @@ pub fn router() -> Router<RestState> {
         .route("/uploads", get(list))
         .route("/uploads/:id", get(get_one))
         .route("/uploads/:id/cancel", post(cancel))
+        .route("/uploads/:id/pause", post(pause))
+        .route("/uploads/:id/resume", post(resume))
         .route_layer(DefaultBodyLimit::max(MAX_CHUNK_BYTES))
 }
 
@@ -150,6 +152,24 @@ async fn cancel(
     AxPath(id): AxPath<String>,
 ) -> Result<Json<UploadView>, ApiError> {
     let view = svc(&state)?.cancel(&caller, parse_uuid(&id)?).await?;
+    Ok(Json(view))
+}
+
+async fn pause(
+    State(state): State<RestState>,
+    Extension(caller): Extension<Identity>,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<UploadView>, ApiError> {
+    let view = svc(&state)?.pause(&caller, parse_uuid(&id)?).await?;
+    Ok(Json(view))
+}
+
+async fn resume(
+    State(state): State<RestState>,
+    Extension(caller): Extension<Identity>,
+    AxPath(id): AxPath<String>,
+) -> Result<Json<UploadView>, ApiError> {
+    let view = svc(&state)?.resume(&caller, parse_uuid(&id)?).await?;
     Ok(Json(view))
 }
 

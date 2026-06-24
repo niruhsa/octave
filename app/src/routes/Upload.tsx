@@ -9,7 +9,14 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
-import { uploadFiles, uploadFolder, uploadsCancel, type UploadItem } from "../ipc";
+import {
+  uploadFiles,
+  uploadFolder,
+  uploadsCancel,
+  uploadsPause,
+  uploadsResume,
+  type UploadItem,
+} from "../ipc";
 import { useAppStore } from "../store";
 import { useUploadStore, useUploadBusy } from "../uploads/useUploads";
 import { formatError } from "../lib/error";
@@ -42,12 +49,15 @@ export default function Upload() {
   const progress = useUploadStore((s) => s.progress);
   const lastComplete = useUploadStore((s) => s.lastComplete);
   const activeUploadId = useUploadStore((s) => s.activeUploadId);
+  const paused = useUploadStore((s) => s.paused);
+  const pauseReason = useUploadStore((s) => s.pauseReason);
   const dismissComplete = useUploadStore((s) => s.dismissComplete);
   const setStarting = useUploadStore((s) => s.setStarting);
   const busy = useUploadBusy();
 
   const [err, setErr] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [pausing, setPausing] = useState(false);
 
   async function startJob(starter: () => Promise<string | null>) {
     setErr(null);
@@ -87,11 +97,36 @@ export default function Upload() {
     try {
       await uploadsCancel(activeUploadId);
       // Optimistically clear; the job's own completion event will confirm.
-      useUploadStore.setState({ progress: null, activeUploadId: null, starting: false });
+      useUploadStore.setState({
+        progress: null,
+        activeUploadId: null,
+        starting: false,
+        paused: false,
+        pauseReason: null,
+      });
     } catch (e) {
       setErr(formatError(e));
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function togglePause() {
+    if (!activeUploadId) return;
+    setPausing(true);
+    setErr(null);
+    try {
+      if (paused) {
+        await uploadsResume(activeUploadId);
+        useUploadStore.setState({ paused: false, pauseReason: null });
+      } else {
+        await uploadsPause(activeUploadId);
+        useUploadStore.setState({ paused: true, pauseReason: "manual" });
+      }
+    } catch (e) {
+      setErr(formatError(e));
+    } finally {
+      setPausing(false);
     }
   }
 
@@ -158,35 +193,58 @@ export default function Upload() {
           <div className={`${card} mb-4 p-4`}>
             <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-oct-subtle">
               <span className="truncate">
-                {progress.phase === "finalizing"
-                  ? "Finalizing…"
-                  : scanning
-                    ? "Preparing…"
-                    : `Uploading ${fileLabel}`}
-                {progress.total > 1 ? `  ·  ${Math.min(progress.current + 1, progress.total)}/${progress.total} files` : ""}
+                {paused ? (
+                  <span className="text-oct-accent">
+                    ⏸ Paused{pauseReason === "stalled" ? " · stalled" : ""}
+                  </span>
+                ) : progress.phase === "finalizing" ? (
+                  "Finalizing…"
+                ) : scanning ? (
+                  (progress.message ?? "Preparing…")
+                ) : (
+                  `Uploading ${fileLabel}`
+                )}
+                {progress.total > 1 && !(scanning && progress.message)
+                  ? `  ·  ${Math.min(progress.current + 1, progress.total)}/${progress.total} files`
+                  : ""}
               </span>
               <span className="whitespace-nowrap">
                 {indeterminate ? "" : `${overallPct}%`}
-                {speed > 0 ? `  ·  ${formatBytes(speed)}/s` : ""}
+                {speed > 0 && !paused ? `  ·  ${formatBytes(speed)}/s` : ""}
               </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-oct-line">
               <div
-                className={`h-full rounded-full bg-oct-accent ${indeterminate ? "w-1/3 animate-octpulse" : "transition-all duration-300"}`}
-                style={indeterminate ? undefined : { width: `${overallPct}%` }}
+                className={`h-full rounded-full bg-oct-accent ${paused ? "opacity-50" : ""} ${indeterminate && !paused ? "w-1/3 animate-octpulse" : "transition-all duration-300"}`}
+                style={indeterminate && !paused ? undefined : { width: `${overallPct}%` }}
               />
             </div>
-            <div className="mt-3 flex items-center justify-between">
+            <div className="mt-3 flex items-center justify-between gap-3">
               <p className="text-[11px] text-oct-faint">
-                Running in the background — you can keep using the app.
+                {paused
+                  ? pauseReason === "stalled"
+                    ? "Paused — waiting for a connection. Resumes automatically."
+                    : "Paused — resume when you're ready."
+                  : "Running in the background — you can keep using the app."}
               </p>
-              <button
-                onClick={cancelActive}
-                disabled={cancelling || !activeUploadId}
-                className="font-mono text-[11px] text-oct-danger hover:underline disabled:text-oct-faint"
-              >
-                {cancelling ? "Cancelling…" : "Cancel"}
-              </button>
+              <div className="flex items-center gap-3 whitespace-nowrap">
+                {!scanning && (
+                  <button
+                    onClick={togglePause}
+                    disabled={pausing || !activeUploadId}
+                    className="font-mono text-[11px] text-oct-accent hover:underline disabled:text-oct-faint"
+                  >
+                    {pausing ? "…" : paused ? "Resume" : "Pause"}
+                  </button>
+                )}
+                <button
+                  onClick={cancelActive}
+                  disabled={cancelling || !activeUploadId}
+                  className="font-mono text-[11px] text-oct-danger hover:underline disabled:text-oct-faint"
+                >
+                  {cancelling ? "Cancelling…" : "Cancel"}
+                </button>
+              </div>
             </div>
           </div>
         )}

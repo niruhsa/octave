@@ -26,6 +26,10 @@ type UploadStoreState = {
   activeUploadId: string | null;
   /** True between clicking upload and the first progress/complete event. */
   starting: boolean;
+  /** Whether the active upload is paused (overlaid on `progress`). */
+  paused: boolean;
+  /** Why it paused: "manual" | "stalled" | null. */
+  pauseReason: string | null;
   setStarting: (v: boolean) => void;
   dismissComplete: () => void;
 };
@@ -35,6 +39,8 @@ export const useUploadStore = create<UploadStoreState>((set) => ({
   lastComplete: null,
   activeUploadId: null,
   starting: false,
+  paused: false,
+  pauseReason: null,
   setStarting: (v) => set({ starting: v }),
   dismissComplete: () => set({ lastComplete: null }),
 }));
@@ -54,7 +60,17 @@ export function useUploadEvents() {
 
     onUploadProgress((e) => {
       if (e.phase === "done") {
-        useUploadStore.setState({ progress: null, starting: false });
+        useUploadStore.setState({
+          progress: null,
+          starting: false,
+          paused: false,
+          pauseReason: null,
+        });
+      } else if (e.paused === true) {
+        // Pause-only event: overlay the badge, keep the byte counters intact.
+        useUploadStore.setState({ paused: true, pauseReason: e.pauseReason });
+      } else if (e.paused === false) {
+        useUploadStore.setState({ paused: false, pauseReason: null });
       } else {
         useUploadStore.setState((s) => ({
           progress: e,
@@ -68,6 +84,8 @@ export function useUploadEvents() {
       useUploadStore.setState({
         progress: null,
         starting: false,
+        paused: false,
+        pauseReason: null,
         lastComplete: e,
         activeUploadId: null,
       });
