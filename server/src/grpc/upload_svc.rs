@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use tokio::io::AsyncWriteExt;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::{Stream, StreamExt};
+use tokio::sync::broadcast;
+use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
@@ -21,6 +21,7 @@ use crate::error::AppError;
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::{AuthInterceptor, extract_credential};
 use crate::grpc::proto::upload as pb;
+use crate::shutdown::ShutdownRx;
 use crate::services::archive::ArchiveKind;
 use crate::services::{
     ChunkAck as SvcChunkAck, ChunkInit as SvcChunkInit, FileInit as SvcFileInit, IngestService,
@@ -39,6 +40,9 @@ pub struct UploadServer {
     /// Live-progress broadcast hub, shared with the REST WebSocket.
     pub hub: UploadHub,
     pub interceptor: AuthInterceptor,
+    /// Server shutdown flag — ends the otherwise-endless `StreamUploads`
+    /// response so a connected client can't block graceful shutdown.
+    pub shutdown: ShutdownRx,
 }
 
 impl UploadServer {
@@ -289,14 +293,35 @@ impl pb::upload_service_server::UploadService for UploadServer {
         req: Request<pb::StreamUploadsRequest>,
     ) -> Result<Response<Self::StreamUploadsStream>, Status> {
         let identity = self.interceptor.resolve(&req).await?;
-        let rx = self.hub.subscribe();
-        // Filter to events this listener may see (admin → all; user → own).
-        let stream = BroadcastStream::new(rx).filter_map(move |item| match item {
-            Ok(ev) if can_see(&identity, ev.owner_id) => Some(Ok(event_to_pb(ev))),
-            Ok(_) => None,
-            Err(BroadcastStreamRecvError::Lagged(_)) => None,
+        let mut rx = self.hub.subscribe();
+        let mut shutdown = self.shutdown.clone();
+
+        // Forward events this listener may see (admin → all; user → own) into a
+        // per-client channel. The task — and therefore the response stream —
+        // ends when the client hangs up, the hub closes, or the server starts
+        // shutting down. That last exit is the important one: without it this
+        // stream would stay open forever and wedge the graceful drain.
+        let (tx, out) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => break,
+                    event = rx.recv() => match event {
+                        Ok(ev) => {
+                            if can_see(&identity, ev.owner_id)
+                                && tx.send(Ok(event_to_pb(ev))).await.is_err()
+                            {
+                                break; // client dropped the stream
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    },
+                }
+            }
         });
-        Ok(Response::new(Box::pin(stream)))
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(out))))
     }
 }
 

@@ -20,7 +20,12 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { notificationsList, notificationsUnreadCount } from "../ipc";
+import {
+  notifBackgroundSyncDisable,
+  notifBackgroundSyncEnable,
+  notificationsList,
+  notificationsUnreadCount,
+} from "../ipc";
 import { useAppStore } from "../store";
 
 /** Persisted set of notification ids we've already surfaced as an OS
@@ -143,6 +148,16 @@ export function useNotificationsScheduler() {
   useEffect(() => {
     if (!isUser) setUnread(0);
   }, [isUser, setUnread]);
+
+  // Drive the native Android background poll (no-op on desktop). Enabling
+  // re-pushes the current bearer token to the worker, so re-running on a
+  // session change (login / token refresh) keeps it fresh; disabling on
+  // sign-out / a SECRET_KEY session cancels the work + clears the token.
+  // Keyed on the session identity bits so a re-login re-arms it.
+  useEffect(() => {
+    if (isUser) void notifBackgroundSyncEnable().catch(() => {});
+    else void notifBackgroundSyncDisable().catch(() => {});
+  }, [isUser, session?.user_id, session?.expires_at]);
 
   // Poll while online + signed in (immediately, then on the floor interval).
   useEffect(() => {

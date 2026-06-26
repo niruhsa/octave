@@ -18,6 +18,7 @@ pub mod downloads;
 pub mod error;
 pub mod library;
 pub mod media_session;
+pub mod notify_sync;
 pub mod player;
 pub mod playlists;
 pub mod sync;
@@ -77,6 +78,10 @@ pub fn run() {
         // network) alive while the app is backgrounded / screen-locked — see
         // `download_session`. Mirrors `upload_session`.
         .plugin(download_session::init())
+        // Phase 10 — Follows & Notifications: native Android background poll
+        // (WorkManager) that surfaces new-release notifications while the app is
+        // closed. Binds the Kotlin `NotificationSyncPlugin`; no-op on desktop.
+        .plugin(notify_sync::init())
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
         // (Playback no longer uses a custom protocol — see the loopback HTTP
@@ -235,6 +240,9 @@ pub fn run() {
             commands::notification_commands::notifications_unread_count,
             commands::notification_commands::notifications_mark_read,
             commands::notification_commands::notifications_mark_all_read,
+            // background notification poll (Android WorkManager; no-op on desktop)
+            notify_sync::notif_background_sync_enable,
+            notify_sync::notif_background_sync_disable,
             // playlists (Phase 7)
             commands::playlist_commands::playlist_list,
             commands::playlist_commands::playlist_get,

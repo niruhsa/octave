@@ -32,6 +32,7 @@ use crate::db::models::UploadState;
 use crate::error::AppError;
 use crate::rest::{extract_credential, ApiError, RestState};
 use crate::services::{can_see, ChunkAck, FileInit, UploadHub, UploadView, UploadsService};
+use crate::shutdown::ShutdownRx;
 
 /// Per-chunk body ceiling (64 MiB) — also covers the largest plausible init
 /// body (many files × chunk-hash lists). Clients pick a far smaller chunk size.
@@ -197,14 +198,23 @@ async fn stream(
         .ok_or_else(|| AppError::Unauthenticated("missing credential for uploads stream".into()))?;
     let identity = state.auth.resolve(cred).await?;
     let hub = state.upload_hub.clone();
-    Ok(ws.on_upgrade(move |socket| stream_loop(socket, identity, hub)))
+    let shutdown = state.shutdown.clone();
+    Ok(ws.on_upgrade(move |socket| stream_loop(socket, identity, hub, shutdown)))
 }
 
-/// Forward permitted upload events to one subscriber until either side closes.
-async fn stream_loop(mut socket: WebSocket, identity: Identity, hub: UploadHub) {
+/// Forward permitted upload events to one subscriber until either side closes
+/// or the server shuts down.
+async fn stream_loop(
+    mut socket: WebSocket,
+    identity: Identity,
+    hub: UploadHub,
+    mut shutdown: ShutdownRx,
+) {
     let mut rx = hub.subscribe();
     loop {
         tokio::select! {
+            // Server is shutting down — close so the graceful drain can finish.
+            _ = shutdown.changed() => break,
             event = rx.recv() => match event {
                 Ok(ev) => {
                     if can_see(&identity, ev.owner_id) {

@@ -31,6 +31,7 @@ use crate::auth::Identity;
 use crate::auth::service::{AuthService, Credential};
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
+use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
     ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
     NotificationService, PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
@@ -55,6 +56,9 @@ pub struct RestState {
     pub uploads: Option<UploadsService>,
     /// Live upload-progress broadcast hub (shared with the gRPC stream).
     pub upload_hub: UploadHub,
+    /// Server shutdown flag — drives the graceful drain and lets the live
+    /// uploads WebSocket close itself instead of blocking shutdown.
+    pub shutdown: ShutdownRx,
 }
 
 /// Run the REST server until shutdown.
@@ -84,6 +88,7 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
             auth_middleware,
         ));
 
+    let shutdown = state.shutdown.clone();
     let app = public.merge(protected).with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -92,8 +97,13 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
 
     info!(%addr, "REST server listening");
 
+    let shutdown_signal = async move {
+        wait_for_shutdown(shutdown).await;
+        info!("REST server received shutdown signal");
+    };
+
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal)
         .await
         .map_err(|e| AppError::Internal(format!("REST server error: {e}")))?;
 
@@ -375,7 +385,3 @@ impl IntoResponse for ApiError {
     }
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    info!("REST server received shutdown signal");
-}

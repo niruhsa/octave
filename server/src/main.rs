@@ -1,8 +1,9 @@
 //! Server entry point.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use server::auth::AuthService;
@@ -160,6 +161,15 @@ async fn main() -> Result<()> {
         }
     }
 
+    // One shutdown signal fans out to both transports and the live streams.
+    // A dedicated listener flips it on the first SIGINT/SIGTERM.
+    let (shutdown_tx, shutdown_rx) = server::shutdown::channel();
+    tokio::spawn(async move {
+        server::shutdown::wait_for_signal().await;
+        info!("shutdown signal received; draining transports");
+        let _ = shutdown_tx.send(true);
+    });
+
     let rest_state = RestState {
         auth: auth.clone(),
         library: library.clone(),
@@ -173,9 +183,10 @@ async fn main() -> Result<()> {
         optimizer: optimizer.clone(),
         uploads: uploads.clone(),
         upload_hub: upload_hub.clone(),
+        shutdown: shutdown_rx.clone(),
     };
 
-    let grpc_task = tokio::spawn(grpc::serve(
+    let mut grpc_task = tokio::spawn(grpc::serve(
         config.grpc_addr,
         config.grpc_tls.clone(),
         auth.clone(),
@@ -188,12 +199,39 @@ async fn main() -> Result<()> {
         ingest,
         uploads,
         upload_hub,
+        shutdown_rx.clone(),
     ));
-    let rest_task = tokio::spawn(rest::serve(config.rest_addr, rest_state));
+    let mut rest_task = tokio::spawn(rest::serve(config.rest_addr, rest_state));
 
+    // Run until a transport exits on its own (bind error / panic) or the
+    // shutdown signal fans out to both. If one transport dies, stop the other.
     tokio::select! {
-        res = grpc_task => unwrap_join("grpc", res)?,
-        res = rest_task => unwrap_join("rest", res)?,
+        res = &mut grpc_task => {
+            rest_task.abort();
+            return unwrap_join("grpc", res);
+        }
+        res = &mut rest_task => {
+            grpc_task.abort();
+            return unwrap_join("rest", res);
+        }
+        _ = server::shutdown::wait_for_shutdown(shutdown_rx) => {}
+    }
+
+    // Shutdown requested: both transports are draining. Bound the wait so a
+    // connection that refuses to drain can't wedge the process open (which
+    // previously required a force-kill) — abort and exit if it overruns.
+    const DRAIN_GRACE: Duration = Duration::from_secs(10);
+    let drained = tokio::time::timeout(DRAIN_GRACE, async {
+        let _ = tokio::join!(&mut grpc_task, &mut rest_task);
+    })
+    .await;
+    if drained.is_err() {
+        warn!(
+            secs = DRAIN_GRACE.as_secs(),
+            "transports did not drain in time; forcing shutdown"
+        );
+        grpc_task.abort();
+        rest_task.abort();
     }
 
     info!("music server shut down cleanly");

@@ -419,6 +419,19 @@ export const notificationsMarkRead = (id: string) =>
 export const notificationsMarkAllRead = () =>
   invoke<number>("notifications_mark_all_read");
 
+/**
+ * Enable the **background** notification poll (Android only; no-op on desktop).
+ * Reads the active bearer token natively and schedules a ~15-min WorkManager
+ * job that surfaces new-release notifications while the app is closed. Safe to
+ * call on every session change; disables itself for a `SECRET_KEY` session.
+ */
+export const notifBackgroundSyncEnable = () =>
+  invoke<void>("notif_background_sync_enable");
+
+/** Disable the background notification poll (logout / no eligible user). */
+export const notifBackgroundSyncDisable = () =>
+  invoke<void>("notif_background_sync_disable");
+
 // ---------------------------------------------------------------------------
 // playlists (Phase 7)
 //

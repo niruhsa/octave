@@ -19,6 +19,7 @@ use tracing::info;
 use crate::auth::service::AuthService;
 use crate::config::GrpcTlsConfig;
 use crate::error::{AppError, Result};
+use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
     ArtworkService, IngestService, LibraryService, MetadataService, NotificationService,
     PlaylistService, ScanService, UploadHub, UploadsService,
@@ -46,6 +47,7 @@ pub async fn serve(
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
     upload_hub: UploadHub,
+    shutdown: ShutdownRx,
 ) -> Result<()> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -94,6 +96,7 @@ pub async fn serve(
         uploads,
         hub: upload_hub,
         interceptor,
+        shutdown: shutdown.clone(),
     }
     .into_service();
 
@@ -107,6 +110,11 @@ pub async fn serve(
         info!(%addr, "gRPC server listening (plaintext h2c)");
     }
 
+    let shutdown_signal = async move {
+        wait_for_shutdown(shutdown).await;
+        info!("gRPC server received shutdown signal");
+    };
+
     builder
         .add_service(health_service)
         .add_service(auth_server)
@@ -114,7 +122,7 @@ pub async fn serve(
         .add_service(playlist_server)
         .add_service(notification_server)
         .add_service(upload_server)
-        .serve_with_shutdown(addr, shutdown_signal())
+        .serve_with_shutdown(addr, shutdown_signal)
         .await
         .map_err(|e| AppError::Internal(format!("gRPC server error: {e}")))?;
 
@@ -136,11 +144,6 @@ fn server_tls_config(tls: &GrpcTlsConfig) -> Result<ServerTlsConfig> {
         AppError::Config(format!("read GRPC_TLS_KEY {}: {e}", tls.key_path.display()))
     })?;
     Ok(ServerTlsConfig::new().identity(Identity::from_pem(cert, key)))
-}
-
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    info!("gRPC server received shutdown signal");
 }
 
 #[cfg(test)]

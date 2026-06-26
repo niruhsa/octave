@@ -66,6 +66,11 @@ dependencies {
     // MediaSessionCompat + MediaStyle notification + MediaButtonReceiver for the
     // native media notification (see MediaSessionPlugin / MediaService).
     implementation("androidx.media:media:1.7.0")
+    // WorkManager: periodic background job that polls the server's notification
+    // feed while the app is closed and posts new-release notifications (see
+    // NotificationPollWorker / NotificationSyncPlugin). Pulls in coroutines for
+    // CoroutineWorker.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
