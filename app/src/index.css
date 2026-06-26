@@ -138,6 +138,16 @@ body {
   background: transparent;
 }
 
+/* Scrollable but chromeless — for horizontal swipe rows like the Downloads
+   filter pills, where a visible scrollbar would be noise. */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* WebKit / Blink (Android WebView) */
+}
+
 /* Range inputs styled to the amber accent (sliders in the player bar). */
 input[type="range"].oct-range {
   -webkit-appearance: none;

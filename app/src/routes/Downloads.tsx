@@ -4,11 +4,13 @@ import { Link } from "react-router-dom";
 import {
   cacheGetAlbum,
   cacheListArtists,
+  cacheListDownloadedEpisodes,
   cacheListDownloadedTracks,
   downloadDelete,
   downloadsDir,
   downloadsWifiOnly,
   downloadsSetWifiOnly,
+  podcastDeleteEpisode,
   type Album,
 } from "../ipc";
 import { formatBytes, useDownloadsStore } from "../downloads/useDownloads";
@@ -18,20 +20,22 @@ import { broadcastInvalidate } from "../App";
 import { card, errorBox } from "../lib/ui";
 import { Thumb } from "../components/Cover";
 import { SkeletonList } from "../components/Skeleton";
-import { ArtistIcon, DownloadIcon, FolderIcon, TrashIcon } from "../components/icons";
+import { ArtistIcon, DownloadIcon, FolderIcon, PodcastIcon, TrashIcon } from "../components/icons";
 
 /**
  * Offline-downloads management (Phase 6): storage usage, downloads root +
- * Wi-Fi-only toggle, active-download progress, and a Songs / Albums / Artists
- * filter. Albums and Artists group the downloaded tracks and roll their
- * on-disk sizes up per group (e.g. two songs at 47 + 53 MB → a 100 MB album).
+ * Wi-Fi-only toggle, active-download progress, and a Songs / Albums / Artists /
+ * Podcasts filter. Albums, Artists, and Podcasts group the downloads and roll
+ * their on-disk sizes up per group (e.g. two songs at 47 + 53 MB → a 100 MB
+ * album; a show's episodes roll up the same way).
  */
-type Filter = "songs" | "albums" | "artists";
+type Filter = "songs" | "albums" | "artists" | "podcasts";
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "songs", label: "Songs" },
   { key: "albums", label: "Albums" },
   { key: "artists", label: "Artists" },
+  { key: "podcasts", label: "Podcasts" },
 ];
 
 export default function Downloads() {
@@ -44,10 +48,12 @@ export default function Downloads() {
   const [filter, setFilter] = useState<Filter>("songs");
 
   const tracks = useQuery({ queryKey: ["cache", "downloaded_tracks"], queryFn: cacheListDownloadedTracks });
+  const episodes = useQuery({ queryKey: ["cache", "downloaded_episodes"], queryFn: cacheListDownloadedEpisodes });
   const dir = useQuery({ queryKey: ["downloads", "dir"], queryFn: downloadsDir });
   const wifiOnly = useQuery({ queryKey: ["downloads", "wifi_only"], queryFn: downloadsWifiOnly });
 
   const allTracks = useMemo(() => tracks.data ?? [], [tracks.data]);
+  const allEpisodes = useMemo(() => episodes.data ?? [], [episodes.data]);
 
   // Resolve album / artist names from the offline cache (downloaded items'
   // album+artist rows are mirrored locally, so this works offline too).
@@ -105,8 +111,29 @@ export default function Downloads() {
       .sort((a, b) => b.bytes - a.bytes);
   }, [allTracks]);
 
+  // Per-show rollup of downloaded episodes: summed bytes + the show's episode
+  // ids (title + art ride along on each episode row, so no extra lookup query).
+  const podcastGroups = useMemo(() => {
+    const m = new Map<
+      string,
+      { title: string; imageUrl: string | null; bytes: number; episodeIds: string[] }
+    >();
+    for (const e of allEpisodes) {
+      const g =
+        m.get(e.podcast_id) ??
+        { title: e.podcast_title, imageUrl: e.image_url, bytes: 0, episodeIds: [] };
+      g.bytes += e.file_size ?? 0;
+      g.episodeIds.push(e.id);
+      m.set(e.podcast_id, g);
+    }
+    return [...m.entries()]
+      .map(([id, g]) => ({ id, ...g }))
+      .sort((a, b) => b.bytes - a.bytes);
+  }, [allEpisodes]);
+
   const trackCount = allTracks.length;
-  useEffect(() => { void refreshStorage(); }, [trackCount, refreshStorage]);
+  const episodeCount = allEpisodes.length;
+  useEffect(() => { void refreshStorage(); }, [trackCount, episodeCount, refreshStorage]);
 
   const activeList = Object.values(active);
 
@@ -137,6 +164,25 @@ export default function Downloads() {
         clear(id);
       }
       await invalidateAfterDelete();
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+
+  // Episodes live in the cache's `podcast_episodes` table, so they're removed
+  // via the podcast delete (not `downloadDelete`, which targets tracks).
+  async function removeEpisodeGroup(episodeIds: string[], label: string) {
+    if (!window.confirm(`Remove ${episodeIds.length} downloaded episode${episodeIds.length === 1 ? "" : "s"} from ${label}?`)) return;
+    try {
+      for (const id of episodeIds) {
+        await podcastDeleteEpisode(id);
+        clear(id);
+      }
+      broadcastInvalidate(["podcasts"]);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["cache", "downloaded_episodes"] }),
+        refreshStorage(),
+      ]);
     } catch (e) {
       alert(formatError(e));
     }
@@ -225,16 +271,24 @@ export default function Downloads() {
         </div>
       )}
 
-      {/* filter pills */}
-      <div className="flex items-center gap-2">
+      {/* filter pills — horizontal swipe row so they never widen the page; the
+          pills scroll sideways while the main view stays static */}
+      <div className="no-scrollbar flex min-w-0 items-center gap-2 overflow-x-auto">
         {FILTERS.map((f) => {
           const activeF = filter === f.key;
-          const n = f.key === "songs" ? allTracks.length : f.key === "albums" ? albumGroups.length : artistGroups.length;
+          const n =
+            f.key === "songs"
+              ? allTracks.length
+              : f.key === "albums"
+                ? albumGroups.length
+                : f.key === "artists"
+                  ? artistGroups.length
+                  : podcastGroups.length;
           return (
             <button
               key={f.key}
               onClick={() => setFilter(f.key)}
-              className={`rounded-full px-3.5 py-1.5 text-[12.5px] transition-colors ${
+              className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-[12.5px] transition-colors ${
                 activeF
                   ? "bg-oct-accent font-medium text-oct-bg"
                   : "border border-oct-border-strong text-oct-muted hover:text-oct-text"
@@ -250,7 +304,7 @@ export default function Downloads() {
       {tracks.isLoading && <SkeletonList rows={8} avatar="none" />}
       {tracks.isError && <p className={errorBox}>{formatError(tracks.error)}</p>}
 
-      {tracks.data && allTracks.length === 0 && (
+      {tracks.data && episodes.data && allTracks.length === 0 && allEpisodes.length === 0 && (
         <div className={`${card} flex flex-col items-center gap-2 p-8 text-center text-oct-subtle`}>
           <DownloadIcon size={22} className="text-oct-faint" />
           <p className="text-sm">Nothing downloaded yet. Browse the library and hit Download.</p>
@@ -330,6 +384,50 @@ export default function Downloads() {
           })}
         </div>
       )}
+
+      {/* ── Podcasts ── */}
+      {episodes.data && filter === "podcasts" &&
+        (allEpisodes.length === 0 ? (
+          <div className={`${card} flex flex-col items-center gap-2 p-8 text-center text-oct-subtle`}>
+            <PodcastIcon size={22} className="text-oct-faint" />
+            <p className="text-sm">No downloaded episodes yet. Open a show and download an episode.</p>
+          </div>
+        ) : (
+          <div className={`${card} divide-y divide-oct-border`}>
+            {podcastGroups.map((g) => (
+              <div key={g.id} className="group flex items-center gap-3 px-3 py-2.5 first:rounded-t-xl last:rounded-b-xl hover:bg-oct-elevated/40">
+                <Link to={`/podcasts/${g.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+                  {/* Icon sits behind the art so a failed remote load (this is the
+                      offline tab) gracefully falls back to it instead of a broken image. */}
+                  <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md bg-oct-elevated text-oct-subtle">
+                    <PodcastIcon size={16} />
+                    {g.imageUrl && (
+                      <img
+                        src={g.imageUrl}
+                        alt=""
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13.5px] group-hover:text-white">{g.title}</span>
+                    <span className="block truncate font-mono text-[10.5px] text-oct-subtle">
+                      {g.episodeIds.length} episode{g.episodeIds.length === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                </Link>
+                <span className="w-16 text-right font-mono text-[12px] text-oct-accent">{formatBytes(g.bytes)}</span>
+                <button onClick={() => void removeEpisodeGroup(g.episodeIds, g.title)} title="Remove all downloaded episodes from this show" className="text-oct-dim hover:text-oct-danger">
+                  <TrashIcon size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
     </section>
   );
 }

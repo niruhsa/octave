@@ -4,6 +4,8 @@
 //! around `crate::cache::repo` so the heavy lifting stays Rust-side and
 //! testable without Tauri.
 
+use std::collections::HashMap;
+
 use tauri::State;
 
 use crate::cache::model::{Album, AlbumArt, Artist, Playlist, PlaylistTrack, SyncState, Track};
@@ -131,6 +133,55 @@ pub async fn cache_list_downloaded_tracks(
 #[tauri::command]
 pub async fn cache_delete_track(state: State<'_, AppStateHandle>, id: String) -> AppResult<()> {
     repo::delete_track(&state.pool, &id).await
+}
+
+// ---------------------------------------------------------------------------
+// downloaded podcast episodes (Downloads view — Podcasts filter)
+// ---------------------------------------------------------------------------
+
+/// A downloaded episode enriched with its show's display fields, so the
+/// Downloads view can group offline episodes by show (like albums group tracks).
+#[derive(serde::Serialize)]
+pub struct DownloadedEpisode {
+    pub id: String,
+    pub podcast_id: String,
+    pub podcast_title: String,
+    pub image_url: Option<String>,
+    pub title: String,
+    pub duration_ms: Option<i64>,
+    pub file_size: Option<i64>,
+}
+
+#[tauri::command]
+pub async fn cache_list_downloaded_episodes(
+    state: State<'_, AppStateHandle>,
+) -> AppResult<Vec<DownloadedEpisode>> {
+    let episodes = repo::list_downloaded_episodes(&state.pool).await?;
+    // Resolve each episode's show title + art from the cached `podcasts` rows
+    // (a show backing a download is always cached alongside it).
+    let shows: HashMap<String, (String, Option<String>)> = repo::list_all_podcasts(&state.pool)
+        .await?
+        .into_iter()
+        .map(|p| (p.id, (p.title, p.image_url)))
+        .collect();
+    Ok(episodes
+        .into_iter()
+        .map(|e| {
+            let (podcast_title, image_url) = shows
+                .get(&e.podcast_id)
+                .cloned()
+                .unwrap_or_else(|| ("Podcast".to_string(), None));
+            DownloadedEpisode {
+                id: e.id,
+                podcast_id: e.podcast_id,
+                podcast_title,
+                image_url,
+                title: e.title,
+                duration_ms: e.duration_ms,
+                file_size: e.file_size,
+            }
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

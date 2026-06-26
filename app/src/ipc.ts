@@ -1000,6 +1000,20 @@ export const cacheListDownloadedTracks = () =>
 export const cacheDeleteTrack = (id: string) =>
   invoke<void>("cache_delete_track", { id });
 
+/** A downloaded podcast episode + its show's display fields (Downloads view). */
+export type DownloadedEpisode = {
+  id: string;
+  podcast_id: string;
+  podcast_title: string;
+  image_url: string | null;
+  title: string;
+  duration_ms: number | null;
+  file_size: number | null;
+};
+/** Every downloaded episode across all shows, newest-downloaded first. */
+export const cacheListDownloadedEpisodes = () =>
+  invoke<DownloadedEpisode[]>("cache_list_downloaded_episodes");
+
 // --- playlists -------------------------------------------------------------
 
 export const cacheUpsertPlaylist = (playlist: Playlist) =>

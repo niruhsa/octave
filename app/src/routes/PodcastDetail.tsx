@@ -11,6 +11,7 @@ import {
   podcastSetAutoDownload,
   podcastSubscribe,
   podcastUnsubscribe,
+  type LibraryView,
   type MergedEpisode,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
@@ -172,6 +173,20 @@ export default function PodcastDetail() {
       // Drop any finished progress entry so the row resets to a download button
       // (the store keeps terminal entries until the app restarts).
       clearDownload(ep.id);
+      // The local file + cache row are gone, so the episode is definitively not
+      // downloaded — flip the cached list immediately instead of waiting on the
+      // server-first refetch, which can lag or transiently fail and leave the row
+      // stuck showing "downloaded" until a manual refresh.
+      qc.setQueryData<LibraryView<MergedEpisode>>(["podcasts", "episodes", id], (old) =>
+        old
+          ? {
+              ...old,
+              items: old.items.map((e) =>
+                e.id === ep.id ? { ...e, downloaded: false, local_file_path: null } : e,
+              ),
+            }
+          : old,
+      );
       invalidate();
     } catch (e) {
       setActionErr(formatError(e));

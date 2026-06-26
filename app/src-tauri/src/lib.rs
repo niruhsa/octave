@@ -182,6 +182,7 @@ pub fn run() {
             commands::cache_commands::cache_get_track,
             commands::cache_commands::cache_list_tracks_by_album,
             commands::cache_commands::cache_list_downloaded_tracks,
+            commands::cache_commands::cache_list_downloaded_episodes,
             commands::cache_commands::cache_delete_track,
             // cache: playlists
             commands::cache_commands::cache_upsert_playlist,
