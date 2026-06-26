@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package music.notification.v1;
+
+// Follows & notifications (Phase 10). Following an artist is a per-user action
+// (the SECRET_KEY identity has no user and is rejected). When a new release is
+// added for a followed artist, a notification is persisted per follower and
+// fetched here. Follow/unfollow are audited server-side.
+service NotificationService {
+  // ----- Follows -----
+  rpc FollowArtist(FollowRequest) returns (FollowResponse);
+  rpc UnfollowArtist(FollowRequest) returns (FollowResponse);
+  rpc IsFollowing(FollowRequest) returns (FollowResponse);
+  rpc ListFollowing(ListFollowingRequest) returns (ListFollowingResponse);
+
+  // ----- Notifications -----
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+  rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse);
+  rpc MarkNotificationRead(MarkReadRequest) returns (MarkReadResponse);
+  rpc MarkAllNotificationsRead(MarkAllReadRequest) returns (MarkAllReadResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+
+// A slim artist projection for the follow list (full catalog reads stay on
+// LibraryService).
+message FollowedArtist {
+  string id = 1;
+  string name = 2;
+  string sort_name = 3;   // empty when unset
+  string image_path = 4;  // empty when unset
+}
+
+message Notification {
+  string id = 1;
+  string kind = 2;        // e.g. "new_release"
+  string artist_id = 3;   // empty when the artist was since deleted
+  string album_id = 4;    // empty when the album was since deleted
+  string title = 5;
+  string body = 6;        // empty when unset
+  bool read = 7;
+  string created_at = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Requests / responses
+// ---------------------------------------------------------------------------
+
+message FollowRequest { string artist_id = 1; }
+message FollowResponse { bool following = 1; }
+
+message ListFollowingRequest {}
+message ListFollowingResponse {
+  repeated FollowedArtist artists = 1;
+  int64 total = 2;
+}
+
+message ListNotificationsRequest {
+  bool unread_only = 1;
+  int32 limit = 2;    // 0 = server default; capped server-side
+  int32 offset = 3;
+}
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  int64 total = 2;        // count of notifications in this page
+  int64 unread_count = 3; // total unread for the caller (for a UI badge)
+}
+
+message GetUnreadCountRequest {}
+message GetUnreadCountResponse { int64 unread_count = 1; }
+
+message MarkReadRequest { string id = 1; }
+message MarkReadResponse {}
+
+message MarkAllReadRequest {}
+message MarkAllReadResponse { int64 marked = 1; }

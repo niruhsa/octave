@@ -147,6 +147,23 @@ pub struct Follow {
     pub created_at: OffsetDateTime,
 }
 
+/// A delivered notification (Phase 10). One row per recipient. `kind` is free
+/// TEXT (only `"new_release"` today). `artist_id`/`album_id` are nullable (they
+/// go NULL if the entity is later deleted); the denormalized `title`/`body`
+/// keep the notification readable regardless. `read_at` NULL means unread.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub kind: String,
+    pub artist_id: Option<Uuid>,
+    pub album_id: Option<Uuid>,
+    pub title: String,
+    pub body: Option<String>,
+    pub read_at: Option<OffsetDateTime>,
+    pub created_at: OffsetDateTime,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub id: Uuid,
@@ -229,6 +246,18 @@ pub struct NewAlbumAlias {
 pub struct NewPlaylist {
     pub owner_id: Uuid,
     pub name: String,
+}
+
+/// Insert-shape for a notification. `id`/`read_at`/`created_at` are set by the
+/// DB (the row starts unread).
+#[derive(Debug, Clone)]
+pub struct NewNotification {
+    pub user_id: Uuid,
+    pub kind: String,
+    pub artist_id: Option<Uuid>,
+    pub album_id: Option<Uuid>,
+    pub title: String,
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone)]

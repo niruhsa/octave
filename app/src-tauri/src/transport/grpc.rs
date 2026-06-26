@@ -34,11 +34,13 @@ use super::proto::playlist::{
 use super::proto::upload::upload_service_client::UploadServiceClient;
 use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUploadResponse};
 use super::proto::upload as pb;
+use super::proto::notification::notification_service_client::NotificationServiceClient;
+use super::proto::notification as npb;
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier,
-    Playlist, PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult,
-    Track, UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest, UploadListFilter,
-    UploadResult, UploadSummary, UploadView,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, Notification,
+    NotificationPage, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, RescanReport,
+    ServerConfig, SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView,
+    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -119,6 +121,10 @@ impl GrpcClient {
 
     fn uploads(&self) -> UploadServiceClient<Channel> {
         UploadServiceClient::new(self.channel.clone())
+    }
+
+    fn notifications(&self) -> NotificationServiceClient<Channel> {
+        NotificationServiceClient::new(self.channel.clone())
     }
 
     /// Username/password login. On success the server returns an opaque
@@ -680,6 +686,118 @@ impl GrpcClient {
             .map_err(map_mutation_err("set_primary_album_alias"))?
             .into_inner();
         Ok(album_from_proto(resp))
+    }
+
+    // ----- Follows & notifications (Phase 10) ----------------------------
+
+    /// Follow an artist. Returns the resulting follow state (`true`). A
+    /// `SECRET_KEY` identity is rejected server-side (no user to own the
+    /// follow) → a permanent error, no REST fallback.
+    pub async fn follow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        let mut req = Request::new(npb::FollowRequest { artist_id: artist_id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .follow_artist(req)
+            .await
+            .map_err(map_mutation_err("follow_artist"))?
+            .into_inner();
+        Ok(resp.following)
+    }
+
+    /// Unfollow an artist. Returns the resulting follow state (`false`).
+    pub async fn unfollow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        let mut req = Request::new(npb::FollowRequest { artist_id: artist_id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .unfollow_artist(req)
+            .await
+            .map_err(map_mutation_err("unfollow_artist"))?
+            .into_inner();
+        Ok(resp.following)
+    }
+
+    pub async fn is_following(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        let mut req = Request::new(npb::FollowRequest { artist_id: artist_id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .is_following(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("is_following: {s}")))?
+            .into_inner();
+        Ok(resp.following)
+    }
+
+    /// The artists the caller follows. Mapped onto the public `Artist` type
+    /// (no aliases — the follow list is a slim projection).
+    pub async fn list_following(&self, cred: &Credential) -> AppResult<Vec<Artist>> {
+        let mut req = Request::new(npb::ListFollowingRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .list_following(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_following: {s}")))?
+            .into_inner();
+        Ok(resp.artists.into_iter().map(followed_artist_from_proto).collect())
+    }
+
+    pub async fn list_notifications(
+        &self,
+        cred: &Credential,
+        unread_only: bool,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<NotificationPage> {
+        let mut req = Request::new(npb::ListNotificationsRequest { unread_only, limit, offset });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .list_notifications(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_notifications: {s}")))?
+            .into_inner();
+        Ok(NotificationPage {
+            notifications: resp.notifications.into_iter().map(notification_from_proto).collect(),
+            total: resp.total,
+            unread_count: resp.unread_count,
+        })
+    }
+
+    pub async fn notifications_unread_count(&self, cred: &Credential) -> AppResult<i64> {
+        let mut req = Request::new(npb::GetUnreadCountRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .get_unread_count(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("get_unread_count: {s}")))?
+            .into_inner();
+        Ok(resp.unread_count)
+    }
+
+    pub async fn mark_notification_read(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let mut req = Request::new(npb::MarkReadRequest { id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        self.notifications()
+            .mark_notification_read(req)
+            .await
+            .map_err(map_mutation_err("mark_notification_read"))?;
+        Ok(())
+    }
+
+    pub async fn mark_all_notifications_read(&self, cred: &Credential) -> AppResult<u64> {
+        let mut req = Request::new(npb::MarkAllReadRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .notifications()
+            .mark_all_notifications_read(req)
+            .await
+            .map_err(map_mutation_err("mark_all_notifications_read"))?
+            .into_inner();
+        Ok(resp.marked.max(0) as u64)
     }
 
     // ----- Playlists (sync pull + push) ----------------------------------
@@ -1313,6 +1431,29 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         release_year: opt_i32(a.release_year),
         cover_path: opt_str(a.cover_path),
         aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
+    }
+}
+
+fn followed_artist_from_proto(a: npb::FollowedArtist) -> Artist {
+    Artist {
+        id: a.id,
+        name: a.name,
+        sort_name: opt_str(a.sort_name),
+        image_path: opt_str(a.image_path),
+        aliases: Vec::new(),
+    }
+}
+
+fn notification_from_proto(n: npb::Notification) -> Notification {
+    Notification {
+        id: n.id,
+        kind: n.kind,
+        artist_id: opt_str(n.artist_id),
+        album_id: opt_str(n.album_id),
+        title: n.title,
+        body: opt_str(n.body),
+        read: n.read,
+        created_at: n.created_at,
     }
 }
 

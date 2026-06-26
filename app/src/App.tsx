@@ -24,6 +24,7 @@ import Register from "./routes/Register";
 import Account from "./routes/Account";
 import Upload from "./routes/Upload";
 import Uploads from "./routes/Uploads";
+import Notifications from "./routes/Notifications";
 import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
 import MobileTopBar from "./components/MobileTopBar";
@@ -33,6 +34,7 @@ import { useAppStore } from "./store";
 import { useSyncScheduler } from "./sync/useSync";
 import { useDownloadListener } from "./downloads/useDownloads";
 import { useUploadEvents } from "./uploads/useUploads";
+import { useNotificationsScheduler } from "./notifications/useNotifications";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -143,6 +145,9 @@ function RootLayout() {
   // refresh the library/reports on completion (global, not tab-local).
   useUploadEvents();
 
+  // Phase 10: poll the unread notification feed (badge + OS notifications).
+  useNotificationsScheduler();
+
   // Phase 6: aggregate download-progress events + read storage usage.
   // When a download finishes (done/error), invalidate all library and
   // downloads queries so every page picks up the change automatically.
@@ -215,6 +220,7 @@ const router = createBrowserRouter([
       { path: "account", element: <Account /> },
       { path: "upload", element: <Upload /> },
       { path: "uploads", element: <Uploads /> },
+      { path: "notifications", element: <Notifications /> },
     ],
   },
 ]);

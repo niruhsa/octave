@@ -5,6 +5,7 @@
 
 pub mod ingest;
 pub mod library;
+pub mod notification;
 pub mod playlist;
 pub mod range;
 pub mod streaming;
@@ -32,7 +33,7 @@ use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
 use crate::services::{
     ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
-    PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
+    NotificationService, PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -43,6 +44,7 @@ pub struct RestState {
     pub scan: ScanService,
     pub streaming: StreamingService,
     pub playlists: PlaylistService,
+    pub notifications: NotificationService,
     pub ingest: Option<IngestService>,
     pub metadata: MetadataService,
     pub artwork: Option<ArtworkService>,
@@ -73,6 +75,7 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
         .route("/users/:id/password", put(change_password))
         .merge(library::router())
         .merge(playlist::router())
+        .merge(notification::router())
         .merge(streaming::router())
         .merge(ingest::router())
         .merge(upload::router())

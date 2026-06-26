@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier, Playlist,
+    Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier, Playlist,
     PlaylistWithTracks, RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest,
     UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
@@ -555,6 +555,105 @@ impl ServerClient {
             }
         }
         self.rest.set_primary_album_alias(cred, album_id, alias_id).await
+    }
+
+    // ----- Follows & notifications (Phase 10) ------------------------------
+
+    pub async fn follow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.follow_artist(cred, artist_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("follow_artist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.follow_artist(cred, artist_id).await
+    }
+
+    pub async fn unfollow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.unfollow_artist(cred, artist_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("unfollow_artist", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.unfollow_artist(cred, artist_id).await
+    }
+
+    pub async fn is_following(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.is_following(cred, artist_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("is_following", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.is_following(cred, artist_id).await
+    }
+
+    pub async fn list_following(&self, cred: &Credential) -> AppResult<Vec<Artist>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_following(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_following", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_following(cred).await
+    }
+
+    pub async fn list_notifications(
+        &self,
+        cred: &Credential,
+        unread_only: bool,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> AppResult<NotificationPage> {
+        if let Some(grpc) = self.try_grpc().await {
+            // gRPC takes i32 (proto); 0 = "server default" for limit.
+            let l = limit.unwrap_or(0).clamp(0, i32::MAX as i64) as i32;
+            let o = offset.unwrap_or(0).clamp(0, i32::MAX as i64) as i32;
+            match grpc.list_notifications(cred, unread_only, l, o).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_notifications", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_notifications(cred, unread_only, limit, offset).await
+    }
+
+    pub async fn notifications_unread_count(&self, cred: &Credential) -> AppResult<i64> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.notifications_unread_count(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("notifications_unread_count", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.notifications_unread_count(cred).await
+    }
+
+    pub async fn mark_notification_read(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.mark_notification_read(cred, id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("mark_notification_read", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.mark_notification_read(cred, id).await
+    }
+
+    pub async fn mark_all_notifications_read(&self, cred: &Credential) -> AppResult<u64> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.mark_all_notifications_read(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("mark_all_notifications_read", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.mark_all_notifications_read(cred).await
     }
 
     // ----- Image upload (Phase 9) ------------------------------------------

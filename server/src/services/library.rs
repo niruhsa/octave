@@ -19,6 +19,7 @@ use crate::db::models::{
 };
 use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, AuditRepo, FollowRepo, TrackRepo};
 use crate::error::{AppError, Result};
+use crate::services::notification::NotificationService;
 use crate::services::tag;
 
 const MAX_PAGE_LIMIT: i64 = 200;
@@ -44,6 +45,10 @@ pub struct LibraryService {
     /// resolve relative `file_path` values against this root and remove the
     /// on-disk file.  Absolute `file_path` values are used as-is.
     pub library_root: Option<PathBuf>,
+    /// New-release notifications: when set, creating an album fans out a
+    /// notification to every follower of its artist (Phase 10). Optional so the
+    /// library service stays constructible without it (e.g. unit tests).
+    pub notifications: Option<NotificationService>,
 }
 
 impl LibraryService {
@@ -64,12 +69,20 @@ impl LibraryService {
             follows,
             primary_language: DEFAULT_PRIMARY_LANGUAGE.to_string(),
             library_root: None,
+            notifications: None,
         }
     }
 
     /// Set the library root for file-deletion support.
     pub fn with_library_root(mut self, root: Option<PathBuf>) -> Self {
         self.library_root = root;
+        self
+    }
+
+    /// Wire in the notification service so new albums alert followers of their
+    /// artist (Phase 10).
+    pub fn with_notifications(mut self, notifications: NotificationService) -> Self {
+        self.notifications = Some(notifications);
         self
     }
 
@@ -290,6 +303,18 @@ impl LibraryService {
             Some(&album),
         )
         .await?;
+        // New-release fan-out: notify every follower of the artist (Phase 10).
+        // Best-effort — a notification failure must never fail the album
+        // creation. The actor is excluded so an uploader who follows the artist
+        // isn't alerted to their own upload. This single hook covers both
+        // manual creates and ingest (which routes through `create_album`).
+        if let Some(notifications) = &self.notifications
+            && let Err(e) = notifications
+                .notify_new_release(caller.user_id(), artist_id, &album)
+                .await
+        {
+            warn!(album_id = %album.id, error = %e, "new-release notification fan-out failed");
+        }
         Ok(album)
     }
 

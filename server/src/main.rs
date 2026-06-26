@@ -12,8 +12,8 @@ use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
     run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, ImageOptimizer,
-    IngestService, LibraryService, MetadataService, PlaylistService, ScanService, StreamingService,
-    UploadHub, UploadsService,
+    IngestService, LibraryService, MetadataService, NotificationService, PlaylistService,
+    ScanService, StreamingService, UploadHub, UploadsService,
 };
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
@@ -44,6 +44,15 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
     );
+    // Follows & notifications (Phase 10). Constructed before the library so the
+    // library's `create_album` can fan out new-release notifications to
+    // followers via this service.
+    let notifications = NotificationService::new(
+        Arc::new(repos.clone()), // follows
+        Arc::new(repos.clone()), // notifications
+        Arc::new(repos.clone()), // artists
+        Arc::new(repos.clone()), // audit
+    );
     let library = LibraryService::new(
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
@@ -53,7 +62,8 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
     )
     .with_library_root(config.library_path.clone())
-    .with_primary_language(config.primary_language.clone());
+    .with_primary_language(config.primary_language.clone())
+    .with_notifications(notifications.clone());
     let scan = ScanService::new(library.clone(), config.library_path.clone());
     let streaming = StreamingService::new(Arc::new(repos.clone()), config.library_path.clone());
     let playlists = PlaylistService::new(
@@ -156,6 +166,7 @@ async fn main() -> Result<()> {
         scan: scan.clone(),
         streaming,
         playlists: playlists.clone(),
+        notifications: notifications.clone(),
         ingest: ingest.clone(),
         metadata: metadata.clone(),
         artwork: artwork.clone(),
@@ -173,6 +184,7 @@ async fn main() -> Result<()> {
         metadata,
         artwork,
         playlists,
+        notifications,
         ingest,
         uploads,
         upload_hub,

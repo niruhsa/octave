@@ -345,6 +345,81 @@ export const libraryUploadArtistImage = (artistId: string, path: string) =>
   invoke<void>("library_upload_artist_image", { artistId, path });
 
 // ---------------------------------------------------------------------------
+// follows & notifications (Phase 10)
+//
+// Server-authoritative + online-only (no offline cache path). Only a
+// logged-in *user* (bearer session) can follow — a `SECRET_KEY` session has
+// no user and is rejected server-side.
+// ---------------------------------------------------------------------------
+
+/** A slim followed-artist row (from `list_following`). */
+export type FollowedArtist = {
+  id: string;
+  name: string;
+  sort_name: string | null;
+  image_path: string | null;
+};
+
+/** One delivered notification. `kind` is `"new_release"` today; `artist_id`/
+ *  `album_id` are null when the referenced entity was since deleted. */
+export type AppNotification = {
+  id: string;
+  kind: string;
+  artist_id: string | null;
+  album_id: string | null;
+  title: string;
+  body: string | null;
+  read: boolean;
+  created_at: string;
+};
+
+/** A page of notifications + the total unread count (for a badge). */
+export type NotificationPage = {
+  notifications: AppNotification[];
+  total: number;
+  unread_count: number;
+};
+
+/** Follow an artist. Returns the resulting follow state (`true`). */
+export const followArtist = (artistId: string) =>
+  invoke<boolean>("follow_artist", { artistId });
+
+/** Unfollow an artist. Returns the resulting follow state (`false`). */
+export const unfollowArtist = (artistId: string) =>
+  invoke<boolean>("unfollow_artist", { artistId });
+
+/** Whether the caller currently follows `artistId`. */
+export const isFollowing = (artistId: string) =>
+  invoke<boolean>("is_following", { artistId });
+
+/** The artists the caller follows. */
+export const listFollowing = () => invoke<FollowedArtist[]>("list_following");
+
+/** A page of the caller's notifications (newest first) + unread count. */
+export const notificationsList = (
+  unreadOnly?: boolean,
+  limit?: number,
+  offset?: number,
+) =>
+  invoke<NotificationPage>("notifications_list", {
+    unreadOnly: unreadOnly ?? false,
+    limit: limit ?? null,
+    offset: offset ?? null,
+  });
+
+/** The caller's unread notification count (for the badge). */
+export const notificationsUnreadCount = () =>
+  invoke<number>("notifications_unread_count");
+
+/** Mark one notification read. */
+export const notificationsMarkRead = (id: string) =>
+  invoke<void>("notifications_mark_read", { id });
+
+/** Mark every unread notification read. Returns the count flipped. */
+export const notificationsMarkAllRead = () =>
+  invoke<number>("notifications_mark_all_read");
+
+// ---------------------------------------------------------------------------
 // playlists (Phase 7)
 //
 // `playlist_list` / `playlist_get` follow the same server-then-cache

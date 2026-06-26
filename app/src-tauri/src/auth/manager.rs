@@ -12,9 +12,9 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier, RescanReport, ServerClient,
-    ServerConfig, Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest,
-    UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier,
+    RescanReport, ServerClient, ServerConfig, Track, TransportHealth, TransportUsed, UploadEvent,
+    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
@@ -313,6 +313,53 @@ impl AuthManager {
     ) -> AppResult<Track> {
         let cred = self.credential().await?;
         self.server.edit_track_metadata(&cred, id, edit).await
+    }
+
+    // ----- Follows & notifications (Phase 10) ------------------------------
+
+    pub async fn follow_artist(&self, artist_id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.follow_artist(&cred, artist_id).await
+    }
+
+    pub async fn unfollow_artist(&self, artist_id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.unfollow_artist(&cred, artist_id).await
+    }
+
+    pub async fn is_following(&self, artist_id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.is_following(&cred, artist_id).await
+    }
+
+    pub async fn list_following(&self) -> AppResult<Vec<Artist>> {
+        let cred = self.credential().await?;
+        self.server.list_following(&cred).await
+    }
+
+    pub async fn list_notifications(
+        &self,
+        unread_only: bool,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> AppResult<NotificationPage> {
+        let cred = self.credential().await?;
+        self.server.list_notifications(&cred, unread_only, limit, offset).await
+    }
+
+    pub async fn notifications_unread_count(&self) -> AppResult<i64> {
+        let cred = self.credential().await?;
+        self.server.notifications_unread_count(&cred).await
+    }
+
+    pub async fn mark_notification_read(&self, id: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.mark_notification_read(&cred, id).await
+    }
+
+    pub async fn mark_all_notifications_read(&self) -> AppResult<u64> {
+        let cred = self.credential().await?;
+        self.server.mark_all_notifications_read(&cred).await
     }
 
     // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------

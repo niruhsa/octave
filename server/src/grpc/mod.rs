@@ -6,6 +6,7 @@
 pub mod auth_svc;
 pub mod interceptor;
 pub mod library_svc;
+pub mod notification_svc;
 pub mod playlist_svc;
 pub mod proto;
 pub mod upload_svc;
@@ -19,13 +20,14 @@ use crate::auth::service::AuthService;
 use crate::config::GrpcTlsConfig;
 use crate::error::{AppError, Result};
 use crate::services::{
-    ArtworkService, IngestService, LibraryService, MetadataService, PlaylistService, ScanService,
-    UploadHub, UploadsService,
+    ArtworkService, IngestService, LibraryService, MetadataService, NotificationService,
+    PlaylistService, ScanService, UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
 pub use interceptor::AuthInterceptor;
 pub use library_svc::LibraryServer;
+pub use notification_svc::NotificationServer;
 pub use playlist_svc::PlaylistServer;
 pub use upload_svc::UploadServer;
 
@@ -40,6 +42,7 @@ pub async fn serve(
     metadata: MetadataService,
     artwork: Option<ArtworkService>,
     playlists: PlaylistService,
+    notifications: NotificationService,
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
     upload_hub: UploadHub,
@@ -58,6 +61,9 @@ pub async fn serve(
     health_reporter
         .set_serving::<proto::upload::upload_service_server::UploadServiceServer<UploadServer>>()
         .await;
+    health_reporter
+        .set_serving::<proto::notification::notification_service_server::NotificationServiceServer<NotificationServer>>()
+        .await;
 
     let interceptor = AuthInterceptor::new(auth.clone());
     let auth_server = AuthServer {
@@ -75,6 +81,11 @@ pub async fn serve(
     .into_service();
     let playlist_server = PlaylistServer {
         playlists,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
+    let notification_server = NotificationServer {
+        notifications,
         interceptor: interceptor.clone(),
     }
     .into_service();
@@ -101,6 +112,7 @@ pub async fn serve(
         .add_service(auth_server)
         .add_service(library_server)
         .add_service(playlist_server)
+        .add_service(notification_server)
         .add_service(upload_server)
         .serve_with_shutdown(addr, shutdown_signal())
         .await

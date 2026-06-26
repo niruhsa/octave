@@ -3,10 +3,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   artistImageUrl,
+  followArtist,
+  isFollowing,
   libraryDeleteArtist,
   libraryGetArtist,
   libraryListAlbumsByArtist,
   libraryMergeArtists,
+  unfollowArtist,
 } from "../ipc";
 import { Cover } from "../components/Cover";
 import { BlurUpImage } from "../components/BlurUpImage";
@@ -20,7 +23,7 @@ import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
 import { btnDanger, btnGhost } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
-import { EditIcon, TrashIcon } from "../components/icons";
+import { EditIcon, HeartIcon, TrashIcon } from "../components/icons";
 import { SkeletonGrid } from "../components/Skeleton";
 
 export default function Artist() {
@@ -29,10 +32,15 @@ export default function Artist() {
   const navigate = useNavigate();
   const tier = useAppStore((s) => s.tier);
   const online = useAppStore((s) => s.online);
+  const session = useAppStore((s) => s.session);
   const isManager = tier === "admin" || tier === "manager";
+  // Only a logged-in user (bearer) can follow; a SECRET_KEY session has no
+  // user to own the follow (the server rejects it).
+  const canFollow = session?.kind === "bearer";
   const [editImage, setEditImage] = useState(false);
   const [imgVersion, setImgVersion] = useState(0);
   const [merging, setMerging] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
 
   const q = useQuery({
     queryKey: ["library", "albums-by-artist", id],
@@ -46,6 +54,29 @@ export default function Artist() {
     enabled: !!id,
   });
   const artist = artistQ.data;
+
+  // Follow state (online + bearer only). When the query is disabled/loading we
+  // optimistically treat it as not-following; the button is offline-disabled.
+  const followQ = useQuery({
+    queryKey: ["follow", id],
+    queryFn: () => isFollowing(id),
+    enabled: !!id && canFollow && online,
+  });
+  const following = followQ.data ?? false;
+
+  async function toggleFollow() {
+    if (followBusy) return;
+    setFollowBusy(true);
+    try {
+      if (following) await unfollowArtist(id);
+      else await followArtist(id);
+      await qc.invalidateQueries({ queryKey: ["follow", id] });
+    } catch (e) {
+      alert(formatError(e));
+    } finally {
+      setFollowBusy(false);
+    }
+  }
 
   function refreshArtist() {
     void qc.invalidateQueries({ queryKey: ["library"] });
@@ -107,6 +138,24 @@ export default function Artist() {
             </span>
             {q.data && <SourceBadge source={q.data.source} />}
           </p>
+          {canFollow && (
+            <button
+              onClick={toggleFollow}
+              {...offlineAttrs(
+                online,
+                followBusy,
+                following ? "Unfollow this artist" : "Follow for new-release alerts",
+              )}
+              className={`mt-3 inline-flex w-fit items-center gap-2 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors disabled:opacity-50 ${
+                following
+                  ? "border-oct-accent/40 bg-oct-accent/10 text-oct-accent hover:border-oct-danger/50 hover:bg-oct-danger/10 hover:text-oct-danger"
+                  : "border-oct-border-strong text-oct-muted hover:border-oct-line hover:text-oct-text"
+              }`}
+            >
+              <HeartIcon size={13} />
+              {following ? "Following" : "Follow"}
+            </button>
+          )}
         </div>
       </header>
 

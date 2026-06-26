@@ -188,6 +188,34 @@ pub trait AliasRepo: Send + Sync {
     async fn reassign_album_aliases(&self, from_album: Uuid, to_album: Uuid) -> Result<()>;
 }
 
+/// Per-user notifications (Phase 10 — new-release alerts). Delivery is
+/// persist-then-fetch: the new-release fan-out inserts one row per follower,
+/// and clients poll [`list_for_user`](NotificationRepo::list_for_user).
+#[async_trait]
+pub trait NotificationRepo: Send + Sync {
+    /// Insert a single notification, returning the stored row.
+    async fn create(&self, new: NewNotification) -> Result<Notification>;
+    /// Bulk-insert (new-release fan-out to every follower). Returns the number
+    /// of rows inserted. A no-op (returns 0) on an empty slice.
+    async fn create_many(&self, items: &[NewNotification]) -> Result<u64>;
+    async fn get(&self, id: Uuid) -> Result<Option<Notification>>;
+    /// Newest-first page for a user. `unread_only` restricts to `read_at IS NULL`.
+    async fn list_for_user(
+        &self,
+        user_id: Uuid,
+        unread_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Notification>>;
+    async fn unread_count(&self, user_id: Uuid) -> Result<i64>;
+    /// Mark one notification read (idempotent — preserves the first read time).
+    /// Scoped to `user_id` so a caller can't touch another user's row. Returns
+    /// `true` when a previously-unread row was flipped.
+    async fn mark_read(&self, user_id: Uuid, id: Uuid) -> Result<bool>;
+    /// Mark every unread notification for a user read. Returns the count flipped.
+    async fn mark_all_read(&self, user_id: Uuid) -> Result<u64>;
+}
+
 #[async_trait]
 pub trait AuditRepo: Send + Sync {
     async fn record(&self, entry: NewAuditEntry) -> Result<AuditEntry>;

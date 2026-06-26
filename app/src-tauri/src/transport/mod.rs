@@ -259,6 +259,33 @@ pub struct UploadListFilter {
     pub offset: Option<i64>,
 }
 
+// ── Follows & notifications (Phase 10) ─────────────────────────────────
+
+/// One delivered notification (server's `Notification`). `kind` is free text
+/// (`"new_release"` today). `artist_id`/`album_id` are `None` when the
+/// referenced entity was since deleted; `title`/`body` are denormalized so the
+/// notification still reads correctly. `read` mirrors the server's `read_at`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: String,
+    pub kind: String,
+    pub artist_id: Option<String>,
+    pub album_id: Option<String>,
+    pub title: String,
+    pub body: Option<String>,
+    pub read: bool,
+    pub created_at: String,
+}
+
+/// A page of the caller's notifications plus the total unread count (for a
+/// badge). Mirrors the server's `ListNotificationsResponse`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationPage {
+    pub notifications: Vec<Notification>,
+    pub total: i64,
+    pub unread_count: i64,
+}
+
 /// A playlist plus its ordered tracks — what `GetPlaylist` returns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaylistWithTracks {
@@ -466,5 +493,54 @@ mod tests {
         )
         .unwrap();
         assert!(a.aliases.is_empty());
+    }
+
+    #[test]
+    fn notification_deserialises_with_null_entity_refs() {
+        // A new-release notification carries the album; one whose album was
+        // since deleted comes back with null `album_id`/`artist_id`/`body`.
+        let n: Notification = serde_json::from_str(
+            r#"{ "id":"n1","kind":"new_release","artist_id":"ar","album_id":"al",
+                 "title":"New release from BABYMETAL","body":"METAL GALAXY",
+                 "read":false,"created_at":"2026-06-26T00:00:00Z" }"#,
+        )
+        .unwrap();
+        assert_eq!(n.album_id.as_deref(), Some("al"));
+        assert!(!n.read);
+
+        let orphan: Notification = serde_json::from_str(
+            r#"{ "id":"n2","kind":"new_release","artist_id":null,"album_id":null,
+                 "title":"New release","body":null,"read":true,
+                 "created_at":"2026-06-26T00:00:00Z" }"#,
+        )
+        .unwrap();
+        assert!(orphan.artist_id.is_none());
+        assert!(orphan.album_id.is_none());
+        assert!(orphan.body.is_none());
+        assert!(orphan.read);
+    }
+
+    #[test]
+    fn notification_page_round_trip() {
+        let page = NotificationPage {
+            notifications: vec![Notification {
+                id: "n1".into(),
+                kind: "new_release".into(),
+                artist_id: Some("ar".into()),
+                album_id: Some("al".into()),
+                title: "New release from YUQI".into(),
+                body: Some("YUQ1".into()),
+                read: false,
+                created_at: "2026-06-26T00:00:00Z".into(),
+            }],
+            total: 1,
+            unread_count: 1,
+        };
+        let json = serde_json::to_string(&page).unwrap();
+        let back: NotificationPage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.total, 1);
+        assert_eq!(back.unread_count, 1);
+        assert_eq!(back.notifications.len(), 1);
+        assert_eq!(back.notifications[0].kind, "new_release");
     }
 }

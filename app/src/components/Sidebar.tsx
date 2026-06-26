@@ -13,9 +13,11 @@ import type { TransportHealth } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
 import { useDownloadsStore } from "../downloads/useDownloads";
+import { useNotificationsStore } from "../notifications/useNotifications";
 import { TransportStatus } from "./TransportStatus";
 import {
   ArtistIcon,
+  BellIcon,
   CloudOffIcon,
   DiscIcon,
   DownloadIcon,
@@ -39,7 +41,9 @@ type NavItem = {
   managerOnly?: boolean;
   /** Render in the secondary "LIBRARY" group instead of the primary group. */
   group?: "library";
-  badge?: "downloads" | "pending";
+  badge?: "downloads" | "pending" | "notifications";
+  /** Only for a logged-in *user* (bearer) session — hidden for `SECRET_KEY`. */
+  userOnly?: boolean;
   /** Dim + tooltip when offline — the route is connection-only. */
   requiresConnection?: boolean;
 };
@@ -49,6 +53,7 @@ const NAV: NavItem[] = [
   { to: "/library", label: "Library", Icon: DiscIcon },
   { to: "/search", label: "Search", Icon: SearchIcon },
   { to: "/playlists", label: "Playlists", Icon: PlaylistIcon, badge: "pending" },
+  { to: "/notifications", label: "Notifications", Icon: BellIcon, badge: "notifications", userOnly: true },
   { to: "/downloads", label: "Downloads", Icon: DownloadIcon, group: "library", badge: "downloads" },
   { to: "/upload", label: "Upload", Icon: UploadIcon, group: "library", managerOnly: true, requiresConnection: true },
   { to: "/uploads", label: "Upload reports", Icon: SyncIcon, group: "library", managerOnly: true, requiresConnection: true },
@@ -69,12 +74,14 @@ export default function Sidebar() {
   const pending = useSyncStore((s) => s.pending);
   const runSync = useSyncStore((s) => s.run);
   const downloads = useDownloadsStore((s) => s.storage);
+  const unread = useNotificationsStore((s) => s.unreadCount);
 
   if (!session) return null;
 
   const visible = (n: NavItem) =>
     (!n.adminOnly || tier === "admin") &&
-    (!n.managerOnly || tier === "admin" || tier === "manager");
+    (!n.managerOnly || tier === "admin" || tier === "manager") &&
+    (!n.userOnly || session.kind === "bearer");
 
   const primary = NAV.filter((n) => !n.group && visible(n));
   const library = NAV.filter((n) => n.group === "library" && visible(n));
@@ -88,6 +95,7 @@ export default function Sidebar() {
   const badgeFor = (n: NavItem): number | null => {
     if (n.badge === "downloads") return downloads?.track_count ?? null;
     if (n.badge === "pending") return pending > 0 ? pending : null;
+    if (n.badge === "notifications") return unread > 0 ? unread : null;
     return null;
   };
 
@@ -119,7 +127,9 @@ export default function Sidebar() {
             {count !== null && !gated && (
               <span
                 className={`font-mono text-[10.5px] ${
-                  n.badge === "pending" ? "text-oct-accent" : "text-oct-faint"
+                  n.badge === "pending" || n.badge === "notifications"
+                    ? "text-oct-accent"
+                    : "text-oct-faint"
                 }`}
               >
                 {count}

@@ -145,6 +145,13 @@ export const HeartIcon = ({ size = 16, ...rest }: IconProps) => (
   </svg>
 );
 
+export const BellIcon = (p: IconProps) => (
+  <Line sw={1.3} {...p}>
+    <path d="M8 2a3.4 3.4 0 0 0-3.4 3.4c0 3.1-1.2 4.1-1.2 4.1h9.2s-1.2-1-1.2-4.1A3.4 3.4 0 0 0 8 2Z" />
+    <path d="M6.6 12.4a1.6 1.6 0 0 0 2.8 0" />
+  </Line>
+);
+
 export const QueueIcon = (p: IconProps) => (
   <Line sw={1.4} {...p}>
     <path d="M2 4h9M2 8h9M2 12h6" />

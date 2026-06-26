@@ -7,6 +7,7 @@ pub mod auth_commands;
 pub mod cache_commands;
 pub mod download_commands;
 pub mod library_commands;
+pub mod notification_commands;
 pub mod playlist_commands;
 pub mod player_commands;
 pub mod sync_commands;

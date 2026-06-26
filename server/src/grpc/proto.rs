@@ -12,6 +12,10 @@ pub mod playlist {
     tonic::include_proto!("music.playlist.v1");
 }
 
+pub mod notification {
+    tonic::include_proto!("music.notification.v1");
+}
+
 pub mod upload {
     tonic::include_proto!("music.upload.v1");
 }

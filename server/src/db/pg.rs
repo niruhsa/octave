@@ -1216,6 +1216,121 @@ impl AuditRepo for PgRepos {
 }
 
 // ---------------------------------------------------------------------------
+// NotificationRepo
+// ---------------------------------------------------------------------------
+
+const NOTIFICATION_COLS: &str =
+    "id, user_id, kind, artist_id, album_id, title, body, read_at, created_at";
+
+#[async_trait]
+impl NotificationRepo for PgRepos {
+    async fn create(&self, new: NewNotification) -> Result<Notification> {
+        sqlx::query_as::<_, Notification>(&format!(
+            "INSERT INTO notifications (user_id, kind, artist_id, album_id, title, body) \
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING {NOTIFICATION_COLS}"
+        ))
+        .bind(new.user_id)
+        .bind(&new.kind)
+        .bind(new.artist_id)
+        .bind(new.album_id)
+        .bind(&new.title)
+        .bind(&new.body)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn create_many(&self, items: &[NewNotification]) -> Result<u64> {
+        if items.is_empty() {
+            return Ok(0);
+        }
+        // One multi-row INSERT (single round-trip) for the new-release fan-out.
+        let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO notifications (user_id, kind, artist_id, album_id, title, body) ",
+        );
+        qb.push_values(items, |mut b, item| {
+            b.push_bind(item.user_id)
+                .push_bind(&item.kind)
+                .push_bind(item.artist_id)
+                .push_bind(item.album_id)
+                .push_bind(&item.title)
+                .push_bind(&item.body);
+        });
+        let res = qb.build().execute(&self.pool).await.map_err(db)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn get(&self, id: Uuid) -> Result<Option<Notification>> {
+        sqlx::query_as::<_, Notification>(&format!(
+            "SELECT {NOTIFICATION_COLS} FROM notifications WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn list_for_user(
+        &self,
+        user_id: Uuid,
+        unread_only: bool,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Notification>> {
+        sqlx::query_as::<_, Notification>(&format!(
+            "SELECT {NOTIFICATION_COLS} FROM notifications \
+             WHERE user_id = $1 AND ($2 = FALSE OR read_at IS NULL) \
+             ORDER BY created_at DESC LIMIT $3 OFFSET $4"
+        ))
+        .bind(user_id)
+        .bind(unread_only)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn unread_count(&self, user_id: Uuid) -> Result<i64> {
+        let (n,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(n)
+    }
+
+    async fn mark_read(&self, user_id: Uuid, id: Uuid) -> Result<bool> {
+        // Guard on `read_at IS NULL` so a re-read keeps the original timestamp;
+        // scope on user_id so a caller can never flip another user's row.
+        let res = sqlx::query(
+            "UPDATE notifications SET read_at = now() \
+             WHERE id = $1 AND user_id = $2 AND read_at IS NULL",
+        )
+        .bind(id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn mark_all_read(&self, user_id: Uuid) -> Result<u64> {
+        let res = sqlx::query(
+            "UPDATE notifications SET read_at = now() \
+             WHERE user_id = $1 AND read_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(res.rows_affected())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SessionRepo
 // ---------------------------------------------------------------------------
 

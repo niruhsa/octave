@@ -226,6 +226,15 @@ pub fn run() {
             commands::library_commands::library_delete_album,
             commands::library_commands::library_delete_track,
             commands::library_commands::library_rescan,
+            // follows & notifications (Phase 10)
+            commands::notification_commands::follow_artist,
+            commands::notification_commands::unfollow_artist,
+            commands::notification_commands::is_following,
+            commands::notification_commands::list_following,
+            commands::notification_commands::notifications_list,
+            commands::notification_commands::notifications_unread_count,
+            commands::notification_commands::notifications_mark_read,
+            commands::notification_commands::notifications_mark_all_read,
             // playlists (Phase 7)
             commands::playlist_commands::playlist_list,
             commands::playlist_commands::playlist_get,

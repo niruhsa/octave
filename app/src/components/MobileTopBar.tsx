@@ -9,9 +9,11 @@ import { useNavigate } from "react-router-dom";
 import { authLogout, authRefreshTransports } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
+import { useNotificationsStore } from "../notifications/useNotifications";
 import { TransportStatus } from "./TransportStatus";
 import {
   ArtistIcon,
+  BellIcon,
   HomeIcon,
   MenuIcon,
   PlusIcon,
@@ -32,6 +34,7 @@ export default function MobileTopBar() {
   const pending = useSyncStore((s) => s.pending);
   const syncStatus = useSyncStore((s) => s.status);
   const runSync = useSyncStore((s) => s.run);
+  const unread = useNotificationsStore((s) => s.unreadCount);
 
   const [open, setOpen] = useState(false);
 
@@ -39,6 +42,8 @@ export default function MobileTopBar() {
 
   const isManager = tier === "admin" || tier === "manager";
   const isAdmin = tier === "admin";
+  // Only a logged-in user (bearer) has per-user follows + notifications.
+  const isUser = session.kind === "bearer";
 
   function go(to: string) {
     setOpen(false);
@@ -63,7 +68,7 @@ export default function MobileTopBar() {
         <span className="text-[15px] font-semibold tracking-[0.16em]">OCTAVE</span>
       </button>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3.5">
         <button
           onClick={async () => setTransports(await authRefreshTransports())}
           title="Re-check server"
@@ -71,6 +76,20 @@ export default function MobileTopBar() {
         >
           <TransportStatus transports={transports} compact />
         </button>
+        {isUser && (
+          <button
+            onClick={() => navigate("/notifications")}
+            aria-label="Notifications"
+            className="relative text-oct-muted"
+          >
+            <BellIcon size={19} />
+            {unread > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-oct-accent px-1 text-[9px] font-semibold leading-none text-black">
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
+          </button>
+        )}
         <button onClick={() => setOpen((v) => !v)} aria-label="Menu" className="text-oct-muted">
           <MenuIcon size={20} />
         </button>

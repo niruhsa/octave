@@ -725,6 +725,161 @@ impl RestClient {
         Ok(body.into())
     }
 
+    // ----- Follows & notifications (Phase 10) ----------------------------
+
+    pub async fn follow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        let url = format!("{}/artists/{artist_id}/follow", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("follow_artist"))?;
+        check_status(resp).await?;
+        Ok(true)
+    }
+
+    pub async fn unfollow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        let url = format!("{}/artists/{artist_id}/follow", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("unfollow_artist"))?;
+        check_status(resp).await?;
+        Ok(false)
+    }
+
+    pub async fn is_following(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
+        #[derive(Deserialize)]
+        struct Resp {
+            following: bool,
+        }
+        let url = format!("{}/artists/{artist_id}/follow", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("is_following"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("is_following decode"))?;
+        Ok(body.following)
+    }
+
+    pub async fn list_following(&self, cred: &Credential) -> AppResult<Vec<Artist>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            artists: Vec<ArtistJson>,
+        }
+        let url = format!("{}/following", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_following"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_following decode"))?;
+        Ok(body.artists.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_notifications(
+        &self,
+        cred: &Credential,
+        unread_only: bool,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> AppResult<super::NotificationPage> {
+        let mut url = format!("{}/notifications?unread={unread_only}", self.base);
+        if let Some(l) = limit {
+            url.push_str(&format!("&limit={l}"));
+        }
+        if let Some(o) = offset {
+            url.push_str(&format!("&offset={o}"));
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_notifications"))?;
+        let body: NotificationPageJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_notifications decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn notifications_unread_count(&self, cred: &Credential) -> AppResult<i64> {
+        #[derive(Deserialize)]
+        struct Resp {
+            unread_count: i64,
+        }
+        let url = format!("{}/notifications/unread-count", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("notifications_unread_count"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("notifications_unread_count decode"))?;
+        Ok(body.unread_count)
+    }
+
+    pub async fn mark_notification_read(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let url = format!("{}/notifications/mark-read", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "id": id }))
+            .send()
+            .await
+            .map_err(rest_err("mark_notification_read"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn mark_all_notifications_read(&self, cred: &Credential) -> AppResult<u64> {
+        #[derive(Deserialize)]
+        struct Resp {
+            marked: u64,
+        }
+        let url = format!("{}/notifications/mark-all-read", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("mark_all_notifications_read"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("mark_all_notifications_read decode"))?;
+        Ok(body.marked)
+    }
+
     // ----- Image upload (Phase 9; Manager+ gated, REST-only binary blob) ----
 
     /// `POST /albums/:id/cover` — raw `image/*` body. Returns `()`; the caller
@@ -1264,6 +1419,51 @@ pub struct RestWhoAmI {
     pub user_id: String,
     pub username: String,
     pub tier: PermissionTier,
+}
+
+#[derive(Deserialize)]
+struct NotificationJson {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    artist_id: Option<String>,
+    #[serde(default)]
+    album_id: Option<String>,
+    title: String,
+    #[serde(default)]
+    body: Option<String>,
+    read: bool,
+    created_at: String,
+}
+impl From<NotificationJson> for super::Notification {
+    fn from(n: NotificationJson) -> Self {
+        Self {
+            id: n.id,
+            kind: n.kind,
+            artist_id: n.artist_id,
+            album_id: n.album_id,
+            title: n.title,
+            body: n.body,
+            read: n.read,
+            created_at: n.created_at,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct NotificationPageJson {
+    notifications: Vec<NotificationJson>,
+    total: i64,
+    unread_count: i64,
+}
+impl From<NotificationPageJson> for super::NotificationPage {
+    fn from(p: NotificationPageJson) -> Self {
+        Self {
+            notifications: p.notifications.into_iter().map(Into::into).collect(),
+            total: p.total,
+            unread_count: p.unread_count,
+        }
+    }
 }
 
 fn auth_header(cred: &Credential) -> String {
