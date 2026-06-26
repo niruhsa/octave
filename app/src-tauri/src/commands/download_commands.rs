@@ -34,6 +34,13 @@ pub async fn download_track(
     state: State<'_, AppStateHandle>,
     track_id: String,
 ) -> AppResult<TrackDownloadResult> {
+    // Android: bring up the download foreground service while we're still
+    // foreground (the user just tapped Download) so the transfer survives the
+    // app being backgrounded / the screen locking — Android otherwise severs
+    // background network almost immediately. The guard stops it (releasing the
+    // wake / WiFi locks + notification) on every exit path. No-op on desktop.
+    crate::download_session::start(&app, "Downloading music", "1 track", -1);
+    let _fg = crate::download_session::ForegroundGuard::new(app.clone());
     manager(app, &state).await?.download_track(&track_id).await
 }
 
@@ -44,6 +51,9 @@ pub async fn download_album(
     state: State<'_, AppStateHandle>,
     album_id: String,
 ) -> AppResult<BatchDownloadResult> {
+    // Foreground service for the duration of the batch (see `download_track`).
+    crate::download_session::start(&app, "Downloading album", "Preparing…", -1);
+    let _fg = crate::download_session::ForegroundGuard::new(app.clone());
     manager(app, &state).await?.download_album(&album_id).await
 }
 
@@ -54,6 +64,9 @@ pub async fn download_playlist(
     state: State<'_, AppStateHandle>,
     playlist_id: String,
 ) -> AppResult<BatchDownloadResult> {
+    // Foreground service for the duration of the batch (see `download_track`).
+    crate::download_session::start(&app, "Downloading playlist", "Preparing…", -1);
+    let _fg = crate::download_session::ForegroundGuard::new(app.clone());
     manager(app, &state).await?.download_playlist(&playlist_id).await
 }
 

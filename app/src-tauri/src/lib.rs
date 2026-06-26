@@ -13,6 +13,7 @@ pub mod auth;
 pub mod cache;
 pub mod commands;
 pub mod db;
+pub mod download_session;
 pub mod downloads;
 pub mod error;
 pub mod library;
@@ -71,6 +72,11 @@ pub fn run() {
         // network alive (persistent notification + wake/WiFi locks) while the
         // app is backgrounded / screen-locked — see `upload_session`.
         .plugin(upload_session::init())
+        // Native Android download foreground service. Binds the Kotlin
+        // `DownloadServicePlugin`; no-op on desktop. Keeps a download (+ its
+        // network) alive while the app is backgrounded / screen-locked — see
+        // `download_session`. Mirrors `upload_session`.
+        .plugin(download_session::init())
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
         // (Playback no longer uses a custom protocol — see the loopback HTTP
@@ -130,6 +136,17 @@ pub fn run() {
                 token: token.to_string(),
             });
             tracing::info!(port, "media server listening on 127.0.0.1");
+
+            // Look-ahead prefetch cache: while a streamed track plays we fetch
+            // the next one to a temp file so it can be served locally at the
+            // track boundary (a hidden WebView won't start a network media
+            // load — see `player::prefetch`). Transient; cleared on launch.
+            let prefetch_dir = app
+                .path()
+                .app_cache_dir()
+                .unwrap_or_else(|_| app_data_dir.clone())
+                .join("octave-prefetch");
+            app.manage(player::prefetch::PrefetchCache::new(prefetch_dir));
 
             Ok(())
         })
@@ -222,6 +239,7 @@ pub fn run() {
             commands::player_commands::player_media_url,
             commands::player_commands::player_cover_url,
             commands::player_commands::player_action_url_base,
+            commands::player_commands::player_prefetch,
             // native media session (Android notification + lock screen)
             media_session::media_session_update,
             media_session::media_session_set_playback,

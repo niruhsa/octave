@@ -122,6 +122,7 @@ export default function Downloads() {
   async function remove(id: string) {
     try {
       await downloadDelete(id);
+      clear(id);
       await invalidateAfterDelete();
     } catch (e) {
       alert(formatError(e));
@@ -131,7 +132,10 @@ export default function Downloads() {
   async function removeGroup(trackIds: string[], label: string) {
     if (!window.confirm(`Remove ${trackIds.length} downloaded track${trackIds.length === 1 ? "" : "s"} from ${label}?`)) return;
     try {
-      for (const id of trackIds) await downloadDelete(id);
+      for (const id of trackIds) {
+        await downloadDelete(id);
+        clear(id);
+      }
       await invalidateAfterDelete();
     } catch (e) {
       alert(formatError(e));

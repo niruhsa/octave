@@ -1,10 +1,16 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import {
   QueryClient,
   QueryClientProvider,
   useQueryClient,
 } from "@tanstack/react-query";
-import { RouterProvider, createBrowserRouter, Outlet } from "react-router-dom";
+import {
+  RouterProvider,
+  createBrowserRouter,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import Home from "./routes/Home";
 import Login from "./routes/Login";
 import Library from "./routes/Library";
@@ -89,8 +95,46 @@ export function broadcastInvalidate(queryKey: string[]) {
   }
 }
 
+const ROUTE_KEY = "octave:route";
+
 function RootLayout() {
   const setSession = useAppStore((s) => s.setSession);
+
+  // Restore the last route on a cold launch, then record it as the user
+  // navigates. On mobile the OS can kill the backgrounded app; without this the
+  // WebView reloads at "/" and the user loses their place. (The playback queue
+  // is restored separately in the player store.)
+  const location = useLocation();
+  const navigate = useNavigate();
+  // `navigate(replace)` doesn't update `location` until the next render, so the
+  // recorder below would otherwise overwrite the saved route with "/" before the
+  // restore lands. Skip that one stale write.
+  const skipRecord = useRef(0);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ROUTE_KEY);
+      const here = location.pathname + location.search;
+      if (saved && saved !== here) {
+        skipRecord.current = 1;
+        navigate(saved, { replace: true });
+      }
+    } catch {
+      /* storage unavailable */
+    }
+    // Run once, on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (skipRecord.current > 0) {
+      skipRecord.current -= 1;
+      return;
+    }
+    try {
+      localStorage.setItem(ROUTE_KEY, location.pathname + location.search);
+    } catch {
+      /* storage unavailable */
+    }
+  }, [location]);
 
   // Phase 5: schedule reconcile on online-regain / focus.
   useSyncScheduler();

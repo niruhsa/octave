@@ -432,6 +432,16 @@ export const playerCoverUrl = (albumId: string) =>
 export const playerActionUrlBase = () =>
   invoke<string>("player_action_url_base");
 
+/**
+ * Ask Rust to prefetch a track to a local temp file (idempotent, fire-and-forget).
+ * Lets a streamed queue advance with the screen off: the next track is fetched
+ * to disk while the current plays, so the hidden WebView loads a local file at
+ * the boundary instead of a network stream (which it won't start). See
+ * `player::prefetch` on the Rust side.
+ */
+export const playerPrefetch = (trackId: string) =>
+  invoke<void>("player_prefetch", { trackId });
+
 // ---------------------------------------------------------------------------
 // native media session (Android system notification + lock screen)
 //

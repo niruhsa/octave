@@ -596,6 +596,11 @@ impl DownloadManager {
         track_ids: Vec<String>,
     ) -> AppResult<BatchDownloadResult> {
         let total = track_ids.len() as u32;
+        // Foreground-service notification title (Android; no-op on desktop).
+        let title = match kind {
+            BatchKind::Album => "Downloading album",
+            BatchKind::Playlist => "Downloading playlist",
+        };
         self.emit(ProgressEvent {
             scope: ProgressScope::Batch,
             id: batch_id.to_string(),
@@ -614,6 +619,19 @@ impl DownloadManager {
         let mut errors = Vec::new();
         for (i, tid) in track_ids.iter().enumerate() {
             let idx = (i + 1) as u32;
+            // Update the foreground-service notification with determinate
+            // progress by completed-track count (Android; no-op on desktop).
+            let pct = if total > 0 {
+                ((i as f64 / total as f64) * 100.0) as i32
+            } else {
+                0
+            };
+            crate::download_session::update(
+                &self.app,
+                title,
+                &format!("Track {idx} of {total}"),
+                pct,
+            );
             match self.download_track(tid).await {
                 Ok(r) => {
                     if r.skipped {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
@@ -17,6 +17,9 @@ import {
 } from "../ipc";
 import { Cover } from "../components/Cover";
 import { SourceBadge } from "../components/SourceBadge";
+import { DownloadStatus } from "../components/DownloadStatus";
+import { AddToPlaylistSheet } from "../components/AddToPlaylistSheet";
+import { ActionSheet, SheetItem } from "../components/ActionSheet";
 import { Aliases } from "../components/Aliases";
 import { EntityPicker } from "../components/EntityPicker";
 import { EqBars } from "../components/EqBars";
@@ -27,7 +30,7 @@ import { usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { broadcastInvalidate } from "../App";
 import { useAppStore } from "../store";
-import { btnDanger, btnGhost, btnGhostSm, btnPrimary, errorBox } from "../lib/ui";
+import { btnDanger, btnGhost, btnPrimary, errorBox } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
 import { SkeletonHero, SkeletonTracks } from "../components/Skeleton";
 import {
@@ -35,6 +38,7 @@ import {
   DownloadIcon,
   EditIcon,
   PlayIcon,
+  PlaylistIcon,
   ShuffleIcon,
   TrashIcon,
 } from "../components/icons";
@@ -84,6 +88,11 @@ export default function Album() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const currentId = currentIndex >= 0 ? queue[currentIndex]?.id : undefined;
   const refreshStorage = useDownloadsStore((s) => s.refreshStorage);
+  const clearDownload = useDownloadsStore((s) => s.clear);
+  // An album batch download in flight → mark this album's not-yet-started
+  // tracks "pending" so every row shows an indicator from the start.
+  const albumBatch = useDownloadsStore((s) => s.active[id]);
+  const batchActive = !!albumBatch && !albumBatch.done;
 
   // Metadata editor (Manager+). `null` = closed; a non-empty list opens the
   // single (1) or batch (>1) editor.
@@ -95,6 +104,14 @@ export default function Album() {
   const [mergingAlbum, setMergingAlbum] = useState(false);
   const [moveTrack, setMoveTrack] = useState<MergedTrack | null>(null);
   const [moveAsSingle, setMoveAsSingle] = useState(false);
+  // Mobile long-press action sheet — a touch device can't reach the hover-only
+  // row actions, so a press-and-hold opens them in a bottom sheet instead.
+  const [sheetTrack, setSheetTrack] = useState<MergedTrack | null>(null);
+  // "Add to playlist" picker — long-press → "Add to playlist…" opens it for the
+  // chosen track (so you never have to type the title into the playlist search).
+  const [addToPlaylist, setAddToPlaylist] = useState<MergedTrack | null>(null);
+  const pressTimer = useRef<number | null>(null);
+  const longPressed = useRef(false);
 
   async function onMetaSaved() {
     await qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] });
@@ -149,6 +166,7 @@ export default function Album() {
   async function removeTrack(track: MergedTrack) {
     try {
       await downloadDelete(track.id);
+      clearDownload(track.id);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] }),
         refreshStorage(),
@@ -174,6 +192,24 @@ export default function Album() {
       navigate("/library");
     } catch (e) {
       alert(formatError(e));
+    }
+  }
+
+  // Press-and-hold (touch) opens the per-track sheet; a quick tap still plays.
+  // Any movement (a scroll) cancels the pending long-press.
+  function startPress(t: MergedTrack) {
+    longPressed.current = false;
+    pressTimer.current = window.setTimeout(() => {
+      longPressed.current = true;
+      pressTimer.current = null;
+      setSheetTrack(t);
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, 450);
+  }
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
     }
   }
 
@@ -259,7 +295,7 @@ export default function Album() {
             </Link>
           )}
           {isManager && (
-            <div className="ml-auto flex items-center gap-3">
+            <div className="flex items-center gap-3 sm:ml-auto">
               <button
                 onClick={() => setEditTracks(items)}
                 className={`${btnGhost} hidden sm:inline-flex`}
@@ -269,7 +305,7 @@ export default function Album() {
               </button>
               <button
                 onClick={() => setMergingAlbum(true)}
-                className={btnGhostSm}
+                className={btnGhost}
                 {...offlineAttrs(online, false, "Merge a duplicate album into this one")}
               >
                 Merge album…
@@ -292,7 +328,7 @@ export default function Album() {
             <p className="text-sm text-oct-subtle">No tracks.</p>
           ) : (
             <>
-              <div className="grid grid-cols-[28px_1fr_110px_56px] items-center gap-x-4 border-b border-oct-border px-2 pb-2.5 font-mono text-[10.5px] tracking-[0.1em] text-oct-faint">
+              <div className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 border-b border-oct-border px-2 pb-2.5 font-mono text-[10.5px] tracking-[0.1em] text-oct-faint sm:grid-cols-[28px_minmax(0,1fr)_110px_56px]">
                 <span>#</span>
                 <span>TITLE</span>
                 <span className="hidden sm:block">QUALITY</span>
@@ -303,8 +339,21 @@ export default function Album() {
                 return (
                   <div
                     key={t.id}
-                    onClick={() => playTrack(t, items)}
-                    className={`group grid cursor-pointer grid-cols-[28px_1fr_110px_56px] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] ${
+                    onClick={() => {
+                      if (longPressed.current) {
+                        longPressed.current = false;
+                        return;
+                      }
+                      playTrack(t, items);
+                    }}
+                    onTouchStart={() => startPress(t)}
+                    onTouchEnd={(e) => {
+                      cancelPress();
+                      if (longPressed.current) e.preventDefault();
+                    }}
+                    onTouchMove={cancelPress}
+                    onContextMenu={(e) => e.preventDefault()}
+                    className={`group grid cursor-pointer select-none grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] sm:grid-cols-[28px_minmax(0,1fr)_110px_56px] ${
                       active ? "bg-oct-elevated" : "hover:bg-oct-elevated/50"
                     }`}
                   >
@@ -327,14 +376,14 @@ export default function Album() {
                           SINGLE
                         </span>
                       )}
-                      {t.downloaded && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-oct-accent" title="downloaded" />}
+                      <DownloadStatus trackId={t.id} downloaded={t.downloaded} pending={batchActive} />
                     </span>
                     <span className="hidden font-mono text-[11px] text-oct-subtle sm:block">
                       {qualityLabel(t)}
                     </span>
                     <span className="flex items-center justify-end gap-2">
                       <span
-                        className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+                        className="hidden items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 sm:flex"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {t.downloaded ? (
@@ -446,6 +495,89 @@ export default function Album() {
           onClose={() => setMoveTrack(null)}
         />
       )}
+
+      {sheetTrack && (
+        <TrackActionSheet
+          track={sheetTrack}
+          online={online}
+          isManager={isManager}
+          onClose={() => setSheetTrack(null)}
+          actions={{
+            play: () => { setSheetTrack(null); playTrack(sheetTrack, items); },
+            download: () => { setSheetTrack(null); void dlTrack(sheetTrack); },
+            removeDownload: () => { setSheetTrack(null); void removeTrack(sheetTrack); },
+            edit: () => { setSheetTrack(null); setEditTracks([sheetTrack]); },
+            move: () => { setSheetTrack(null); setMoveAsSingle(sheetTrack.is_single_release); setMoveTrack(sheetTrack); },
+            toggleSingle: () => { setSheetTrack(null); void toggleSingle(sheetTrack); },
+            del: () => { setSheetTrack(null); void delTrack(sheetTrack); },
+            addToPlaylist: () => { setSheetTrack(null); setAddToPlaylist(sheetTrack); },
+          }}
+        />
+      )}
+
+      {addToPlaylist && (
+        <AddToPlaylistSheet
+          trackId={addToPlaylist.id}
+          trackTitle={addToPlaylist.title}
+          onClose={() => setAddToPlaylist(null)}
+        />
+      )}
     </section>
+  );
+}
+
+type SheetActions = {
+  play: () => void;
+  download: () => void;
+  removeDownload: () => void;
+  edit: () => void;
+  toggleSingle: () => void;
+  move: () => void;
+  del: () => void;
+  addToPlaylist: () => void;
+};
+
+/** Mobile press-and-hold action sheet for a single track. */
+function TrackActionSheet({
+  track,
+  online,
+  isManager,
+  onClose,
+  actions,
+}: {
+  track: MergedTrack;
+  online: boolean;
+  isManager: boolean;
+  onClose: () => void;
+  actions: SheetActions;
+}) {
+  return (
+    <ActionSheet
+      title={track.title}
+      subtitle={`${qualityLabel(track)} · ${formatDuration(track.duration_ms)}`}
+      onClose={onClose}
+    >
+      <SheetItem icon={<PlayIcon size={13} />} label="Play" onClick={actions.play} />
+      {track.downloaded ? (
+        <SheetItem icon={<DownloadIcon size={16} />} label="Remove download" onClick={actions.removeDownload} />
+      ) : (
+        <SheetItem icon={<DownloadIcon size={16} />} label="Download" onClick={actions.download} disabled={!online} />
+      )}
+      <SheetItem icon={<PlaylistIcon size={16} />} label="Add to playlist…" onClick={actions.addToPlaylist} />
+      {isManager && (
+        <>
+          <div className="my-1.5 h-px bg-oct-border" />
+          <SheetItem icon={<EditIcon size={16} />} label="Edit metadata" onClick={actions.edit} disabled={!online} />
+          <SheetItem icon={<DiscIcon size={16} />} label="Move to album…" onClick={actions.move} disabled={!online} />
+          <SheetItem
+            icon={<span className="text-[14px] leading-none">{track.is_single_release ? "★" : "☆"}</span>}
+            label={track.is_single_release ? "Unmark single release" : "Mark as single release"}
+            onClick={actions.toggleSingle}
+            disabled={!online}
+          />
+          <SheetItem icon={<TrashIcon size={16} />} label="Delete from server" onClick={actions.del} disabled={!online} danger />
+        </>
+      )}
+    </ActionSheet>
   );
 }

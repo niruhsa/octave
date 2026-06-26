@@ -18,7 +18,7 @@ import { formatError } from "../lib/error";
 import { gradientFor } from "../lib/visual";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
-import { btnDangerSm, btnGhostSm } from "../lib/ui";
+import { btnDanger, btnGhost } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
 import { EditIcon, TrashIcon } from "../components/icons";
 import { SkeletonGrid } from "../components/Skeleton";
@@ -69,11 +69,16 @@ export default function Artist() {
 
   return (
     <section className="flex flex-col gap-6 p-6 md:p-8">
-      <header className="flex items-end gap-4">
+      <Link to="/library" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">
+        ← LIBRARY
+      </Link>
+
+      {/* hero */}
+      <header className="flex flex-col gap-5 sm:flex-row sm:items-end">
         {/* artist image hero — always attempted by id; hides on 404 */}
         <div className="relative shrink-0">
           <div
-            className="relative h-[88px] w-[88px] overflow-hidden rounded-full border border-oct-border"
+            className="relative h-[120px] w-[120px] overflow-hidden rounded-full border border-oct-border"
             style={{ background: gradientFor(id) }}
           >
             <BlurUpImage
@@ -92,32 +97,16 @@ export default function Artist() {
             </button>
           )}
         </div>
-        <div className="min-w-0 flex-1">
-          <Link to="/library" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">
-            ← LIBRARY
-          </Link>
-          <h1 className="mt-2 text-[27px] font-semibold tracking-tight">{artist?.name ?? "Artist"}</h1>
-          <p className="mt-1 font-mono text-[11.5px] text-oct-subtle">
-            {items.length} album{items.length === 1 ? "" : "s"}
-            {downloaded > 0 ? ` · ${downloaded} downloaded` : ""}
+        <div className="flex min-w-0 flex-col">
+          <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">ARTIST</span>
+          <h1 className="mt-1.5 text-3xl font-semibold tracking-tight sm:text-[34px]">{artist?.name ?? "Artist"}</h1>
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 text-[13px] text-oct-subtle">
+            <span className="font-mono">
+              {items.length} album{items.length === 1 ? "" : "s"}
+              {downloaded > 0 ? ` · ${downloaded} downloaded` : ""}
+            </span>
+            {q.data && <SourceBadge source={q.data.source} />}
           </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {q.data && <SourceBadge source={q.data.source} />}
-          {isManager && (
-            <>
-              <button
-                onClick={() => setMerging(true)}
-                className={btnGhostSm}
-                {...offlineAttrs(online, false, "Merge a duplicate artist into this one")}
-              >
-                Merge artist…
-              </button>
-              <button onClick={delArtist} className={btnDangerSm} {...offlineAttrs(online)}>
-                <TrashIcon size={13} /> Delete artist
-              </button>
-            </>
-          )}
         </div>
       </header>
 
@@ -132,6 +121,22 @@ export default function Artist() {
           isManager={isManager}
           onChanged={refreshArtist}
         />
+      )}
+
+      {/* actions (manager) */}
+      {isManager && (
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => setMerging(true)}
+            className={btnGhost}
+            {...offlineAttrs(online, false, "Merge a duplicate artist into this one")}
+          >
+            Merge artist…
+          </button>
+          <button onClick={delArtist} className={btnDanger} {...offlineAttrs(online)}>
+            <TrashIcon size={14} /> Delete artist
+          </button>
+        </div>
       )}
 
       {q.isLoading && <SkeletonGrid count={12} />}

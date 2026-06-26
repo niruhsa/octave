@@ -11,7 +11,7 @@
 
 import { create } from "zustand";
 import type { MergedTrack } from "../ipc";
-import { playerMediaUrl } from "../ipc";
+import { playerMediaUrl, playerPrefetch } from "../ipc";
 
 export type RepeatMode = "off" | "all" | "one";
 
@@ -51,15 +51,74 @@ export type PlayerState = {
   _bind: (el: HTMLAudioElement) => () => void;
 };
 
+// ---------------------------------------------------------------------------
+// persistence
+//
+// The store is otherwise in-memory. On mobile the OS routinely kills the
+// backgrounded app (screen off), which would drop the queue and dump the user
+// back on the home screen on relaunch. We mirror the durable slice of playback
+// state to localStorage (disk-backed, survives a process kill), flush it the
+// moment the app is backgrounded, and seed the store from it on the next
+// launch — restored paused, ready to resume.
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY = "octave:player";
+
+type PersistShape = {
+  queue: MergedTrack[];
+  currentIndex: number;
+  shuffle: boolean;
+  repeat: RepeatMode;
+  volume: number;
+  positionSec: number;
+};
+
+function loadPersisted(): PersistShape {
+  const empty: PersistShape = {
+    queue: [],
+    currentIndex: -1,
+    shuffle: false,
+    repeat: "off",
+    volume: 1,
+    positionSec: 0,
+  };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return empty;
+    const p = JSON.parse(raw) as Partial<PersistShape>;
+    if (!Array.isArray(p.queue)) return empty;
+    const queue = p.queue;
+    // Clamp the index into the restored queue so a corrupt value can't point
+    // past the end.
+    const idx =
+      queue.length > 0 && typeof p.currentIndex === "number"
+        ? Math.max(0, Math.min(p.currentIndex, queue.length - 1))
+        : -1;
+    return {
+      queue,
+      currentIndex: idx,
+      shuffle: !!p.shuffle,
+      repeat: p.repeat === "all" || p.repeat === "one" ? p.repeat : "off",
+      volume: typeof p.volume === "number" ? Math.max(0, Math.min(1, p.volume)) : 1,
+      positionSec:
+        typeof p.positionSec === "number" && idx >= 0 ? Math.max(0, p.positionSec) : 0,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+const restored = loadPersisted();
+
 export const usePlayerStore = create<PlayerState>((set, get) => ({
-  queue: [],
-  currentIndex: -1,
+  queue: restored.queue,
+  currentIndex: restored.currentIndex,
   isPlaying: false,
-  positionSec: 0,
+  positionSec: restored.positionSec,
   durationSec: 0,
-  volume: 1,
-  shuffle: false,
-  repeat: "off",
+  volume: restored.volume,
+  shuffle: restored.shuffle,
+  repeat: restored.repeat,
   error: null,
   audio: null,
 
@@ -156,10 +215,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (i >= 0 && i !== currentIndex) {
         // Re-derive so currentIndex still points at `current`.
         set({ shuffle: nowShuffling, queue: newQueue, currentIndex: i });
+        prefetchNext(get); // upcoming track changed — re-prime the look-ahead
         return;
       }
     }
     set({ shuffle: nowShuffling });
+    prefetchNext(get);
   },
 
   cycleRepeat: () => {
@@ -169,6 +230,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       one: "off",
     };
     set({ repeat: next[get().repeat] });
+    prefetchNext(get); // what plays next may have changed (e.g. repeat-one)
   },
 
   clearQueue: () => {
@@ -183,9 +245,20 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   _bind: (el) => {
     // Wire `<audio>` events into store state. Returns an unbind fn.
-    set({ audio: el, volume: el.volume });
+    set({ audio: el });
+    el.volume = get().volume; // apply restored (or default) volume to the element
+    primeRestored(get, el); // load a restored track at its saved position, paused
     const onPlay = () => set({ isPlaying: true });
-    const onPause = () => set({ isPlaying: false });
+    const onPause = () => {
+      // A track reaching its end fires `pause` right before `ended`. Ignore that
+      // one: next() is about to load the next track, and flipping isPlaying=false
+      // here makes the native MediaService drop its wake/WiFi lock + foreground
+      // status — so Android kills the screen-off process in the ~20ms gap before
+      // the next track starts. Genuine pauses are unaffected: a user tap pauses
+      // mid-track (not ended), and end-of-queue sets isPlaying=false in next().
+      if (el.ended || (el.duration > 0 && el.currentTime >= el.duration - 0.5)) return;
+      set({ isPlaying: false });
+    };
     const onTime = () =>
       set({ positionSec: el.currentTime, durationSec: el.duration || 0 });
     const onDuration = () => set({ durationSec: el.duration || 0 });
@@ -216,11 +289,101 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 }));
 
 // ---------------------------------------------------------------------------
+// persistence wiring
+// ---------------------------------------------------------------------------
+
+let _persistTimer: ReturnType<typeof setTimeout> | undefined;
+
+function writePersisted() {
+  try {
+    const s = usePlayerStore.getState();
+    const snap: PersistShape = {
+      queue: s.queue,
+      currentIndex: s.currentIndex,
+      shuffle: s.shuffle,
+      repeat: s.repeat,
+      volume: s.volume,
+      // `positionSec` already tracks the element clock via timeupdate/seeked
+      // events. Don't read `audio.currentTime` directly — during the post-launch
+      // prime window it's still 0 (not yet seeked), which would clobber the
+      // restored position with 0.
+      positionSec: s.positionSec,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
+  } catch {
+    /* storage full / unavailable — non-fatal */
+  }
+}
+
+/** Coalesce the ~4 Hz `timeupdate` churn into at most one write per second. */
+function schedulePersist() {
+  if (_persistTimer != null) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = undefined;
+    writePersisted();
+  }, 1000);
+}
+
+function flushPersisted() {
+  if (_persistTimer != null) {
+    clearTimeout(_persistTimer);
+    _persistTimer = undefined;
+  }
+  writePersisted();
+}
+
+usePlayerStore.subscribe(schedulePersist);
+
+if (typeof window !== "undefined") {
+  // Backgrounding / screen-off is exactly when the OS is about to kill us —
+  // flush the latest position synchronously before it does. `pagehide` is the
+  // reliable terminal event in WebViews (`beforeunload` often doesn't fire).
+  window.addEventListener("pagehide", flushPersisted);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPersisted();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
 type Get = () => PlayerState;
 type Set = (partial: Partial<PlayerState>) => void;
+
+/**
+ * On a cold launch with a restored queue, load the current track's source and
+ * seek to the saved position — but stay paused. Autoplay is blocked without a
+ * user gesture on a fresh load anyway; the user (or the media-notification play
+ * button) resumes from exactly where the OS killed us.
+ */
+function primeRestored(get: Get, el: HTMLAudioElement) {
+  const { queue, currentIndex, positionSec, isPlaying } = get();
+  const track = queue[currentIndex];
+  if (!track || el.src || isPlaying) return;
+  const wantPos = positionSec;
+  playerMediaUrl(track.id)
+    .then((url: string) => {
+      const st = get();
+      // Bail if playback started or the track changed while we resolved the URL.
+      if (st.isPlaying || el.src || st.queue[st.currentIndex]?.id !== track.id) return;
+      el.src = url;
+      if (wantPos > 0) {
+        const seek = () => {
+          el.removeEventListener("loadedmetadata", seek);
+          try {
+            el.currentTime = wantPos;
+          } catch {
+            /* metadata not ready — leave at 0 */
+          }
+        };
+        el.addEventListener("loadedmetadata", seek);
+      }
+    })
+    .catch(() => {
+      /* offline / not downloaded — leave it for the user to retry */
+    });
+}
 
 /** Load the track at `index`, set it as src, and start playback. */
 function loadAndPlay(_get: Get, set: Set, index: number) {
@@ -228,6 +391,9 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
   const track = queue[index];
   if (!track || !audio) return;
   set({ currentIndex: index, positionSec: 0, durationSec: 0, error: null });
+  // Kick off the next track's prefetch in parallel with this one's load, so it's
+  // a local file by the time we reach it (screen-off auto-advance — see below).
+  prefetchNext(_get);
   playerMediaUrl(track.id)
     .then((url: string) => {
       // Guard against races: a rapid skip could have moved currentIndex.
@@ -237,6 +403,29 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
       void audio.play().catch((e: unknown) => reportPlayError(set, e));
     })
     .catch((e) => set({ error: formatErr(e) }));
+}
+
+/**
+ * Fire-and-forget prefetch of the track that will play after the current one,
+ * so a *streamed* queue can advance with the screen off. A hidden WebView won't
+ * start a network media load, but it will load a local file — and Rust fetches
+ * the next track to disk while this one plays (see `playerPrefetch`). Idempotent
+ * on the Rust side, so redundant calls are cheap no-ops. For repeat-one we
+ * prefetch the current track, since it reloads at `ended` (also screen-off).
+ */
+function prefetchNext(_get: Get) {
+  const { queue, currentIndex, repeat } = _get();
+  if (currentIndex < 0 || queue.length === 0) return;
+  let n: number;
+  if (repeat === "one") {
+    n = currentIndex;
+  } else {
+    n = currentIndex + 1;
+    if (n >= queue.length) n = repeat === "all" ? 0 : -1;
+  }
+  if (n < 0) return;
+  const next = queue[n];
+  if (next) void playerPrefetch(next.id).catch(() => {});
 }
 
 /**

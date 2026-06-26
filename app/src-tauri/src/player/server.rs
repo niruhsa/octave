@@ -38,6 +38,7 @@
 
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Router,
@@ -106,6 +107,7 @@ struct ActionQuery {
 }
 
 #[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct MediaActionEvent {
     action: String,
     position_ms: Option<i64>,
@@ -155,6 +157,19 @@ async fn serve(
         Ok(Some(row)) => return serve_local(&row.local_file_path, &headers, &method).await,
         Ok(None) => { /* fall through to the server stream */ }
         Err(e) => tracing::warn!(err = %e, track = %id, "cache lookup failed; trying server"),
+    }
+
+    // 1b. Look-ahead prefetch hit → serve the temp file like a local one. This
+    // is what lets a *streamed* track advance with the screen off: the next
+    // track was fetched to disk while the previous one played, so the webview
+    // loads a local file (never suspended) instead of a network stream (which
+    // the hidden WebView won't start). See `super::prefetch`.
+    if let Some(cache) = st.app.try_state::<crate::player::prefetch::PrefetchCache>() {
+        if let Some((path, content_type)) = cache.ready(&id) {
+            if let Some(p) = path.to_str() {
+                return serve_local_typed(p, &content_type, &headers, &method).await;
+            }
+        }
     }
 
     // 2. Server stream — needs an auth manager + credential.
@@ -261,6 +276,17 @@ async fn proxy_cover(
 // ---------------------------------------------------------------------------
 
 async fn serve_local(path: &str, headers: &HeaderMap, method: &Method) -> Response {
+    serve_local_typed(path, guess_mime(&PathBuf::from(path)), headers, method).await
+}
+
+/// Like [`serve_local`] but with an explicit Content-Type — used for prefetched
+/// temp files, which carry no extension for [`guess_mime`] to read.
+async fn serve_local_typed(
+    path: &str,
+    content_type: &str,
+    headers: &HeaderMap,
+    method: &Method,
+) -> Response {
     let path = PathBuf::from(path);
     let meta = match tokio::fs::metadata(&path).await {
         Ok(m) => m,
@@ -273,7 +299,6 @@ async fn serve_local(path: &str, headers: &HeaderMap, method: &Method) -> Respon
         return (StatusCode::NOT_FOUND, "not a file").into_response();
     }
     let total = meta.len();
-    let content_type = guess_mime(&path);
 
     // Resolve the byte window. No `Range` (or a malformed one, per RFC 7233
     // §3.1) → the whole file as `200`; a satisfiable range → `206`; a parsed
@@ -397,7 +422,16 @@ fn parse_range(header: &str, total: u64) -> Rng {
 /// One shared HTTP client for all proxying. Rebuilding a client per range
 /// request (the `<audio>` element issues many) would thrash the TLS session
 /// cache and add latency — audible as stutter on seek.
-fn proxy_client() -> AppResult<&'static reqwest::Client> {
+///
+/// The timeouts matter for background (screen-off) playback. The `<audio>`
+/// element buffers a track ahead, so its proxy connection then sits idle for
+/// minutes; when the radio sleeps that socket dies silently. Without a short
+/// idle timeout the *next* track would pick that dead connection out of the pool
+/// and hang forever (no error, playback just stops) — so we prune idle
+/// connections aggressively and bound `connect`, turning a would-be hang into a
+/// fast fresh connection (or a clean `error` the UI can show). No overall
+/// request timeout: streaming a whole track legitimately takes minutes.
+pub(crate) fn proxy_client() -> AppResult<&'static reqwest::Client> {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(c) = CLIENT.get() {
@@ -405,6 +439,9 @@ fn proxy_client() -> AppResult<&'static reqwest::Client> {
     }
     let c = reqwest::Client::builder()
         .use_rustls_tls()
+        .connect_timeout(Duration::from_secs(15))
+        .pool_idle_timeout(Duration::from_secs(20))
+        .tcp_keepalive(Duration::from_secs(20))
         .build()
         .map_err(|e| AppError::Transport(format!("proxy client: {e}")))?;
     Ok(CLIENT.get_or_init(|| c))
@@ -455,7 +492,7 @@ async fn proxy_stream(
         .map_err(|e| AppError::Internal(format!("build response: {e}")))
 }
 
-fn auth_header_value(cred: &Credential) -> AppResult<axum::http::HeaderValue> {
+pub(crate) fn auth_header_value(cred: &Credential) -> AppResult<axum::http::HeaderValue> {
     let s = match cred {
         Credential::SecretKey(k) => format!("SecretKey {k}"),
         Credential::Bearer(t) => format!("Bearer {t}"),

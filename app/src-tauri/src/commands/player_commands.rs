@@ -39,3 +39,12 @@ pub async fn player_action_url_base(
 ) -> AppResult<String> {
     Ok(action_base_url(media.port, &media.token))
 }
+
+/// Prefetch the next track to a local temp file so it can advance with the
+/// screen off. The webview calls this when a track starts playing; the work
+/// happens in the background and is idempotent (see `player::prefetch`).
+#[tauri::command]
+pub async fn player_prefetch(app: tauri::AppHandle, track_id: String) -> AppResult<()> {
+    crate::player::prefetch::spawn(app, track_id);
+    Ok(())
+}

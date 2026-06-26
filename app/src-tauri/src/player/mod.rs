@@ -15,4 +15,5 @@
 //! See [`server`]'s module docs for why this replaced the old `media://`
 //! custom protocol (which can't stream, and is unusable for media on Android).
 
+pub mod prefetch;
 pub mod server;

@@ -930,21 +930,36 @@ async fn run_job(
         let app2 = app.clone();
         let job2 = job_id.clone();
         let hint2 = hint.clone();
-        let mut last = std::time::Instant::now();
-        let file_init = prepare_file(filename, &data, |done, total| {
-            if last.elapsed() >= Duration::from_millis(150) {
-                let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100);
-                emit_prepare(
-                    &app2,
-                    &job2,
-                    idx as u64,
-                    total_items,
-                    &hint2,
-                    &format!("Hashing file {fileno}/{total_items} · {pct}%"),
-                );
-                last = std::time::Instant::now();
+        // Hashing is CPU-bound and a large album file is hundreds of MB — run it
+        // on a blocking thread so it never stalls the async runtime. `data` moves
+        // in and back out (ownership transfer, no copy) because the Android
+        // staging path below still needs the bytes.
+        let (file_init, data) = match tokio::task::spawn_blocking(move || {
+            let mut last = std::time::Instant::now();
+            let file_init = prepare_file(filename, &data, |done, total| {
+                if last.elapsed() >= Duration::from_millis(150) {
+                    let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100);
+                    emit_prepare(
+                        &app2,
+                        &job2,
+                        idx as u64,
+                        total_items,
+                        &hint2,
+                        &format!("Hashing file {fileno}/{total_items} · {pct}%"),
+                    );
+                    last = std::time::Instant::now();
+                }
+            });
+            (file_init, data)
+        })
+        .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                errors.push(format!("{hint}: hashing failed: {e}"));
+                continue;
             }
-        });
+        };
         // Resolve the effective source path. An Android `content://` URI is
         // **copied** into app-private staging now (while the SAF read grant is
         // still valid) so a later resume — after a force-quit dropped the grant —

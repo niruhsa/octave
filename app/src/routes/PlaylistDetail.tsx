@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import {
+  downloadDelete,
   downloadPlaylist,
+  downloadTrack,
   librarySearchTracks,
   playlistAddTrack,
   playlistDelete,
@@ -13,6 +15,9 @@ import {
   type MergedPlaylistEntry,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
+import { DownloadStatus } from "../components/DownloadStatus";
+import { ActionSheet, SheetItem } from "../components/ActionSheet";
+import { AddToPlaylistSheet } from "../components/AddToPlaylistSheet";
 import { EqBars } from "../components/EqBars";
 import {
   DownloadIcon,
@@ -50,12 +55,20 @@ export default function PlaylistDetail() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const currentId = currentIndex >= 0 ? queue[currentIndex]?.id : undefined;
   const refreshStorage = useDownloadsStore((s) => s.refreshStorage);
+  // Playlist batch download in flight → mark not-yet-started rows "pending".
+  const dlBatch = useDownloadsStore((s) => s.active[id]);
+  const batchActive = !!dlBatch && !dlBatch.done;
+  const clearDownload = useDownloadsStore((s) => s.clear);
 
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");
   const [addQuery, setAddQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Mobile long-press action sheet for a playlist entry + the add-to-playlist
+  // picker it can open.
+  const [sheetEntry, setSheetEntry] = useState<MergedPlaylistEntry | null>(null);
+  const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<{ id: string; title: string } | null>(null);
 
   const q = useQuery({
     queryKey: ["playlists", "detail", id],
@@ -148,6 +161,23 @@ export default function PlaylistDetail() {
     });
     setBusy(false);
   }
+  async function dlTrack(trackId: string) {
+    setBusy(true);
+    await guard(async () => {
+      await downloadTrack(trackId);
+      await Promise.all([refresh(), refreshStorage()]);
+    });
+    setBusy(false);
+  }
+  async function rmTrackDownload(trackId: string) {
+    setBusy(true);
+    await guard(async () => {
+      await downloadDelete(trackId);
+      clearDownload(trackId);
+      await Promise.all([refresh(), refreshStorage()]);
+    });
+    setBusy(false);
+  }
 
   const playableCount = useMemo(
     () => entries.filter((e) => e.track.downloaded || online).length,
@@ -232,7 +262,7 @@ export default function PlaylistDetail() {
             <DownloadIcon size={14} /> Download all
           </button>
           {!renaming && <button onClick={startRename} className={btnGhost}>Rename</button>}
-          <button onClick={remove} disabled={busy} className={`${btnDanger} ml-auto`}>Delete</button>
+          <button onClick={remove} disabled={busy} className={`${btnDanger} sm:ml-auto`}>Delete</button>
         </div>
       )}
 
@@ -285,6 +315,8 @@ export default function PlaylistDetail() {
                 online={online}
                 active={e.track.id === currentId}
                 playing={isPlaying}
+                batchActive={batchActive}
+                onLongPress={() => setSheetEntry(e)}
                 onPlay={() => playQueue(entries.map((x) => x.track), i)}
                 onRemove={() => removeAt(e.position)}
                 onUp={() => move(e.position, e.position - 1)}
@@ -294,12 +326,65 @@ export default function PlaylistDetail() {
           </>
         )}
       </div>
+
+      {sheetEntry && (
+        <PlaylistEntryActionSheet
+          entry={sheetEntry}
+          total={entries.length}
+          canEdit={canEdit}
+          online={online}
+          onClose={() => setSheetEntry(null)}
+          onPlay={() => {
+            const i = entries.findIndex((x) => x.position === sheetEntry.position);
+            setSheetEntry(null);
+            if (i >= 0) playQueue(entries.map((x) => x.track), i);
+          }}
+          onAddToPlaylist={() => {
+            const tr = sheetEntry.track;
+            setSheetEntry(null);
+            setAddToPlaylistTrack({ id: tr.id, title: tr.title });
+          }}
+          onDownload={() => {
+            const tid = sheetEntry.track.id;
+            setSheetEntry(null);
+            void dlTrack(tid);
+          }}
+          onRemoveDownload={() => {
+            const tid = sheetEntry.track.id;
+            setSheetEntry(null);
+            void rmTrackDownload(tid);
+          }}
+          onMoveUp={() => {
+            const p = sheetEntry.position;
+            setSheetEntry(null);
+            void move(p, p - 1);
+          }}
+          onMoveDown={() => {
+            const p = sheetEntry.position;
+            setSheetEntry(null);
+            void move(p, p + 1);
+          }}
+          onRemove={() => {
+            const p = sheetEntry.position;
+            setSheetEntry(null);
+            void removeAt(p);
+          }}
+        />
+      )}
+
+      {addToPlaylistTrack && (
+        <AddToPlaylistSheet
+          trackId={addToPlaylistTrack.id}
+          trackTitle={addToPlaylistTrack.title}
+          onClose={() => setAddToPlaylistTrack(null)}
+        />
+      )}
     </section>
   );
 }
 
 function PlaylistEntryRow({
-  entry, index, total, canEdit, busy, online, active, playing, onPlay, onRemove, onUp, onDown,
+  entry, index, total, canEdit, busy, online, active, playing, batchActive, onLongPress, onPlay, onRemove, onUp, onDown,
 }: {
   entry: MergedPlaylistEntry;
   index: number;
@@ -309,6 +394,8 @@ function PlaylistEntryRow({
   online: boolean;
   active: boolean;
   playing: boolean;
+  batchActive: boolean;
+  onLongPress: () => void;
   onPlay: () => void;
   onRemove: () => void;
   onUp: () => void;
@@ -316,10 +403,40 @@ function PlaylistEntryRow({
 }) {
   const t = entry.track;
   const unavailable = !t.downloaded && !online;
+  const pressTimer = useRef<number | null>(null);
+  const longPressed = useRef(false);
+  function startPress() {
+    longPressed.current = false;
+    pressTimer.current = window.setTimeout(() => {
+      longPressed.current = true;
+      pressTimer.current = null;
+      onLongPress();
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, 450);
+  }
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  }
   return (
     <div
-      onClick={onPlay}
-      className={`group grid cursor-pointer grid-cols-[28px_1fr_56px] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] ${
+      onClick={() => {
+        if (longPressed.current) {
+          longPressed.current = false;
+          return;
+        }
+        onPlay();
+      }}
+      onTouchStart={startPress}
+      onTouchEnd={(e) => {
+        cancelPress();
+        if (longPressed.current) e.preventDefault();
+      }}
+      onTouchMove={cancelPress}
+      onContextMenu={(e) => e.preventDefault()}
+      className={`group grid cursor-pointer select-none grid-cols-[28px_1fr_56px] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] ${
         active ? "bg-oct-elevated" : "hover:bg-oct-elevated/50"
       }`}
     >
@@ -327,14 +444,14 @@ function PlaylistEntryRow({
         {active ? <EqBars playing={playing} /> : <span className="font-mono text-xs text-oct-faint">{entry.position}</span>}
       </span>
       <span className="flex min-w-0 items-center gap-2">
-        <DownloadedDot downloaded={t.downloaded} />
+        <DownloadStatus trackId={t.id} downloaded={t.downloaded} pending={batchActive} streamDot />
         <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
           {t.title || <span className="italic text-oct-faint">{unavailable ? "not available offline" : "(unknown track)"}</span>}
         </span>
       </span>
       <span className="flex items-center justify-end gap-2">
         {canEdit && (
-          <span className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+          <span className="hidden items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 sm:flex" onClick={(e) => e.stopPropagation()}>
             <button onClick={onUp} disabled={busy || index === 0} title="Move up" className="text-oct-dim hover:text-oct-text disabled:opacity-30">↑</button>
             <button onClick={onDown} disabled={busy || index === total - 1} title="Move down" className="text-oct-dim hover:text-oct-text disabled:opacity-30">↓</button>
             <button onClick={onRemove} disabled={busy} title="Remove" className="text-oct-dim hover:text-oct-danger disabled:opacity-40">✕</button>
@@ -345,5 +462,60 @@ function PlaylistEntryRow({
         </span>
       </span>
     </div>
+  );
+}
+
+function PlaylistEntryActionSheet({
+  entry,
+  total,
+  canEdit,
+  online,
+  onClose,
+  onPlay,
+  onAddToPlaylist,
+  onDownload,
+  onRemoveDownload,
+  onMoveUp,
+  onMoveDown,
+  onRemove,
+}: {
+  entry: MergedPlaylistEntry;
+  total: number;
+  canEdit: boolean;
+  online: boolean;
+  onClose: () => void;
+  onPlay: () => void;
+  onAddToPlaylist: () => void;
+  onDownload: () => void;
+  onRemoveDownload: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRemove: () => void;
+}) {
+  const t = entry.track;
+  const isFirst = entry.position <= 1;
+  const isLast = entry.position >= total;
+  return (
+    <ActionSheet
+      title={t.title || "Track"}
+      subtitle={t.duration_ms > 0 ? formatDuration(t.duration_ms) : undefined}
+      onClose={onClose}
+    >
+      <SheetItem icon={<PlayIcon size={13} />} label="Play" onClick={onPlay} />
+      <SheetItem icon={<PlaylistIcon size={16} />} label="Add to playlist…" onClick={onAddToPlaylist} />
+      {t.downloaded ? (
+        <SheetItem icon={<DownloadIcon size={16} />} label="Remove download" onClick={onRemoveDownload} />
+      ) : (
+        <SheetItem icon={<DownloadIcon size={16} />} label="Download" onClick={onDownload} disabled={!online} />
+      )}
+      {canEdit && (
+        <>
+          <div className="my-1.5 h-px bg-oct-border" />
+          <SheetItem icon={<span className="text-[15px] leading-none">↑</span>} label="Move up" onClick={onMoveUp} disabled={isFirst} />
+          <SheetItem icon={<span className="text-[15px] leading-none">↓</span>} label="Move down" onClick={onMoveDown} disabled={isLast} />
+          <SheetItem icon={<span className="text-[13px] leading-none">✕</span>} label="Remove from playlist" onClick={onRemove} />
+        </>
+      )}
+    </ActionSheet>
   );
 }

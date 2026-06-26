@@ -59,7 +59,14 @@ url = "2"
 async-trait = "0.1"
 tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"
-sha2 = "0.10"
+# Upload hashing (per-chunk + whole-file SHA-256). The `asm` feature pulls in
+# the crate's hardware-accelerated backends: ARMv8 crypto extensions on aarch64
+# (Android phones, Apple Silicon) and the SHA-NI fallback on x86. Without it,
+# aarch64 silently uses the pure-software path — ~5-10x slower, which is the
+# stall felt when hashing large album files on mobile. The backend does runtime
+# CPU detection (cpufeatures) and falls back to software, so it's safe on any
+# device. Pure SHA-256, so no upload-protocol change vs. the server.
+sha2 = { version = "0.10", features = ["asm"] }
 
 # Secure credential storage. `keyring` covers macOS/Windows/Linux; Android
 # falls back to a file in app-private storage (encrypted by the platform).
