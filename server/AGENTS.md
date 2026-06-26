@@ -57,7 +57,7 @@ Permission levels (each inherits the level below):
 - `ARTWORK_PATH` — directory where fetched cover images are cached. Path-typed. Defaults to `<LIBRARY_PATH>/.artwork` when unset.
 - `FCM_ENABLED` — `1`/`true` to enable real-time push (Firebase Cloud Messaging) of new-release notifications to followers' registered devices. Default off (clients poll instead). When on, `FCM_PROJECT_ID` + `FCM_CREDENTIALS` are both required (a missing one is a hard config error).
 - `FCM_PROJECT_ID` — Firebase project id (embedded in the FCM `messages:send` URL). Required when `FCM_ENABLED`.
-- `FCM_CREDENTIALS` — path to a Google **service-account JSON key** (used to mint the OAuth2 token for the FCM HTTP v1 API). Path-typed. Required when `FCM_ENABLED`; only the path is held, never the key bytes.
+- `FCM_CREDENTIALS` — path to a Google **service-account JSON key** (used to mint the OAuth2 token for the FCM HTTP v1 API). Path-typed. Required when `FCM_ENABLED`; only the path is held, never the key bytes. **Setup walkthrough:** [`FIREBASE_NOTIFICATIONS.md`](../FIREBASE_NOTIFICATIONS.md).
 - `ENV_FILE` — explicit override for the `.env` file location.
 
 ### `.env` loading & path resolution

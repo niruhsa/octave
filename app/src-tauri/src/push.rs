@@ -56,7 +56,11 @@ fn fcm_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     let h = guard.as_ref()?;
     let reply: TokenReply = h.run_mobile_plugin("getToken", ()).ok()?;
     let t = reply.token.trim().to_string();
-    if t.is_empty() { None } else { Some(t) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -66,7 +70,7 @@ fn delete_fcm_token<R: Runtime>(app: &AppHandle<R>) {
         if let Some(h) = guard.as_ref() {
             let _ = h.run_mobile_plugin::<serde_json::Value>("deleteToken", ());
         }
-    }
+    };
 }
 
 /// Register this device for FCM push: fetch the token + register it with the

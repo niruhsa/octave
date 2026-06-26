@@ -30,3 +30,4 @@ designs
 .agents
 agent
 skills-lock.json
+**/google-services.json

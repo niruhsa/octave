@@ -81,5 +81,6 @@ This repo keeps documentation layered so each domain owns its own status:
 - **[`AGENTS.md`](./AGENTS.md)** — whole-system overview, architecture, cross-cutting conventions.
 - **[`server/AGENTS.md`](./server/AGENTS.md)** — server architecture, responsibilities, env vars, status.
 - **[`app/AGENTS.md`](./app/AGENTS.md)** — client architecture, platforms, build, status.
+- **[`FIREBASE_NOTIFICATIONS.md`](./FIREBASE_NOTIFICATIONS.md)** — step-by-step setup for real-time push notifications (Firebase Cloud Messaging) on Android.
 
 **Maintenance rule:** when work changes a domain, update that domain's `AGENTS.md` first, then propagate high-level/status changes up to the root [`AGENTS.md`](./AGENTS.md) and this `README.md`. Keep the **Status** sections here and in each `AGENTS.md` in sync.
