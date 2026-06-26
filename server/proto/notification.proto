@@ -39,13 +39,15 @@ message FollowedArtist {
 
 message Notification {
   string id = 1;
-  string kind = 2;        // e.g. "new_release"
-  string artist_id = 3;   // empty when the artist was since deleted
-  string album_id = 4;    // empty when the album was since deleted
+  string kind = 2;        // "new_release" (music) or "new_episode" (podcast)
+  string artist_id = 3;   // empty when unset / the artist was since deleted
+  string album_id = 4;    // empty when unset / the album was since deleted
   string title = 5;
   string body = 6;        // empty when unset
   bool read = 7;
   string created_at = 8;
+  string podcast_id = 9;  // empty when unset / the podcast was since deleted
+  string episode_id = 10; // empty when unset / the episode was since deleted
 }
 
 // ---------------------------------------------------------------------------

@@ -91,6 +91,7 @@ notify = "6"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
+    "stream",
 ] }
 
 # Archive uploads (Phase 6): zip + tarball extraction. ISO/CD are stubbed.
@@ -106,6 +107,14 @@ sha2 = "0.10"
 # (HTTP v1 API). `jsonwebtoken` signs the service-account JWT used to mint the
 # OAuth2 access token; the HTTP calls reuse `reqwest`. Only used when FCM_ENABLED.
 jsonwebtoken = "9"
+
+# Podcasts: RSS/Atom feed parsing (`feed-rs` handles RSS 2.0 + Atom + media/
+# itunes namespaces). `sha1` signs the optional PodcastIndex API auth header
+# (their scheme is SHA-1, distinct from the `sha2` used for upload chunks).
+# `futures-util` streams an episode download to disk without buffering it all.
+feed-rs = "2"
+sha1 = "0.10"
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

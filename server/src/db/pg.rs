@@ -6,7 +6,7 @@
 //! DB is part of every contributor's workflow.
 
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -1267,19 +1267,22 @@ impl AuditRepo for PgRepos {
 // ---------------------------------------------------------------------------
 
 const NOTIFICATION_COLS: &str =
-    "id, user_id, kind, artist_id, album_id, title, body, read_at, created_at";
+    "id, user_id, kind, artist_id, album_id, podcast_id, episode_id, title, body, read_at, created_at";
 
 #[async_trait]
 impl NotificationRepo for PgRepos {
     async fn create(&self, new: NewNotification) -> Result<Notification> {
         sqlx::query_as::<_, Notification>(&format!(
-            "INSERT INTO notifications (user_id, kind, artist_id, album_id, title, body) \
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING {NOTIFICATION_COLS}"
+            "INSERT INTO notifications \
+               (user_id, kind, artist_id, album_id, podcast_id, episode_id, title, body) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {NOTIFICATION_COLS}"
         ))
         .bind(new.user_id)
         .bind(&new.kind)
         .bind(new.artist_id)
         .bind(new.album_id)
+        .bind(new.podcast_id)
+        .bind(new.episode_id)
         .bind(&new.title)
         .bind(&new.body)
         .fetch_one(&self.pool)
@@ -1291,15 +1294,19 @@ impl NotificationRepo for PgRepos {
         if items.is_empty() {
             return Ok(0);
         }
-        // One multi-row INSERT (single round-trip) for the new-release fan-out.
+        // One multi-row INSERT (single round-trip) for the new-release /
+        // new-episode fan-out.
         let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
-            "INSERT INTO notifications (user_id, kind, artist_id, album_id, title, body) ",
+            "INSERT INTO notifications \
+               (user_id, kind, artist_id, album_id, podcast_id, episode_id, title, body) ",
         );
         qb.push_values(items, |mut b, item| {
             b.push_bind(item.user_id)
                 .push_bind(&item.kind)
                 .push_bind(item.artist_id)
                 .push_bind(item.album_id)
+                .push_bind(item.podcast_id)
+                .push_bind(item.episode_id)
                 .push_bind(&item.title)
                 .push_bind(&item.body);
         });
@@ -1676,5 +1683,359 @@ impl UploadRepo for PgRepos {
         .fetch_one(&self.pool)
         .await
         .map_err(db)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PodcastRepo
+// ---------------------------------------------------------------------------
+
+const PODCAST_COLS: &str = "id, feed_url, title, author, description, image_path, image_url, \
+     link, language, categories, itunes_id, podcastindex_id, auto_download, \
+     last_refreshed_at, last_etag, last_modified, created_at, updated_at";
+
+#[async_trait]
+impl PodcastRepo for PgRepos {
+    async fn upsert_by_feed_url(&self, new: NewPodcast) -> Result<Podcast> {
+        // The conflict path refreshes the feed-derived metadata only — it never
+        // clobbers `image_path` (cached separately), `auto_download` (set by the
+        // manager), or the refresh bookkeeping (`last_*`).
+        sqlx::query_as::<_, Podcast>(&format!(
+            "INSERT INTO podcasts \
+               (feed_url, title, author, description, image_url, link, language, \
+                categories, itunes_id, podcastindex_id, auto_download) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (feed_url) DO UPDATE SET \
+               title = EXCLUDED.title, author = EXCLUDED.author, \
+               description = EXCLUDED.description, image_url = EXCLUDED.image_url, \
+               link = EXCLUDED.link, language = EXCLUDED.language, \
+               categories = EXCLUDED.categories, itunes_id = EXCLUDED.itunes_id, \
+               podcastindex_id = EXCLUDED.podcastindex_id, updated_at = now() \
+             RETURNING {PODCAST_COLS}"
+        ))
+        .bind(&new.feed_url)
+        .bind(&new.title)
+        .bind(&new.author)
+        .bind(&new.description)
+        .bind(&new.image_url)
+        .bind(&new.link)
+        .bind(&new.language)
+        .bind(&new.categories)
+        .bind(new.itunes_id)
+        .bind(new.podcastindex_id)
+        .bind(new.auto_download)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get(&self, id: Uuid) -> Result<Option<Podcast>> {
+        sqlx::query_as::<_, Podcast>(&format!(
+            "SELECT {PODCAST_COLS} FROM podcasts WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_by_feed_url(&self, feed_url: &str) -> Result<Option<Podcast>> {
+        sqlx::query_as::<_, Podcast>(&format!(
+            "SELECT {PODCAST_COLS} FROM podcasts WHERE feed_url = $1"
+        ))
+        .bind(feed_url)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn list(&self, limit: i64, offset: i64) -> Result<Vec<Podcast>> {
+        sqlx::query_as::<_, Podcast>(&format!(
+            "SELECT {PODCAST_COLS} FROM podcasts ORDER BY title ASC LIMIT $1 OFFSET $2"
+        ))
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM podcasts")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(n)
+    }
+
+    async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Podcast>> {
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        sqlx::query_as::<_, Podcast>(&format!(
+            "SELECT {PODCAST_COLS} FROM podcasts \
+             WHERE title ILIKE $1 OR author ILIKE $1 \
+             ORDER BY title ASC LIMIT $2 OFFSET $3"
+        ))
+        .bind(&pattern)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_image(&self, id: Uuid, image_path: Option<&str>) -> Result<Option<Podcast>> {
+        sqlx::query_as::<_, Podcast>(&format!(
+            "UPDATE podcasts SET image_path = $2, updated_at = now() \
+             WHERE id = $1 RETURNING {PODCAST_COLS}"
+        ))
+        .bind(id)
+        .bind(image_path)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_auto_download(&self, id: Uuid, n: i32) -> Result<Option<Podcast>> {
+        sqlx::query_as::<_, Podcast>(&format!(
+            "UPDATE podcasts SET auto_download = $2, updated_at = now() \
+             WHERE id = $1 RETURNING {PODCAST_COLS}"
+        ))
+        .bind(id)
+        .bind(n)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn touch_refreshed(
+        &self,
+        id: Uuid,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE podcasts \
+             SET last_refreshed_at = now(), last_etag = $2, last_modified = $3, updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(etag)
+        .bind(last_modified)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn all_for_refresh(&self) -> Result<Vec<Podcast>> {
+        sqlx::query_as::<_, Podcast>(&format!(
+            "SELECT {PODCAST_COLS} FROM podcasts ORDER BY last_refreshed_at ASC NULLS FIRST"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn delete(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM podcasts WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PodcastEpisodeRepo
+// ---------------------------------------------------------------------------
+
+const EPISODE_COLS: &str = "id, podcast_id, guid, title, description, enclosure_url, \
+     enclosure_type, episode_no, season_no, duration_ms, codec, bitrate_kbps, \
+     file_path, file_size, image_path, published_at, metadata_json, created_at, updated_at";
+
+#[async_trait]
+impl PodcastEpisodeRepo for PgRepos {
+    async fn upsert_by_guid(&self, new: NewPodcastEpisode) -> Result<(PodcastEpisode, bool)> {
+        // `(xmax = 0)` is Postgres's "was this row just INSERTed?" signal — true
+        // for a fresh insert, false on the conflict-UPDATE path. That's how the
+        // refresh distinguishes a genuinely-new episode (→ fan out) from a
+        // re-parse of an existing one. A downloaded episode keeps its measured
+        // duration (file_path IS NOT NULL); file/codec/bitrate are never touched
+        // here (only `set_file` writes them).
+        let row = sqlx::query(&format!(
+            "INSERT INTO podcast_episodes \
+               (podcast_id, guid, title, description, enclosure_url, enclosure_type, \
+                episode_no, season_no, duration_ms, image_path, published_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (podcast_id, guid) DO UPDATE SET \
+               title = EXCLUDED.title, description = EXCLUDED.description, \
+               enclosure_url = EXCLUDED.enclosure_url, enclosure_type = EXCLUDED.enclosure_type, \
+               episode_no = EXCLUDED.episode_no, season_no = EXCLUDED.season_no, \
+               duration_ms = CASE WHEN podcast_episodes.file_path IS NOT NULL \
+                                  THEN podcast_episodes.duration_ms ELSE EXCLUDED.duration_ms END, \
+               image_path = EXCLUDED.image_path, published_at = EXCLUDED.published_at, \
+               updated_at = now() \
+             RETURNING {EPISODE_COLS}, (xmax = 0) AS inserted"
+        ))
+        .bind(new.podcast_id)
+        .bind(&new.guid)
+        .bind(&new.title)
+        .bind(&new.description)
+        .bind(&new.enclosure_url)
+        .bind(&new.enclosure_type)
+        .bind(new.episode_no)
+        .bind(new.season_no)
+        .bind(new.duration_ms)
+        .bind(&new.image_path)
+        .bind(new.published_at)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        let inserted: bool = row.try_get("inserted").map_err(db)?;
+        let ep = PodcastEpisode::from_row(&row).map_err(db)?;
+        Ok((ep, inserted))
+    }
+
+    async fn get(&self, id: Uuid) -> Result<Option<PodcastEpisode>> {
+        sqlx::query_as::<_, PodcastEpisode>(&format!(
+            "SELECT {EPISODE_COLS} FROM podcast_episodes WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn list_for_podcast(
+        &self,
+        podcast_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PodcastEpisode>> {
+        sqlx::query_as::<_, PodcastEpisode>(&format!(
+            "SELECT {EPISODE_COLS} FROM podcast_episodes WHERE podcast_id = $1 \
+             ORDER BY published_at DESC NULLS LAST LIMIT $2 OFFSET $3"
+        ))
+        .bind(podcast_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn newest_undownloaded(
+        &self,
+        podcast_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<PodcastEpisode>> {
+        sqlx::query_as::<_, PodcastEpisode>(&format!(
+            "SELECT {EPISODE_COLS} FROM podcast_episodes \
+             WHERE podcast_id = $1 AND file_path IS NULL \
+             ORDER BY published_at DESC NULLS LAST LIMIT $2"
+        ))
+        .bind(podcast_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_file(
+        &self,
+        id: Uuid,
+        file_path: &str,
+        file_size: Option<i64>,
+        codec: Option<&str>,
+        bitrate_kbps: Option<i32>,
+        duration_ms: Option<i64>,
+    ) -> Result<Option<PodcastEpisode>> {
+        // Keep the existing (feed) duration when the probe couldn't measure one.
+        sqlx::query_as::<_, PodcastEpisode>(&format!(
+            "UPDATE podcast_episodes SET \
+               file_path = $2, file_size = $3, codec = $4, bitrate_kbps = $5, \
+               duration_ms = COALESCE($6, duration_ms), updated_at = now() \
+             WHERE id = $1 RETURNING {EPISODE_COLS}"
+        ))
+        .bind(id)
+        .bind(file_path)
+        .bind(file_size)
+        .bind(codec)
+        .bind(bitrate_kbps)
+        .bind(duration_ms)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn clear_file(&self, id: Uuid) -> Result<Option<PodcastEpisode>> {
+        sqlx::query_as::<_, PodcastEpisode>(&format!(
+            "UPDATE podcast_episodes SET file_path = NULL, file_size = NULL, updated_at = now() \
+             WHERE id = $1 RETURNING {EPISODE_COLS}"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn delete(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM podcast_episodes WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PodcastSubscriptionRepo (mirrors FollowRepo)
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl PodcastSubscriptionRepo for PgRepos {
+    async fn subscribe(&self, user_id: Uuid, podcast_id: Uuid) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO podcast_subscriptions (user_id, podcast_id) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(podcast_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn unsubscribe(&self, user_id: Uuid, podcast_id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM podcast_subscriptions WHERE user_id = $1 AND podcast_id = $2")
+            .bind(user_id)
+            .bind(podcast_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn subscribers_of(&self, podcast_id: Uuid) -> Result<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT user_id FROM podcast_subscriptions WHERE podcast_id = $1")
+                .bind(podcast_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(db)?;
+        Ok(rows.into_iter().map(|(u,)| u).collect())
+    }
+
+    async fn subscriptions(&self, user_id: Uuid) -> Result<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT podcast_id FROM podcast_subscriptions WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(db)?;
+        Ok(rows.into_iter().map(|(p,)| p).collect())
     }
 }

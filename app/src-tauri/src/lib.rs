@@ -20,6 +20,7 @@ pub mod library;
 pub mod media_session;
 pub mod notify_sync;
 pub mod player;
+pub mod podcasts;
 pub mod push;
 pub mod playlists;
 pub mod sync;
@@ -245,6 +246,16 @@ pub fn run() {
             commands::notification_commands::notifications_unread_count,
             commands::notification_commands::notifications_mark_read,
             commands::notification_commands::notifications_mark_all_read,
+            // podcasts
+            commands::podcast_commands::podcast_search,
+            commands::podcast_commands::podcast_list,
+            commands::podcast_commands::podcast_get,
+            commands::podcast_commands::podcast_list_episodes,
+            commands::podcast_commands::podcast_subscribe_feed,
+            commands::podcast_commands::podcast_subscribe,
+            commands::podcast_commands::podcast_unsubscribe,
+            commands::podcast_commands::podcast_refresh,
+            commands::podcast_commands::podcast_set_auto_download,
             // background notification poll (Android WorkManager; no-op on desktop)
             notify_sync::notif_background_sync_enable,
             notify_sync::notif_background_sync_disable,
@@ -278,6 +289,9 @@ pub fn run() {
             commands::download_commands::download_album,
             commands::download_commands::download_playlist,
             commands::download_commands::download_delete,
+            commands::download_commands::podcast_download_episode,
+            commands::download_commands::podcast_download_show,
+            commands::download_commands::podcast_delete_episode,
             commands::download_commands::downloads_storage_usage,
             commands::download_commands::downloads_dir,
             commands::download_commands::downloads_set_dir,

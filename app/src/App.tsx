@@ -25,6 +25,8 @@ import Account from "./routes/Account";
 import Upload from "./routes/Upload";
 import Uploads from "./routes/Uploads";
 import Notifications from "./routes/Notifications";
+import Podcasts from "./routes/Podcasts";
+import PodcastDetail from "./routes/PodcastDetail";
 import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
 import MobileTopBar from "./components/MobileTopBar";
@@ -216,6 +218,8 @@ const router = createBrowserRouter([
       { path: "downloads", element: <Downloads /> },
       { path: "playlists", element: <Playlists /> },
       { path: "playlists/:id", element: <PlaylistDetail /> },
+      { path: "podcasts", element: <Podcasts /> },
+      { path: "podcasts/:id", element: <PodcastDetail /> },
       { path: "register", element: <Register /> },
       { path: "account", element: <Account /> },
       { path: "upload", element: <Upload /> },

@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package music.podcast.v1;
+
+// Podcasts. A podcast is a catalog show (like an artist) whose episodes are
+// on-disk audio files (like tracks), served by the same byte-range streaming.
+// Catalog mutations (subscribe a feed / delete / refresh / auto-download) are
+// Manager+ and audited; subscriptions (a user follows a show for alerts) are
+// any authed user (SECRET_KEY rejected); search / reads / download are any user.
+service PodcastService {
+  // ----- Discovery + catalog -----
+  rpc SearchPodcasts(SearchPodcastsRequest) returns (SearchPodcastsResponse);
+  rpc SubscribeFeed(SubscribeFeedRequest) returns (Podcast);        // Manager+
+  rpc ListPodcasts(ListPodcastsRequest) returns (ListPodcastsResponse);
+  rpc GetPodcast(PodcastIdRequest) returns (Podcast);
+  rpc DeletePodcast(PodcastIdRequest) returns (DeleteResponse);     // Manager+
+  rpc RefreshPodcast(PodcastIdRequest) returns (RefreshReport);     // Manager+
+  rpc SetAutoDownload(SetAutoDownloadRequest) returns (Podcast);    // Manager+
+
+  // ----- Episodes -----
+  rpc ListEpisodes(ListEpisodesRequest) returns (ListEpisodesResponse);
+  rpc GetEpisode(EpisodeIdRequest) returns (Episode);
+  rpc DownloadEpisode(EpisodeIdRequest) returns (Episode);          // any user
+
+  // ----- Subscriptions (any user; SECRET_KEY rejected) -----
+  rpc Subscribe(PodcastIdRequest) returns (SubscribeResponse);
+  rpc Unsubscribe(PodcastIdRequest) returns (SubscribeResponse);
+  rpc IsSubscribed(PodcastIdRequest) returns (SubscribeResponse);
+  rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListPodcastsResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+
+message Podcast {
+  string id = 1;
+  string feed_url = 2;
+  string title = 3;
+  string author = 4;            // empty when unset
+  string description = 5;       // empty when unset
+  string image_url = 6;         // remote artwork URL; empty when unset
+  string link = 7;              // show homepage; empty when unset
+  string language = 8;          // empty when unset
+  repeated string categories = 9;
+  int64 itunes_id = 10;         // 0 when unset
+  int64 podcastindex_id = 11;   // 0 when unset
+  int32 auto_download = 12;     // newest-N auto-download policy; 0 = metadata only
+  string last_refreshed_at = 13; // empty when never refreshed
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+// A directory search result (enough to subscribe + display). Not an episode.
+message PodcastCandidate {
+  string feed_url = 1;
+  string title = 2;
+  string author = 3;            // empty when unset
+  string description = 4;       // empty when unset
+  string image_url = 5;         // empty when unset
+  repeated string categories = 6;
+  int64 itunes_id = 7;          // 0 when unset
+  int64 podcastindex_id = 8;    // 0 when unset
+}
+
+message Episode {
+  string id = 1;
+  string podcast_id = 2;
+  string guid = 3;
+  string title = 4;
+  string description = 5;       // empty when unset
+  string enclosure_url = 6;
+  string enclosure_type = 7;    // empty when unset
+  int32 episode_no = 8;         // 0 when unset
+  int32 season_no = 9;          // 0 when unset
+  int64 duration_ms = 10;       // 0 when unknown
+  string codec = 11;            // empty until downloaded/probed
+  int32 bitrate_kbps = 12;      // 0 when unknown
+  string file_path = 13;        // empty until downloaded
+  int64 file_size = 14;         // 0 when unknown
+  string image_url = 15;        // empty when unset
+  string published_at = 16;     // empty when unset
+  bool downloaded = 17;         // file_path present
+}
+
+// ---------------------------------------------------------------------------
+// Requests / responses
+// ---------------------------------------------------------------------------
+
+message SearchPodcastsRequest {
+  string term = 1;
+  int32 limit = 2;  // 0 = server default; capped server-side
+}
+message SearchPodcastsResponse { repeated PodcastCandidate candidates = 1; }
+
+// Provide a feed_url directly, or an itunes_id to resolve one via the directory.
+message SubscribeFeedRequest {
+  string feed_url = 1;
+  int64 itunes_id = 2;  // 0 = none
+}
+
+message ListPodcastsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+}
+message ListPodcastsResponse {
+  repeated Podcast podcasts = 1;
+  int64 total = 2;
+}
+
+message PodcastIdRequest { string podcast_id = 1; }
+message EpisodeIdRequest { string episode_id = 1; }
+
+message DeleteResponse { bool deleted = 1; }
+
+message RefreshReport {
+  string podcast_id = 1;
+  int64 new_episodes = 2;
+  bool not_modified = 3;
+}
+
+message SetAutoDownloadRequest {
+  string podcast_id = 1;
+  int32 auto_download = 2;
+}
+
+message ListEpisodesRequest {
+  string podcast_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+message ListEpisodesResponse { repeated Episode episodes = 1; }
+
+message SubscribeResponse { bool subscribed = 1; }
+
+message ListSubscriptionsRequest {}

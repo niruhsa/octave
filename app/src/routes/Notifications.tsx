@@ -70,7 +70,8 @@ function NotificationsInner() {
       // Marking read is best-effort; still navigate on a known target.
       console.warn("mark notification read failed", formatError(e));
     }
-    if (n.album_id) navigate(`/albums/${n.album_id}`);
+    if (n.kind === "new_episode" && n.podcast_id) navigate(`/podcasts/${n.podcast_id}`);
+    else if (n.album_id) navigate(`/albums/${n.album_id}`);
     else if (n.artist_id) navigate(`/artists/${n.artist_id}`);
   }
 

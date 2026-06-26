@@ -148,9 +148,11 @@ pub struct Follow {
 }
 
 /// A delivered notification (Phase 10). One row per recipient. `kind` is free
-/// TEXT (only `"new_release"` today). `artist_id`/`album_id` are nullable (they
-/// go NULL if the entity is later deleted); the denormalized `title`/`body`
-/// keep the notification readable regardless. `read_at` NULL means unread.
+/// TEXT (`"new_release"` for a followed artist's album; `"new_episode"` for a
+/// subscribed podcast's episode). `artist_id`/`album_id` (music) and
+/// `podcast_id`/`episode_id` (podcasts) are nullable (they go NULL if the
+/// entity is later deleted); the denormalized `title`/`body` keep the
+/// notification readable regardless. `read_at` NULL means unread.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct Notification {
     pub id: Uuid,
@@ -158,6 +160,8 @@ pub struct Notification {
     pub kind: String,
     pub artist_id: Option<Uuid>,
     pub album_id: Option<Uuid>,
+    pub podcast_id: Option<Uuid>,
+    pub episode_id: Option<Uuid>,
     pub title: String,
     pub body: Option<String>,
     pub read_at: Option<OffsetDateTime>,
@@ -261,13 +265,17 @@ pub struct NewPlaylist {
 }
 
 /// Insert-shape for a notification. `id`/`read_at`/`created_at` are set by the
-/// DB (the row starts unread).
-#[derive(Debug, Clone)]
+/// DB (the row starts unread). `artist_id`/`album_id` carry a music alert;
+/// `podcast_id`/`episode_id` carry a podcast alert — set whichever pair fits
+/// the `kind`, leave the other `None`.
+#[derive(Debug, Clone, Default)]
 pub struct NewNotification {
     pub user_id: Uuid,
     pub kind: String,
     pub artist_id: Option<Uuid>,
     pub album_id: Option<Uuid>,
+    pub podcast_id: Option<Uuid>,
+    pub episode_id: Option<Uuid>,
     pub title: String,
     pub body: Option<String>,
 }
@@ -433,4 +441,107 @@ pub struct UploadFilter {
     pub user_id: Option<Uuid>,
     /// Restrict to a single state.
     pub state: Option<UploadState>,
+}
+
+// ---------------------------------------------------------------------------
+// Podcasts: a catalog show (like an artist) whose episodes are on-disk audio
+// files (like tracks). Episodes stream through the same byte-range path; new
+// episodes reuse the notification fan-out.
+// ---------------------------------------------------------------------------
+
+/// A subscribed podcast show (one RSS feed). `feed_url` is the natural key;
+/// `categories` is a JSON array stored as TEXT (portable to SQLite). `auto_download`
+/// is the per-show newest-N policy (0 = metadata only). `image_path` is the
+/// on-disk cached cover (like `albums.cover_path`); `last_etag`/`last_modified`
+/// back conditional feed GETs.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct Podcast {
+    pub id: Uuid,
+    pub feed_url: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub image_path: Option<String>,
+    pub image_url: Option<String>,
+    pub link: Option<String>,
+    pub language: Option<String>,
+    /// JSON array as TEXT (e.g. `["News","Technology"]`).
+    pub categories: String,
+    pub itunes_id: Option<i64>,
+    pub podcastindex_id: Option<i64>,
+    pub auto_download: i32,
+    pub last_refreshed_at: Option<OffsetDateTime>,
+    pub last_etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+/// One episode (`<item>`) of a podcast. Mirrors `Track`: `file_path` is `None`
+/// until the audio is downloaded to disk, at which point it streams exactly
+/// like a track. `guid` is the feed's episode identity (unique per podcast).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct PodcastEpisode {
+    pub id: Uuid,
+    pub podcast_id: Uuid,
+    pub guid: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub enclosure_url: String,
+    pub enclosure_type: Option<String>,
+    pub episode_no: Option<i32>,
+    pub season_no: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub codec: Option<String>,
+    pub bitrate_kbps: Option<i32>,
+    pub file_path: Option<String>,
+    pub file_size: Option<i64>,
+    pub image_path: Option<String>,
+    pub published_at: Option<OffsetDateTime>,
+    pub metadata_json: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+/// A user's subscription to a podcast (for new-episode notifications). Mirrors
+/// [`Follow`].
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct PodcastSubscription {
+    pub user_id: Uuid,
+    pub podcast_id: Uuid,
+    pub created_at: OffsetDateTime,
+}
+
+/// Upsert-shape for a podcast (the feed-derived metadata). `id`/refresh
+/// bookkeeping/`image_path` are owned by the DB / service, not the feed.
+#[derive(Debug, Clone, Default)]
+pub struct NewPodcast {
+    pub feed_url: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
+    pub link: Option<String>,
+    pub language: Option<String>,
+    pub categories: String,
+    pub itunes_id: Option<i64>,
+    pub podcastindex_id: Option<i64>,
+    pub auto_download: i32,
+}
+
+/// Upsert-shape for an episode (the feed-derived fields). Technical fields
+/// (`codec`/`bitrate`/`file_path`/`file_size`) are filled on download.
+#[derive(Debug, Clone, Default)]
+pub struct NewPodcastEpisode {
+    pub podcast_id: Uuid,
+    pub guid: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub enclosure_url: String,
+    pub enclosure_type: Option<String>,
+    pub episode_no: Option<i32>,
+    pub season_no: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub image_path: Option<String>,
+    pub published_at: Option<OffsetDateTime>,
 }

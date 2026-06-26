@@ -83,6 +83,16 @@ pub fn media_url(port: u16, token: &str, track_id: &str) -> String {
     format!("http://127.0.0.1:{port}/s/{token}/{}", encode_segment(track_id))
 }
 
+/// Like [`media_url`] but for a podcast **episode** id — adds `?kind=episode`
+/// so the server resolves it against the episode cache + the
+/// `/podcasts/episodes/{id}/stream` endpoint instead of the track ones.
+pub fn episode_media_url(port: u16, token: &str, episode_id: &str) -> String {
+    format!(
+        "http://127.0.0.1:{port}/s/{token}/{}?kind=episode",
+        encode_segment(episode_id)
+    )
+}
+
 /// The loopback URL native code fetches album art from. The webview uses the
 /// `cover://` scheme (see `assets`), but the Android media-notification service
 /// is native Kotlin and can only reach a real HTTP origin — so it loads the
@@ -134,9 +144,16 @@ async fn serve_action(
     (StatusCode::OK, "ok").into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct ServeQuery {
+    /// `"episode"` to resolve a podcast episode; absent/anything else = track.
+    kind: Option<String>,
+}
+
 async fn serve(
     State(st): State<ServerState>,
     Path((token, id)): Path<(String, String)>,
+    Query(q): Query<ServeQuery>,
     method: Method,
     headers: HeaderMap,
 ) -> Response {
@@ -151,6 +168,14 @@ async fn serve(
     let Some(state) = st.app.try_state::<AppStateHandle>() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "starting up").into_response();
     };
+
+    // Podcast episode: resolve against the episode cache + episode stream
+    // endpoint. (Non-downloaded, non-server-cached episodes are played from
+    // their origin enclosure URL directly by the frontend, so this only needs
+    // the local + server-proxy paths.)
+    if q.kind.as_deref() == Some("episode") {
+        return serve_episode(&state, &id, &headers, &method).await;
+    }
 
     // 1. Local cache hit → stream the downloaded file.
     match repo::get_track(&state.pool, &id).await {
@@ -181,13 +206,60 @@ async fn serve(
         Ok(c) => c,
         Err(_) => return (StatusCode::UNAUTHORIZED, "no active session").into_response(),
     };
-    match proxy_stream(&auth.server_config(), &cred, &id, &headers, &method).await {
+    let track_url = format!("{}/tracks/{}/stream", auth.server_config().rest_root(), id);
+    match proxy_stream(&track_url, &cred, &headers, &method).await {
         Ok(resp) => resp,
         Err(e) => {
             tracing::warn!(err = %e, track = %id, "server stream failed");
             // 502: couldn't reach the authority and the track isn't cached.
             // Distinct from 404 so the UI tells "offline, not downloaded" apart
             // from "track missing".
+            (
+                StatusCode::BAD_GATEWAY,
+                "stream unavailable (offline and not downloaded)",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Resolve a podcast episode: a downloaded local file, else proxy the server's
+/// episode stream endpoint. Mirrors the track path in [`serve`].
+async fn serve_episode(
+    state: &AppStateHandle,
+    id: &str,
+    headers: &HeaderMap,
+    method: &Method,
+) -> Response {
+    // 1. Local cache hit → downloaded file.
+    match repo::get_episode(&state.pool, id).await {
+        Ok(Some(row)) => {
+            if let Some(lp) = row.local_file_path.as_deref() {
+                return serve_local(lp, headers, method).await;
+            }
+        }
+        Ok(None) => { /* fall through to the server stream */ }
+        Err(e) => tracing::warn!(err = %e, episode = %id, "episode cache lookup failed"),
+    }
+
+    // 2. Proxy the server's episode stream endpoint (the server has it on disk).
+    let auth = state.auth.read().await.clone();
+    let Some(auth) = auth else {
+        return (StatusCode::UNAUTHORIZED, "not configured — log in first").into_response();
+    };
+    let cred = match auth.credential().await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::UNAUTHORIZED, "no active session").into_response(),
+    };
+    let url = format!(
+        "{}/podcasts/episodes/{}/stream",
+        auth.server_config().rest_root(),
+        id
+    );
+    match proxy_stream(&url, &cred, headers, method).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::warn!(err = %e, episode = %id, "episode stream failed");
             (
                 StatusCode::BAD_GATEWAY,
                 "stream unavailable (offline and not downloaded)",
@@ -448,17 +520,15 @@ pub(crate) fn proxy_client() -> AppResult<&'static reqwest::Client> {
 }
 
 async fn proxy_stream(
-    config: &ServerConfig,
+    url: &str,
     cred: &Credential,
-    track_id: &str,
     headers: &HeaderMap,
     method: &Method,
 ) -> AppResult<Response> {
     let client = proxy_client()?;
-    let url = format!("{}/tracks/{}/stream", config.rest_root(), track_id);
 
     let mut req = client
-        .request(method.clone(), &url)
+        .request(method.clone(), url)
         .header(header::AUTHORIZATION, auth_header_value(cred)?);
     // Forward the Range verbatim — a real HTTP server, so no windowing needed.
     if let Some(range) = headers.get(header::RANGE) {

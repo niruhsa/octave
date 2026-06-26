@@ -81,6 +81,47 @@ pub async fn download_delete(
     manager(app, &state).await?.delete_track(&track_id).await
 }
 
+// ----- podcasts ----------------------------------------------------------
+
+/// Download one podcast episode for offline use (same resumable path as a
+/// track). Triggers the server-side fetch, then streams the server copy.
+#[tauri::command]
+pub async fn podcast_download_episode(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+    episode_id: String,
+) -> AppResult<TrackDownloadResult> {
+    crate::download_session::start(&app, "Downloading podcast", "1 episode", -1);
+    let _fg = crate::download_session::ForegroundGuard::new(app.clone());
+    manager(app, &state).await?.download_episode(&episode_id).await
+}
+
+/// Download the newest N not-yet-downloaded episodes of a show (default 10).
+#[tauri::command]
+pub async fn podcast_download_show(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+    podcast_id: String,
+    newest_n: Option<u32>,
+) -> AppResult<BatchDownloadResult> {
+    crate::download_session::start(&app, "Downloading podcast", "Preparing…", -1);
+    let _fg = crate::download_session::ForegroundGuard::new(app.clone());
+    manager(app, &state)
+        .await?
+        .download_podcast(&podcast_id, newest_n)
+        .await
+}
+
+/// Remove a downloaded episode (file + cache row).
+#[tauri::command]
+pub async fn podcast_delete_episode(
+    app: AppHandle,
+    state: State<'_, AppStateHandle>,
+    episode_id: String,
+) -> AppResult<()> {
+    manager(app, &state).await?.delete_episode(&episode_id).await
+}
+
 /// Total bytes + row counts used by offline content.
 #[tauri::command]
 pub async fn downloads_storage_usage(

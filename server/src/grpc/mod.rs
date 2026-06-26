@@ -8,6 +8,7 @@ pub mod interceptor;
 pub mod library_svc;
 pub mod notification_svc;
 pub mod playlist_svc;
+pub mod podcast_svc;
 pub mod proto;
 pub mod upload_svc;
 
@@ -22,7 +23,7 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
     ArtworkService, IngestService, LibraryService, MetadataService, NotificationService,
-    PlaylistService, ScanService, UploadHub, UploadsService,
+    PlaylistService, PodcastService, ScanService, UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
@@ -30,6 +31,7 @@ pub use interceptor::AuthInterceptor;
 pub use library_svc::LibraryServer;
 pub use notification_svc::NotificationServer;
 pub use playlist_svc::PlaylistServer;
+pub use podcast_svc::PodcastServer;
 pub use upload_svc::UploadServer;
 
 /// Build + run the gRPC server until shutdown.
@@ -44,6 +46,7 @@ pub async fn serve(
     artwork: Option<ArtworkService>,
     playlists: PlaylistService,
     notifications: NotificationService,
+    podcasts: Option<PodcastService>,
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
     upload_hub: UploadHub,
@@ -65,6 +68,9 @@ pub async fn serve(
         .await;
     health_reporter
         .set_serving::<proto::notification::notification_service_server::NotificationServiceServer<NotificationServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::podcast::podcast_service_server::PodcastServiceServer<PodcastServer>>()
         .await;
 
     let interceptor = AuthInterceptor::new(auth.clone());
@@ -88,6 +94,11 @@ pub async fn serve(
     .into_service();
     let notification_server = NotificationServer {
         notifications,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
+    let podcast_server = PodcastServer {
+        podcasts,
         interceptor: interceptor.clone(),
     }
     .into_service();
@@ -121,6 +132,7 @@ pub async fn serve(
         .add_service(library_server)
         .add_service(playlist_server)
         .add_service(notification_server)
+        .add_service(podcast_server)
         .add_service(upload_server)
         .serve_with_shutdown(addr, shutdown_signal)
         .await

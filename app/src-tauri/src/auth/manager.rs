@@ -12,9 +12,10 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier,
-    RescanReport, ServerClient, ServerConfig, Track, TransportHealth, TransportUsed, UploadEvent,
-    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier, Podcast,
+    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerClient, ServerConfig,
+    Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
+    UploadResult, UploadSummary, UploadView,
 };
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
@@ -370,6 +371,95 @@ impl AuthManager {
     pub async fn unregister_device(&self, token: &str) -> AppResult<()> {
         let cred = self.credential().await?;
         self.server.unregister_device(&cred, token).await
+    }
+
+    // ----- Podcasts --------------------------------------------------------
+
+    pub async fn search_podcasts(
+        &self,
+        term: &str,
+        limit: i32,
+    ) -> AppResult<Vec<PodcastCandidate>> {
+        let cred = self.credential().await?;
+        self.server.search_podcasts(&cred, term, limit).await
+    }
+
+    pub async fn subscribe_feed(
+        &self,
+        feed_url: Option<&str>,
+        itunes_id: Option<i64>,
+    ) -> AppResult<Podcast> {
+        let cred = self.credential().await?;
+        self.server.subscribe_feed(&cred, feed_url, itunes_id).await
+    }
+
+    pub async fn list_podcasts(&self, limit: i32, offset: i32) -> AppResult<(Vec<Podcast>, i64)> {
+        let cred = self.credential().await?;
+        self.server.list_podcasts(&cred, limit, offset).await
+    }
+
+    pub async fn get_podcast(&self, id: &str) -> AppResult<Podcast> {
+        let cred = self.credential().await?;
+        self.server.get_podcast(&cred, id).await
+    }
+
+    pub async fn delete_podcast(&self, id: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.delete_podcast(&cred, id).await
+    }
+
+    pub async fn refresh_podcast(&self, id: &str) -> AppResult<RefreshReport> {
+        let cred = self.credential().await?;
+        self.server.refresh_podcast(&cred, id).await
+    }
+
+    pub async fn set_podcast_auto_download(
+        &self,
+        id: &str,
+        auto_download: i32,
+    ) -> AppResult<Podcast> {
+        let cred = self.credential().await?;
+        self.server.set_podcast_auto_download(&cred, id, auto_download).await
+    }
+
+    pub async fn list_episodes(
+        &self,
+        podcast_id: &str,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<Vec<PodcastEpisode>> {
+        let cred = self.credential().await?;
+        self.server.list_episodes(&cred, podcast_id, limit, offset).await
+    }
+
+    pub async fn get_episode(&self, id: &str) -> AppResult<PodcastEpisode> {
+        let cred = self.credential().await?;
+        self.server.get_episode(&cred, id).await
+    }
+
+    pub async fn download_episode_server(&self, id: &str) -> AppResult<PodcastEpisode> {
+        let cred = self.credential().await?;
+        self.server.download_episode(&cred, id).await
+    }
+
+    pub async fn subscribe_podcast(&self, id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.subscribe_podcast(&cred, id).await
+    }
+
+    pub async fn unsubscribe_podcast(&self, id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.unsubscribe_podcast(&cred, id).await
+    }
+
+    pub async fn is_subscribed(&self, id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.is_subscribed(&cred, id).await
+    }
+
+    pub async fn list_subscriptions(&self) -> AppResult<Vec<Podcast>> {
+        let cred = self.credential().await?;
+        self.server.list_subscriptions(&cred).await
     }
 
     // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------

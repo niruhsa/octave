@@ -12,8 +12,9 @@ use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
     Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier, Playlist,
-    PlaylistWithTracks, RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest,
-    UploadListFilter, UploadResult, UploadSummary, UploadView,
+    PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
+    ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
+    UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -681,6 +682,188 @@ impl ServerClient {
             }
         }
         self.rest.unregister_device(cred, token).await
+    }
+
+    // ----- Podcasts --------------------------------------------------------
+
+    pub async fn search_podcasts(
+        &self,
+        cred: &Credential,
+        term: &str,
+        limit: i32,
+    ) -> AppResult<Vec<PodcastCandidate>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.search_podcasts(cred, term, limit).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("search_podcasts", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.search_podcasts(cred, term, limit).await
+    }
+
+    pub async fn subscribe_feed(
+        &self,
+        cred: &Credential,
+        feed_url: Option<&str>,
+        itunes_id: Option<i64>,
+    ) -> AppResult<Podcast> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.subscribe_feed(cred, feed_url, itunes_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("subscribe_feed", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.subscribe_feed(cred, feed_url, itunes_id).await
+    }
+
+    pub async fn list_podcasts(
+        &self,
+        cred: &Credential,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<(Vec<Podcast>, i64)> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_podcasts(cred, limit, offset).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_podcasts", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_podcasts(cred, limit, offset).await
+    }
+
+    pub async fn get_podcast(&self, cred: &Credential, id: &str) -> AppResult<Podcast> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_podcast(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_podcast", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_podcast(cred, id).await
+    }
+
+    pub async fn delete_podcast(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_podcast(cred, id).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("delete_podcast", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.delete_podcast(cred, id).await
+    }
+
+    pub async fn refresh_podcast(&self, cred: &Credential, id: &str) -> AppResult<RefreshReport> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.refresh_podcast(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("refresh_podcast", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.refresh_podcast(cred, id).await
+    }
+
+    pub async fn set_podcast_auto_download(
+        &self,
+        cred: &Credential,
+        id: &str,
+        auto_download: i32,
+    ) -> AppResult<Podcast> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_podcast_auto_download(cred, id, auto_download).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("set_auto_download", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_podcast_auto_download(cred, id, auto_download).await
+    }
+
+    pub async fn list_episodes(
+        &self,
+        cred: &Credential,
+        podcast_id: &str,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<Vec<PodcastEpisode>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_episodes(cred, podcast_id, limit, offset).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_episodes", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_episodes(cred, podcast_id, limit, offset).await
+    }
+
+    pub async fn get_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_episode(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_episode", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_episode(cred, id).await
+    }
+
+    pub async fn download_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.download_episode(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("download_episode", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.download_episode(cred, id).await
+    }
+
+    pub async fn subscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.subscribe_podcast(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("subscribe", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.subscribe_podcast(cred, id).await
+    }
+
+    pub async fn unsubscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.unsubscribe_podcast(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("unsubscribe", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.unsubscribe_podcast(cred, id).await
+    }
+
+    pub async fn is_subscribed(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.is_subscribed(cred, id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("is_subscribed", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.is_subscribed(cred, id).await
+    }
+
+    pub async fn list_subscriptions(&self, cred: &Credential) -> AppResult<Vec<Podcast>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_subscriptions(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_subscriptions", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_subscriptions(cred).await
     }
 
     // ----- Image upload (Phase 9) ------------------------------------------

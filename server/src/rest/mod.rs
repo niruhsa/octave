@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod library;
 pub mod notification;
 pub mod playlist;
+pub mod podcast;
 pub mod range;
 pub mod streaming;
 pub mod upload;
@@ -34,7 +35,8 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
     ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
-    NotificationService, PlaylistService, ScanService, StreamingService, UploadHub, UploadsService,
+    NotificationService, PlaylistService, PodcastService, ScanService, StreamingService, UploadHub,
+    UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -46,6 +48,8 @@ pub struct RestState {
     pub streaming: StreamingService,
     pub playlists: PlaylistService,
     pub notifications: NotificationService,
+    /// Podcast subsystem (None when no `PODCAST_PATH` is configured).
+    pub podcasts: Option<PodcastService>,
     pub ingest: Option<IngestService>,
     pub metadata: MetadataService,
     pub artwork: Option<ArtworkService>,
@@ -80,6 +84,7 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
         .merge(library::router())
         .merge(playlist::router())
         .merge(notification::router())
+        .merge(podcast::router())
         .merge(streaming::router())
         .merge(ingest::router())
         .merge(upload::router())

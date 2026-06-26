@@ -16,6 +16,10 @@ pub mod notification {
     tonic::include_proto!("music.notification.v1");
 }
 
+pub mod podcast {
+    tonic::include_proto!("music.podcast.v1");
+}
+
 pub mod upload {
     tonic::include_proto!("music.upload.v1");
 }

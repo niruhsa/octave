@@ -91,3 +91,45 @@ pub struct SyncState {
     pub server_etag: Option<String>,
     pub last_synced_at: String,
 }
+
+/// A subscribed podcast show, cached so the subscription list renders offline.
+/// Mirrors the server `podcasts` row minus the refresh bookkeeping. `subscribed`
+/// is `0`/`1`.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Podcast {
+    pub id: String,
+    pub feed_url: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
+    pub language: Option<String>,
+    pub categories: String,
+    pub subscribed: i64,
+    pub updated_at: String,
+}
+
+/// One fully-downloaded podcast episode. Presence of a row here (with a
+/// `local_file_path`) is the source of truth for "available offline", exactly
+/// like `Track`.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PodcastEpisode {
+    pub id: String,
+    pub podcast_id: String,
+    pub guid: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub enclosure_url: String,
+    pub episode_no: Option<i64>,
+    pub season_no: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub codec: Option<String>,
+    pub bitrate_kbps: Option<i64>,
+    pub file_size: Option<i64>,
+    pub local_file_path: Option<String>,
+    pub image_path: Option<String>,
+    pub published_at: Option<String>,
+    pub metadata_json: String,
+    pub downloaded_at: Option<String>,
+    pub updated_at: String,
+}

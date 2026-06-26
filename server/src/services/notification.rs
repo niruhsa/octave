@@ -24,6 +24,7 @@ use tracing::warn;
 use crate::auth::Identity;
 use crate::db::models::{
     Album, Artist, NewAuditEntry, NewDeviceToken, NewNotification, Notification, PermissionLevel,
+    Podcast, PodcastEpisode,
 };
 use crate::db::repo::{ArtistRepo, AuditRepo, DeviceTokenRepo, FollowRepo, NotificationRepo};
 use crate::error::{AppError, Result};
@@ -34,6 +35,8 @@ const DEFAULT_PAGE_LIMIT: i64 = 50;
 
 /// Notification `kind` for a new release by a followed artist.
 const KIND_NEW_RELEASE: &str = "new_release";
+/// Notification `kind` for a new episode of a subscribed podcast.
+const KIND_NEW_EPISODE: &str = "new_episode";
 
 #[derive(Clone)]
 pub struct NotificationService {
@@ -223,6 +226,7 @@ impl NotificationService {
                 album_id: Some(album.id),
                 title: title.clone(),
                 body: Some(body_text.clone()),
+                ..Default::default()
             })
             .collect();
         let created = self.notifications.create_many(&items).await?;
@@ -233,35 +237,79 @@ impl NotificationService {
         // is the delivery channel, and the client also polls as a fallback.
         if self.push.is_some() {
             let this = self.clone();
-            let album_id = album.id;
+            // Data payload for tap-routing on the device.
+            let data = vec![
+                ("kind".to_string(), KIND_NEW_RELEASE.to_string()),
+                ("artist_id".to_string(), artist_id.to_string()),
+                ("album_id".to_string(), album.id.to_string()),
+            ];
             tokio::spawn(async move {
-                this.push_fanout(&recipients, &title, &body_text, artist_id, album_id)
-                    .await;
+                this.push_fanout(&recipients, &title, &body_text, &data).await;
             });
         }
         Ok(created)
     }
 
-    /// Push a new-release notification to every registered device of each
-    /// recipient. Prunes tokens FCM reports as unregistered. Best-effort: all
-    /// errors are logged, never propagated.
+    /// Notify every subscriber of `podcast` about a newly-published `episode`.
+    /// Best-effort fan-out (same contract as [`notify_new_release`]); returns
+    /// the number of notifications created. Unlike new releases there's no actor
+    /// to exclude — episodes come from the feed, not a user action, so the
+    /// caller passes the full subscriber list.
+    ///
+    /// [`notify_new_release`]: Self::notify_new_release
+    pub async fn notify_new_episode(
+        &self,
+        subscribers: &[Uuid],
+        podcast: &Podcast,
+        episode: &PodcastEpisode,
+    ) -> Result<u64> {
+        if subscribers.is_empty() {
+            return Ok(0);
+        }
+        let title = format!("New episode of {}", podcast.title);
+        let body_text = episode.title.clone();
+        let items: Vec<NewNotification> = subscribers
+            .iter()
+            .map(|uid| NewNotification {
+                user_id: *uid,
+                kind: KIND_NEW_EPISODE.to_string(),
+                podcast_id: Some(podcast.id),
+                episode_id: Some(episode.id),
+                title: title.clone(),
+                body: Some(body_text.clone()),
+                ..Default::default()
+            })
+            .collect();
+        let created = self.notifications.create_many(&items).await?;
+
+        if self.push.is_some() {
+            let this = self.clone();
+            let recipients = subscribers.to_vec();
+            let data = vec![
+                ("kind".to_string(), KIND_NEW_EPISODE.to_string()),
+                ("podcast_id".to_string(), podcast.id.to_string()),
+                ("episode_id".to_string(), episode.id.to_string()),
+            ];
+            tokio::spawn(async move {
+                this.push_fanout(&recipients, &title, &body_text, &data).await;
+            });
+        }
+        Ok(created)
+    }
+
+    /// Push a notification to every registered device of each recipient, with a
+    /// `data` payload for tap-routing. Prunes tokens FCM reports as
+    /// unregistered. Best-effort: all errors are logged, never propagated.
     async fn push_fanout(
         &self,
         recipients: &[Uuid],
         title: &str,
         body: &str,
-        artist_id: Uuid,
-        album_id: Uuid,
+        data: &[(String, String)],
     ) {
         let Some(push) = &self.push else {
             return;
         };
-        // Data payload for tap-routing on the device.
-        let data = vec![
-            ("kind".to_string(), KIND_NEW_RELEASE.to_string()),
-            ("artist_id".to_string(), artist_id.to_string()),
-            ("album_id".to_string(), album_id.to_string()),
-        ];
         for uid in recipients {
             let tokens = match self.device_tokens.list_for_user(*uid).await {
                 Ok(t) => t,
@@ -271,7 +319,7 @@ impl NotificationService {
                 }
             };
             for dt in tokens {
-                match push.send(&dt.token, title, body, &data).await {
+                match push.send(&dt.token, title, body, data).await {
                     Ok(PushOutcome::Delivered) => {}
                     Ok(PushOutcome::Unregistered) => {
                         // Dead token — prune so we stop trying it.
@@ -403,7 +451,8 @@ mod tests {
 
     use super::*;
     use crate::db::models::{
-        AuditEntry, DeviceToken, NewArtist, NewNotification, NewUser, PermissionLevel, User,
+        AuditEntry, DeviceToken, NewArtist, NewNotification, NewUser, PermissionLevel, Podcast,
+        PodcastEpisode, User,
     };
     use crate::db::repo::{
         ArtistRepo, AuditRepo, DeviceTokenRepo, FollowRepo, NotificationRepo, TrackIdPath,
@@ -477,6 +526,8 @@ mod tests {
                 kind: new.kind.clone(),
                 artist_id: new.artist_id,
                 album_id: new.album_id,
+                podcast_id: new.podcast_id,
+                episode_id: new.episode_id,
                 title: new.title.clone(),
                 body: new.body.clone(),
                 read_at: None,
@@ -811,6 +862,53 @@ mod tests {
         }
     }
 
+    fn podcast(title: &str) -> Podcast {
+        Podcast {
+            id: Uuid::new_v4(),
+            feed_url: "https://feeds.example.com/show".into(),
+            title: title.to_string(),
+            author: None,
+            description: None,
+            image_path: None,
+            image_url: None,
+            link: None,
+            language: None,
+            categories: "[]".into(),
+            itunes_id: None,
+            podcastindex_id: None,
+            auto_download: 0,
+            last_refreshed_at: None,
+            last_etag: None,
+            last_modified: None,
+            created_at: now(),
+            updated_at: now(),
+        }
+    }
+
+    fn episode(podcast_id: Uuid, title: &str) -> PodcastEpisode {
+        PodcastEpisode {
+            id: Uuid::new_v4(),
+            podcast_id,
+            guid: Uuid::new_v4().to_string(),
+            title: title.to_string(),
+            description: None,
+            enclosure_url: "https://cdn.example.com/ep.mp3".into(),
+            enclosure_type: Some("audio/mpeg".into()),
+            episode_no: None,
+            season_no: None,
+            duration_ms: None,
+            codec: None,
+            bitrate_kbps: None,
+            file_path: None,
+            file_size: None,
+            image_path: None,
+            published_at: None,
+            metadata_json: "{}".into(),
+            created_at: now(),
+            updated_at: now(),
+        }
+    }
+
     #[tokio::test]
     async fn follow_then_list_and_audit() {
         let (svc, _f, _n, artists, audit) = make_service();
@@ -907,6 +1005,34 @@ mod tests {
         assert_eq!(n.body.as_deref(), Some("The Chase"));
         // Sanity: no stray rows were created.
         assert_eq!(notifs.rows.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn new_episode_fans_out_to_subscribers() {
+        let (svc, _f, notifs, _artists, _au) = make_service();
+        let sub1 = user(PermissionLevel::User);
+        let sub2 = user(PermissionLevel::User);
+        let pod = podcast("Daily Tech");
+        let ep = episode(pod.id, "Episode 42");
+
+        let recipients = [sub1.user_id().unwrap(), sub2.user_id().unwrap()];
+        let created = svc.notify_new_episode(&recipients, &pod, &ep).await.unwrap();
+        assert_eq!(created, 2);
+
+        assert_eq!(svc.unread_count(&sub1).await.unwrap(), 1);
+        assert_eq!(svc.unread_count(&sub2).await.unwrap(), 1);
+
+        let n = &svc.list_notifications(&sub1, true, None, None).await.unwrap()[0];
+        assert_eq!(n.kind, "new_episode");
+        assert_eq!(n.podcast_id, Some(pod.id));
+        assert_eq!(n.episode_id, Some(ep.id));
+        assert!(n.artist_id.is_none() && n.album_id.is_none());
+        assert!(n.title.contains("Daily Tech"));
+        assert_eq!(n.body.as_deref(), Some("Episode 42"));
+        assert_eq!(notifs.rows.lock().unwrap().len(), 2);
+
+        // Empty subscriber list → no-op.
+        assert_eq!(svc.notify_new_episode(&[], &pod, &ep).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -1010,7 +1136,8 @@ mod tests {
         push.set_unregistered("dead");
 
         // Call the fan-out directly (deterministic — avoids the bg spawn).
-        svc.push_fanout(&[u1, u2], "New release", "The Chase", artist.id, Uuid::new_v4())
+        let data = vec![("kind".to_string(), "new_release".to_string())];
+        svc.push_fanout(&[u1, u2], "New release", "The Chase", &data)
             .await;
 
         // Both tokens were attempted.

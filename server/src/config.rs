@@ -74,9 +74,35 @@ pub struct Config {
     /// the new-release fan-out then also pushes to followers' registered
     /// devices. Off by default (the client polls instead).
     pub fcm: Option<FcmConfig>,
+    /// Optional podcast subsystem. `Some` when `PODCAST_PATH` is set, or when
+    /// `LIBRARY_PATH` is set (defaults to `<LIBRARY_PATH>/Podcasts`). `None`
+    /// disables the whole feature.
+    pub podcast: Option<PodcastConfig>,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
+}
+
+/// Podcast subsystem config. The feature is enabled whenever a `path` resolves
+/// (explicit `PODCAST_PATH`, else `<LIBRARY_PATH>/Podcasts`).
+#[derive(Debug, Clone)]
+pub struct PodcastConfig {
+    /// Where episode audio + show art are stored. Absolute (anchor-resolved).
+    pub path: PathBuf,
+    /// Feed refresh poller cadence in seconds. 0 disables the poller.
+    pub refresh_interval_secs: u64,
+    /// Default newest-N auto-download for a freshly-subscribed show.
+    pub auto_download_default: i32,
+    /// Optional PodcastIndex API credentials (richer search). `None` → iTunes
+    /// only. Both key + secret required together.
+    pub podcastindex: Option<PodcastIndexCreds>,
+}
+
+/// PodcastIndex API credentials. Only used when both are present.
+#[derive(Debug, Clone)]
+pub struct PodcastIndexCreds {
+    pub api_key: String,
+    pub api_secret: String,
 }
 
 /// Firebase Cloud Messaging config (Phase 10 — real-time push). The credentials
@@ -133,6 +159,8 @@ impl Config {
             .map(|p| resolve_path(&anchor, &p))
             .or_else(|| library_path.as_ref().map(|l| l.join(".artwork")));
 
+        let podcast = load_podcast(&anchor, library_path.as_ref())?;
+
         // Image optimization knobs (sensible defaults; all overridable).
         let image_max_dim = env_u64("IMAGE_MAX_DIM", 800).clamp(64, 8192) as u32;
         let image_quality = env_u64("IMAGE_QUALITY", 82).clamp(1, 100) as u8;
@@ -170,6 +198,7 @@ impl Config {
             image_optimize_interval_secs,
             primary_language,
             fcm,
+            podcast,
             config_anchor: anchor,
         })
     }
@@ -293,6 +322,50 @@ fn load_fcm(anchor: &Path) -> Result<Option<FcmConfig>> {
         project_id,
         credentials_path: resolve_path(anchor, &credentials),
     }))
+}
+
+/// Optional podcast subsystem. Enabled whenever a storage path resolves:
+/// explicit `PODCAST_PATH`, else `<LIBRARY_PATH>/Podcasts`. `None` (no
+/// `PODCAST_PATH` and no `LIBRARY_PATH`) disables the feature cleanly.
+fn load_podcast(anchor: &Path, library_path: Option<&PathBuf>) -> Result<Option<PodcastConfig>> {
+    let path = match env::var("PODCAST_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(p) => Some(resolve_path(anchor, &p)),
+        None => library_path.map(|l| l.join("Podcasts")),
+    };
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let refresh_interval_secs = env_u64("PODCAST_REFRESH_INTERVAL_SECS", 1800);
+    let auto_download_default =
+        env_u64("PODCAST_AUTO_DOWNLOAD_DEFAULT", 0).min(i32::MAX as u64) as i32;
+    let podcastindex = load_podcastindex()?;
+    Ok(Some(PodcastConfig {
+        path,
+        refresh_interval_secs,
+        auto_download_default,
+        podcastindex,
+    }))
+}
+
+/// PodcastIndex creds — both `PODCASTINDEX_API_KEY` + `PODCASTINDEX_API_SECRET`
+/// or neither (a half-config is a hard error, like `FCM_*` / `GRPC_TLS_*`).
+fn load_podcastindex() -> Result<Option<PodcastIndexCreds>> {
+    let key = env::var("PODCASTINDEX_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let secret = env::var("PODCASTINDEX_API_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    match (key, secret) {
+        (Some(api_key), Some(api_secret)) => Ok(Some(PodcastIndexCreds { api_key, api_secret })),
+        (None, None) => Ok(None),
+        _ => Err(AppError::Config(
+            "PODCASTINDEX_API_KEY and PODCASTINDEX_API_SECRET must both be set (or neither)".into(),
+        )),
+    }
 }
 
 fn parse_addr(var: &str, default: &str) -> Result<SocketAddr> {

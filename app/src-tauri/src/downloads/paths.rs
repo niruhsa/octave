@@ -94,6 +94,62 @@ pub fn track_file_name(track_no: Option<i64>, title: &str, id: &str) -> String {
     }
 }
 
+/// Top-level folder under the downloads root for podcast episodes.
+pub const PODCASTS_DIR: &str = "Podcasts";
+
+/// `<root>/Podcasts/<show>/<name>.<ext>` — the download path for one episode.
+pub fn episode_path(root: &Path, show: &str, file_name: &str, ext: &str) -> PathBuf {
+    root.join(PODCASTS_DIR)
+        .join(sanitize(show))
+        .join(format!("{}.{}", sanitize(file_name), sanitize(ext)))
+}
+
+/// Episode display name: `NNN - Title` (zero-padded episode number) or the
+/// title, falling back to the id when the title is empty.
+pub fn episode_file_name(episode_no: Option<i64>, title: &str, id: &str) -> String {
+    let raw = title.trim();
+    let t = sanitize(raw);
+    match episode_no {
+        Some(n) if n > 0 => format!("{:03} - {}", n, t),
+        _ => {
+            if raw.is_empty() {
+                sanitize(id)
+            } else {
+                t
+            }
+        }
+    }
+}
+
+/// Episode extension from the enclosure URL path (ignoring the query string),
+/// falling back to the codec, then `mp3` (the podcast default).
+pub fn episode_extension(enclosure_url: &str, codec: Option<&str>) -> String {
+    let path = enclosure_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(enclosure_url);
+    if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
+        let ext = ext.trim().to_ascii_lowercase();
+        if matches!(
+            ext.as_str(),
+            "mp3" | "m4a" | "aac" | "ogg" | "opus" | "flac" | "wav" | "mp4"
+        ) {
+            return ext;
+        }
+    }
+    match codec.map(|c| c.to_ascii_lowercase()).as_deref() {
+        Some("mp3" | "mpeg") => "mp3",
+        Some("aac") => "m4a",
+        Some("mp4" | "m4a") => "m4a",
+        Some("flac") => "flac",
+        Some("ogg" | "vorbis") => "ogg",
+        Some("opus") => "opus",
+        Some("wav") => "wav",
+        _ => "mp3",
+    }
+    .to_string()
+}
+
 /// Ensure a directory exists, creating it (and parents) if needed.
 pub async fn ensure_dir(path: &Path) -> AppResult<()> {
     tokio::fs::create_dir_all(path).await.map_err(|e| {
@@ -127,5 +183,29 @@ mod tests {
         assert_eq!(track_file_name(Some(3), "Song", "id"), "03 - Song");
         assert_eq!(track_file_name(None, "Song", "id"), "Song");
         assert_eq!(track_file_name(None, "", "uuid"), "uuid");
+    }
+
+    #[test]
+    fn episode_name_pads_and_sanitizes() {
+        assert_eq!(episode_file_name(Some(42), "Ep Title", "id"), "042 - Ep Title");
+        assert_eq!(episode_file_name(None, "Ep Title", "id"), "Ep Title");
+        assert_eq!(episode_file_name(None, "", "uuid"), "uuid");
+        assert_eq!(episode_file_name(Some(1), "A/B", "id"), "001 - AB");
+    }
+
+    #[test]
+    fn episode_ext_from_url_then_codec() {
+        assert_eq!(episode_extension("https://x/ep.mp3", None), "mp3");
+        assert_eq!(episode_extension("https://x/ep.m4a?token=1", None), "m4a");
+        // No usable extension on the path → fall back to the codec.
+        assert_eq!(episode_extension("https://x/stream?id=9", Some("aac")), "m4a");
+        // Neither → mp3 default.
+        assert_eq!(episode_extension("https://x/stream", None), "mp3");
+    }
+
+    #[test]
+    fn episode_path_lands_under_podcasts() {
+        let p = episode_path(Path::new("/dl"), "My Show", "001 - Ep", "mp3");
+        assert_eq!(p, Path::new("/dl/Podcasts/My Show/001 - Ep.mp3"));
     }
 }

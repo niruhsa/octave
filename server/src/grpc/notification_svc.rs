@@ -49,6 +49,8 @@ fn notification_to_pb(n: m::Notification) -> pb::Notification {
         body: n.body.unwrap_or_default(),
         read: n.read_at.is_some(),
         created_at: n.created_at.to_string(),
+        podcast_id: n.podcast_id.map(|id| id.to_string()).unwrap_or_default(),
+        episode_id: n.episode_id.map(|id| id.to_string()).unwrap_or_default(),
     }
 }
 

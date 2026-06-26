@@ -10,14 +10,53 @@
 // local file when downloaded, else proxies the server stream with auth.
 
 import { create } from "zustand";
-import type { MergedTrack } from "../ipc";
+import type { MergedEpisode, MergedTrack } from "../ipc";
 import { playerMediaUrl, playerPrefetch } from "../ipc";
 
 export type RepeatMode = "off" | "all" | "one";
 
+/**
+ * A queue item is a `MergedTrack`, optionally flavored as a podcast episode.
+ * `mediaKind: "episode"` routes the source URL through the episode endpoint;
+ * `streamUrl`, when set, is used directly as the `<audio>` src (a non-cached
+ * episode's origin enclosure URL). Both optional → a plain track is unchanged.
+ */
+export type QueueItem = MergedTrack & {
+  mediaKind?: "track" | "episode";
+  streamUrl?: string | null;
+};
+
+/**
+ * Adapt a podcast episode into a `QueueItem` the player can queue. A downloaded
+ * or server-cached episode routes through the loopback media server; otherwise
+ * it streams from its origin enclosure URL directly. `podcast_id` stands in for
+ * the album/artist refs so now-playing metadata lookups have something to key on.
+ */
+export function episodeToQueueItem(ep: MergedEpisode): QueueItem {
+  const useLoopback = ep.downloaded || ep.server_downloaded;
+  return {
+    id: ep.id,
+    album_id: ep.podcast_id,
+    artist_id: ep.podcast_id,
+    title: ep.title,
+    track_no: ep.episode_no,
+    disc_no: null,
+    duration_ms: ep.duration_ms ?? 0,
+    codec: ep.codec ?? "",
+    bitrate_kbps: ep.bitrate_kbps,
+    file_path: "",
+    file_size: ep.file_size,
+    local_file_path: ep.local_file_path,
+    is_single_release: false,
+    downloaded: ep.downloaded,
+    mediaKind: "episode",
+    streamUrl: useLoopback ? null : ep.enclosure_url,
+  };
+}
+
 export type PlayerState = {
   /** Ordered queue (post-shuffle ordering applied when shuffle is on). */
-  queue: MergedTrack[];
+  queue: QueueItem[];
   /** Index into `queue` of the current track. -1 when empty. */
   currentIndex: number;
   isPlaying: boolean;
@@ -35,8 +74,8 @@ export type PlayerState = {
   audio: HTMLAudioElement | null;
 
   // actions
-  playTrack: (track: MergedTrack, queue?: MergedTrack[]) => void;
-  playQueue: (tracks: MergedTrack[], startIndex?: number) => void;
+  playTrack: (track: QueueItem, queue?: QueueItem[]) => void;
+  playQueue: (tracks: QueueItem[], startIndex?: number) => void;
   /** Play the existing queue at `index` (the now-playing queue list taps). */
   playAt: (index: number) => void;
   togglePlay: () => void;
@@ -65,7 +104,7 @@ export type PlayerState = {
 const STORAGE_KEY = "octave:player";
 
 type PersistShape = {
-  queue: MergedTrack[];
+  queue: QueueItem[];
   currentIndex: number;
   shuffle: boolean;
   repeat: RepeatMode;
@@ -362,7 +401,7 @@ function primeRestored(get: Get, el: HTMLAudioElement) {
   const track = queue[currentIndex];
   if (!track || el.src || isPlaying) return;
   const wantPos = positionSec;
-  playerMediaUrl(track.id)
+  resolveSrc(track)
     .then((url: string) => {
       const st = get();
       // Bail if playback started or the track changed while we resolved the URL.
@@ -394,7 +433,7 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
   // Kick off the next track's prefetch in parallel with this one's load, so it's
   // a local file by the time we reach it (screen-off auto-advance — see below).
   prefetchNext(_get);
-  playerMediaUrl(track.id)
+  resolveSrc(track)
     .then((url: string) => {
       // Guard against races: a rapid skip could have moved currentIndex.
       if (_get().queue[_get().currentIndex]?.id !== track.id) return;
@@ -403,6 +442,18 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
       void audio.play().catch((e: unknown) => reportPlayError(set, e));
     })
     .catch((e) => set({ error: formatErr(e) }));
+}
+
+/**
+ * Resolve the `<audio>` src for a queue item. A non-cached podcast episode
+ * carries its origin `streamUrl` (played directly); everything else routes
+ * through the loopback media server (`mediaKind` selects track vs episode).
+ */
+function resolveSrc(item: QueueItem): Promise<string> {
+  if (item.streamUrl != null && item.streamUrl !== "") {
+    return Promise.resolve(item.streamUrl);
+  }
+  return playerMediaUrl(item.id, item.mediaKind === "episode" ? "episode" : undefined);
 }
 
 /**
@@ -425,7 +476,8 @@ function prefetchNext(_get: Get) {
   }
   if (n < 0) return;
   const next = queue[n];
-  if (next) void playerPrefetch(next.id).catch(() => {});
+  // Prefetch is track-specific (it pulls `/tracks/{id}/stream`); skip episodes.
+  if (next && next.mediaKind !== "episode") void playerPrefetch(next.id).catch(() => {});
 }
 
 /**
@@ -433,11 +485,11 @@ function prefetchNext(_get: Get) {
  * the tracks but pin the `startIndex` track at position 0 so the
  * user-pressed track plays immediately.
  */
-function applyShuffle(
-  tracks: MergedTrack[],
+function applyShuffle<T extends MergedTrack>(
+  tracks: T[],
   shuffle: boolean,
   startIndex: number,
-): MergedTrack[] {
+): T[] {
   if (tracks.length === 0) return tracks;
   if (!shuffle) return [...tracks];
   const pinned = tracks[startIndex];

@@ -36,11 +36,14 @@ use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUpload
 use super::proto::upload as pb;
 use super::proto::notification::notification_service_client::NotificationServiceClient;
 use super::proto::notification as npb;
+use super::proto::podcast::podcast_service_client::PodcastServiceClient;
+use super::proto::podcast as ppb;
 use super::{
     Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, Notification,
-    NotificationPage, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, RescanReport,
-    ServerConfig, SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView,
-    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    NotificationPage, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
+    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig,
+    SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest,
+    UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -125,6 +128,10 @@ impl GrpcClient {
 
     fn notifications(&self) -> NotificationServiceClient<Channel> {
         NotificationServiceClient::new(self.channel.clone())
+    }
+
+    fn podcasts(&self) -> PodcastServiceClient<Channel> {
+        PodcastServiceClient::new(self.channel.clone())
     }
 
     /// Username/password login. On success the server returns an opaque
@@ -830,6 +837,215 @@ impl GrpcClient {
         Ok(())
     }
 
+    // ----- Podcasts ------------------------------------------------------
+
+    pub async fn search_podcasts(
+        &self,
+        cred: &Credential,
+        term: &str,
+        limit: i32,
+    ) -> AppResult<Vec<PodcastCandidate>> {
+        let mut req = Request::new(ppb::SearchPodcastsRequest { term: term.to_string(), limit });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .search_podcasts(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("search_podcasts: {s}")))?
+            .into_inner();
+        Ok(resp.candidates.into_iter().map(candidate_from_proto).collect())
+    }
+
+    pub async fn subscribe_feed(
+        &self,
+        cred: &Credential,
+        feed_url: Option<&str>,
+        itunes_id: Option<i64>,
+    ) -> AppResult<Podcast> {
+        let mut req = Request::new(ppb::SubscribeFeedRequest {
+            feed_url: feed_url.unwrap_or_default().to_string(),
+            itunes_id: itunes_id.unwrap_or(0),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .subscribe_feed(req)
+            .await
+            .map_err(map_mutation_err("subscribe_feed"))?
+            .into_inner();
+        Ok(podcast_from_proto(resp))
+    }
+
+    pub async fn list_podcasts(
+        &self,
+        cred: &Credential,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<(Vec<Podcast>, i64)> {
+        let mut req = Request::new(ppb::ListPodcastsRequest { limit, offset });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .list_podcasts(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_podcasts: {s}")))?
+            .into_inner();
+        Ok((resp.podcasts.into_iter().map(podcast_from_proto).collect(), resp.total))
+    }
+
+    pub async fn get_podcast(&self, cred: &Credential, id: &str) -> AppResult<Podcast> {
+        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .get_podcast(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("get_podcast: {s}")))?
+            .into_inner();
+        Ok(podcast_from_proto(resp))
+    }
+
+    pub async fn delete_podcast(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        self.podcasts()
+            .delete_podcast(req)
+            .await
+            .map_err(map_mutation_err("delete_podcast"))?;
+        Ok(())
+    }
+
+    pub async fn refresh_podcast(&self, cred: &Credential, id: &str) -> AppResult<RefreshReport> {
+        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .refresh_podcast(req)
+            .await
+            .map_err(map_mutation_err("refresh_podcast"))?
+            .into_inner();
+        Ok(RefreshReport {
+            podcast_id: resp.podcast_id,
+            new_episodes: resp.new_episodes,
+            not_modified: resp.not_modified,
+        })
+    }
+
+    pub async fn set_podcast_auto_download(
+        &self,
+        cred: &Credential,
+        id: &str,
+        auto_download: i32,
+    ) -> AppResult<Podcast> {
+        let mut req = Request::new(ppb::SetAutoDownloadRequest {
+            podcast_id: id.to_string(),
+            auto_download,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .set_auto_download(req)
+            .await
+            .map_err(map_mutation_err("set_auto_download"))?
+            .into_inner();
+        Ok(podcast_from_proto(resp))
+    }
+
+    pub async fn list_episodes(
+        &self,
+        cred: &Credential,
+        podcast_id: &str,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<Vec<PodcastEpisode>> {
+        let mut req = Request::new(ppb::ListEpisodesRequest {
+            podcast_id: podcast_id.to_string(),
+            limit,
+            offset,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .list_episodes(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_episodes: {s}")))?
+            .into_inner();
+        Ok(resp.episodes.into_iter().map(episode_from_proto).collect())
+    }
+
+    pub async fn get_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
+        let mut req = Request::new(ppb::EpisodeIdRequest { episode_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .get_episode(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("get_episode: {s}")))?
+            .into_inner();
+        Ok(episode_from_proto(resp))
+    }
+
+    /// Trigger the server to download an episode's audio to its disk.
+    pub async fn download_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
+        let mut req = Request::new(ppb::EpisodeIdRequest { episode_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .download_episode(req)
+            .await
+            .map_err(map_mutation_err("download_episode"))?
+            .into_inner();
+        Ok(episode_from_proto(resp))
+    }
+
+    pub async fn subscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .subscribe(req)
+            .await
+            .map_err(map_mutation_err("subscribe"))?
+            .into_inner();
+        Ok(resp.subscribed)
+    }
+
+    pub async fn unsubscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .unsubscribe(req)
+            .await
+            .map_err(map_mutation_err("unsubscribe"))?
+            .into_inner();
+        Ok(resp.subscribed)
+    }
+
+    pub async fn is_subscribed(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .is_subscribed(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("is_subscribed: {s}")))?
+            .into_inner();
+        Ok(resp.subscribed)
+    }
+
+    pub async fn list_subscriptions(&self, cred: &Credential) -> AppResult<Vec<Podcast>> {
+        let mut req = Request::new(ppb::ListSubscriptionsRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .list_subscriptions(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_subscriptions: {s}")))?
+            .into_inner();
+        Ok(resp.podcasts.into_iter().map(podcast_from_proto).collect())
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
@@ -1480,10 +1696,64 @@ fn notification_from_proto(n: npb::Notification) -> Notification {
         kind: n.kind,
         artist_id: opt_str(n.artist_id),
         album_id: opt_str(n.album_id),
+        podcast_id: opt_str(n.podcast_id),
+        episode_id: opt_str(n.episode_id),
         title: n.title,
         body: opt_str(n.body),
         read: n.read,
         created_at: n.created_at,
+    }
+}
+
+fn podcast_from_proto(p: ppb::Podcast) -> Podcast {
+    Podcast {
+        id: p.id,
+        feed_url: p.feed_url,
+        title: p.title,
+        author: opt_str(p.author),
+        description: opt_str(p.description),
+        image_url: opt_str(p.image_url),
+        link: opt_str(p.link),
+        language: opt_str(p.language),
+        categories: p.categories,
+        itunes_id: opt_i64(p.itunes_id),
+        podcastindex_id: opt_i64(p.podcastindex_id),
+        auto_download: p.auto_download,
+        last_refreshed_at: opt_str(p.last_refreshed_at),
+    }
+}
+
+fn candidate_from_proto(c: ppb::PodcastCandidate) -> PodcastCandidate {
+    PodcastCandidate {
+        feed_url: c.feed_url,
+        title: c.title,
+        author: opt_str(c.author),
+        description: opt_str(c.description),
+        image_url: opt_str(c.image_url),
+        categories: c.categories,
+        itunes_id: opt_i64(c.itunes_id),
+        podcastindex_id: opt_i64(c.podcastindex_id),
+    }
+}
+
+fn episode_from_proto(e: ppb::Episode) -> PodcastEpisode {
+    PodcastEpisode {
+        id: e.id,
+        podcast_id: e.podcast_id,
+        guid: e.guid,
+        title: e.title,
+        description: opt_str(e.description),
+        enclosure_url: e.enclosure_url,
+        enclosure_type: opt_str(e.enclosure_type),
+        episode_no: opt_i32(e.episode_no),
+        season_no: opt_i32(e.season_no),
+        duration_ms: opt_i64(e.duration_ms),
+        codec: opt_str(e.codec),
+        bitrate_kbps: opt_i32(e.bitrate_kbps),
+        file_size: opt_i64(e.file_size),
+        image_url: opt_str(e.image_url),
+        published_at: opt_str(e.published_at),
+        downloaded: e.downloaded,
     }
 }
 

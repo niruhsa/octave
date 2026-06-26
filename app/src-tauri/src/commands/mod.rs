@@ -10,6 +10,7 @@ pub mod library_commands;
 pub mod notification_commands;
 pub mod playlist_commands;
 pub mod player_commands;
+pub mod podcast_commands;
 pub mod sync_commands;
 pub mod upload_commands;
 

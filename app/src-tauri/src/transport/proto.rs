@@ -28,3 +28,8 @@ pub mod upload {
 pub mod notification {
     tonic::include_proto!("music.notification.v1");
 }
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod podcast {
+    tonic::include_proto!("music.podcast.v1");
+}

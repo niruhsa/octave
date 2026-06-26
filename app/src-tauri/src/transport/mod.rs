@@ -271,6 +271,12 @@ pub struct Notification {
     pub kind: String,
     pub artist_id: Option<String>,
     pub album_id: Option<String>,
+    /// Set on a `"new_episode"` notification (the podcast / episode the alert
+    /// is about); `None` for music alerts.
+    #[serde(default)]
+    pub podcast_id: Option<String>,
+    #[serde(default)]
+    pub episode_id: Option<String>,
     pub title: String,
     pub body: Option<String>,
     pub read: bool,
@@ -284,6 +290,75 @@ pub struct NotificationPage {
     pub notifications: Vec<Notification>,
     pub total: i64,
     pub unread_count: i64,
+}
+
+// ── Podcasts ───────────────────────────────────────────────────────────
+
+/// Server's view of a podcast show. `categories` is the parsed list (the
+/// server stores it as a JSON-TEXT column). `auto_download` is the per-show
+/// newest-N policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Podcast {
+    pub id: String,
+    pub feed_url: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
+    pub link: Option<String>,
+    pub language: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    pub itunes_id: Option<i64>,
+    pub podcastindex_id: Option<i64>,
+    pub auto_download: i32,
+    pub last_refreshed_at: Option<String>,
+}
+
+/// A directory search result (enough to subscribe to a feed + display it).
+/// Not an episode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodcastCandidate {
+    pub feed_url: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    pub itunes_id: Option<i64>,
+    pub podcastindex_id: Option<i64>,
+}
+
+/// Server's view of an episode. `downloaded` means the **server** has the audio
+/// on disk (its stream endpoint will serve it); the client's own offline state
+/// lives in the cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodcastEpisode {
+    pub id: String,
+    pub podcast_id: String,
+    pub guid: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub enclosure_url: String,
+    pub enclosure_type: Option<String>,
+    pub episode_no: Option<i64>,
+    pub season_no: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub codec: Option<String>,
+    pub bitrate_kbps: Option<i64>,
+    pub file_size: Option<i64>,
+    pub image_url: Option<String>,
+    pub published_at: Option<String>,
+    pub downloaded: bool,
+}
+
+/// Outcome of a feed refresh.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshReport {
+    pub podcast_id: String,
+    pub new_episodes: i64,
+    pub not_modified: bool,
 }
 
 /// A playlist plus its ordered tracks — what `GetPlaylist` returns.
@@ -528,6 +603,8 @@ mod tests {
                 kind: "new_release".into(),
                 artist_id: Some("ar".into()),
                 album_id: Some("al".into()),
+                podcast_id: None,
+                episode_id: None,
                 title: "New release from YUQI".into(),
                 body: Some("YUQ1".into()),
                 read: false,

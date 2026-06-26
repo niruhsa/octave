@@ -7,17 +7,23 @@
 //! `__cmd__player_media_url` shim it generates.
 
 use crate::error::AppResult;
-use crate::player::server::{MediaServer, action_base_url, cover_url, media_url};
+use crate::player::server::{MediaServer, action_base_url, cover_url, episode_media_url, media_url};
 
-/// Return the webview-loadable URL for a track id. It targets the in-app
-/// loopback HTTP server (see `player::server`), which streams a local file or
-/// proxies the server stream — the frontend never branches on online/offline.
+/// Return the webview-loadable URL for a track (or podcast episode) id. It
+/// targets the in-app loopback HTTP server (see `player::server`), which streams
+/// a local file or proxies the server stream — the frontend never branches on
+/// online/offline. Pass `kind = "episode"` for a podcast episode.
 #[tauri::command]
 pub async fn player_media_url(
     media: tauri::State<'_, MediaServer>,
     track_id: String,
+    kind: Option<String>,
 ) -> AppResult<String> {
-    Ok(media_url(media.port, &media.token, &track_id))
+    if kind.as_deref() == Some("episode") {
+        Ok(episode_media_url(media.port, &media.token, &track_id))
+    } else {
+        Ok(media_url(media.port, &media.token, &track_id))
+    }
 }
 
 /// Return the loopback URL for an album's cover art. Used by the native

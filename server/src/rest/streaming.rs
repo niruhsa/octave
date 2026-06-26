@@ -58,7 +58,18 @@ async fn stream_track(
     let method = req.method().clone();
 
     let resolved = state.streaming.resolve(&identity, id).await?;
+    serve_resolved(resolved, &headers, method).await
+}
 
+/// Build a byte-range HTTP response for an already-resolved file (200/206/416,
+/// `Accept-Ranges`/`Content-Range`/`Content-Length`/`Last-Modified`, streamed
+/// via `ReaderStream`). Shared by the track + podcast-episode stream endpoints
+/// so the range logic lives once.
+pub(crate) async fn serve_resolved(
+    resolved: ResolvedStream,
+    headers: &HeaderMap,
+    method: axum::http::Method,
+) -> Result<Response, ApiError> {
     // Pull the Range header (if any) and decide the response shape.
     let range_header = headers.get(RANGE).and_then(|h| h.to_str().ok());
     let parsed = range_header.map(|h| parse_range(h, resolved.size));
@@ -108,7 +119,7 @@ async fn stream_track(
     }
 
     let body = build_body(&resolved, start, len).await.map_err(|e| {
-        warn!(track = %id, error = %e, "open file for streaming failed");
+        warn!(id = %resolved.track_id, error = %e, "open file for streaming failed");
         ApiError(AppError::Internal("stream open failed".into()))
     })?;
 

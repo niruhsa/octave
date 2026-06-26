@@ -8,6 +8,7 @@ import {
   DownloadIcon,
   HomeIcon,
   PlaylistIcon,
+  PodcastIcon,
   SearchIcon,
   type IconProps,
 } from "./icons";
@@ -17,6 +18,7 @@ const TABS: { to: string; label: string; Icon: (p: IconProps) => React.ReactElem
   { to: "/library", label: "Library", Icon: DiscIcon },
   { to: "/search", label: "Search", Icon: SearchIcon },
   { to: "/playlists", label: "Playlists", Icon: PlaylistIcon },
+  { to: "/podcasts", label: "Podcasts", Icon: PodcastIcon },
   { to: "/downloads", label: "Downloads", Icon: DownloadIcon },
 ];
 

@@ -367,6 +367,9 @@ export type AppNotification = {
   kind: string;
   artist_id: string | null;
   album_id: string | null;
+  /** Set on a `"new_episode"` notification (the podcast / episode it's about). */
+  podcast_id: string | null;
+  episode_id: string | null;
   title: string;
   body: string | null;
   read: boolean;
@@ -431,6 +434,111 @@ export const notifBackgroundSyncEnable = () =>
 /** Disable the background notification poll (logout / no eligible user). */
 export const notifBackgroundSyncDisable = () =>
   invoke<void>("notif_background_sync_disable");
+
+// ---------------------------------------------------------------------------
+// Podcasts
+// ---------------------------------------------------------------------------
+
+/** A directory search result (enough to subscribe to a feed + display it). */
+export type PodcastCandidate = {
+  feed_url: string;
+  title: string;
+  author: string | null;
+  description: string | null;
+  image_url: string | null;
+  categories: string[];
+  itunes_id: number | null;
+  podcastindex_id: number | null;
+};
+
+/** A podcast show + whether the user is subscribed + downloaded-episode count. */
+export type MergedPodcast = {
+  id: string;
+  feed_url: string;
+  title: string;
+  author: string | null;
+  description: string | null;
+  image_url: string | null;
+  link: string | null;
+  language: string | null;
+  categories: string[];
+  itunes_id: number | null;
+  podcastindex_id: number | null;
+  auto_download: number;
+  last_refreshed_at: string | null;
+  subscribed: boolean;
+  downloaded_count: number;
+};
+
+/** An episode + its offline state. `downloaded` = the client has the file;
+ *  `server_downloaded` = the server has it cached (its stream endpoint serves it). */
+export type MergedEpisode = {
+  id: string;
+  podcast_id: string;
+  guid: string;
+  title: string;
+  description: string | null;
+  enclosure_url: string;
+  enclosure_type: string | null;
+  episode_no: number | null;
+  season_no: number | null;
+  duration_ms: number | null;
+  codec: string | null;
+  bitrate_kbps: number | null;
+  file_size: number | null;
+  image_url: string | null;
+  published_at: string | null;
+  local_file_path: string | null;
+  server_downloaded: boolean;
+  downloaded: boolean;
+};
+
+/** Outcome of a feed refresh. */
+export type RefreshReport = {
+  podcast_id: string;
+  new_episodes: number;
+  not_modified: boolean;
+};
+
+/** Search the directory (iTunes / PodcastIndex) for shows. Online only. */
+export const podcastSearch = (query: string, limit?: number) =>
+  invoke<PodcastCandidate[]>("podcast_search", { query, limit: limit ?? null });
+
+/** The shows the user is subscribed to (server when online, cache offline). */
+export const podcastList = () =>
+  invoke<LibraryView<MergedPodcast>>("podcast_list");
+
+/** A single show (server-first, cache fallback). */
+export const podcastGet = (id: string) =>
+  invoke<MergedPodcast>("podcast_get", { id });
+
+/** A show's episodes, newest-first (server-first, cache fallback). */
+export const podcastListEpisodes = (podcastId: string, page: Page = {}) =>
+  invoke<LibraryView<MergedEpisode>>("podcast_list_episodes", { podcastId, ...page });
+
+/** Subscribe a feed to the catalog by feed URL, or by an iTunes id to resolve.
+ *  Manager+ server-side. */
+export const podcastSubscribeFeed = (feedUrl?: string, itunesId?: number) =>
+  invoke<MergedPodcast>("podcast_subscribe_feed", {
+    feedUrl: feedUrl ?? null,
+    itunesId: itunesId ?? null,
+  });
+
+/** Subscribe the current user to a show (for new-episode alerts). */
+export const podcastSubscribe = (id: string) =>
+  invoke<MergedPodcast>("podcast_subscribe", { id });
+
+/** Unsubscribe the current user from a show. */
+export const podcastUnsubscribe = (id: string) =>
+  invoke<MergedPodcast>("podcast_unsubscribe", { id });
+
+/** Manually refresh a show's feed (Manager+). Returns the new-episode count. */
+export const podcastRefresh = (id: string) =>
+  invoke<RefreshReport>("podcast_refresh", { id });
+
+/** Set a show's newest-N auto-download policy (Manager+; 0 = metadata only). */
+export const podcastSetAutoDownload = (id: string, autoDownload: number) =>
+  invoke<MergedPodcast>("podcast_set_auto_download", { id, autoDownload });
 
 /**
  * Register this device for **real-time FCM push** (Android). Fetches the FCM
@@ -522,8 +630,8 @@ export const playlistReorderTrack = (
 // injected — so the frontend never branches on online/offline.
 // ---------------------------------------------------------------------------
 
-export const playerMediaUrl = (trackId: string) =>
-  invoke<string>("player_media_url", { trackId });
+export const playerMediaUrl = (trackId: string, kind?: "track" | "episode") =>
+  invoke<string>("player_media_url", { trackId, kind: kind ?? null });
 
 /** Loopback URL for an album's cover art (fetchable by native code). */
 export const playerCoverUrl = (albumId: string) =>
@@ -685,9 +793,13 @@ export type BatchDownloadResult = {
 };
 
 export type StorageUsage = {
+  /** Grand total across tracks + episodes. */
   bytes: number;
   track_count: number;
   cover_count: number;
+  /** Downloaded podcast episodes + their byte total (included in `bytes`). */
+  episode_count: number;
+  episode_bytes: number;
 };
 
 export type ProgressScope = "track" | "batch";
@@ -721,6 +833,19 @@ export const downloadsSetDir = (path: string) =>
 export const downloadsWifiOnly = () => invoke<boolean>("downloads_wifi_only");
 export const downloadsSetWifiOnly = (on: boolean) =>
   invoke<void>("downloads_set_wifi_only", { on });
+
+/** Download one podcast episode for offline use (reuses the track pipeline). */
+export const podcastDownloadEpisode = (episodeId: string) =>
+  invoke<TrackDownloadResult>("podcast_download_episode", { episodeId });
+/** Download the newest N undownloaded episodes of a show (default 10). */
+export const podcastDownloadShow = (podcastId: string, newestN?: number) =>
+  invoke<BatchDownloadResult>("podcast_download_show", {
+    podcastId,
+    newestN: newestN ?? null,
+  });
+/** Remove a downloaded episode (file + cache row). */
+export const podcastDeleteEpisode = (episodeId: string) =>
+  invoke<void>("podcast_delete_episode", { episodeId });
 
 /**
  * Subscribe to download-progress events. Returns an unlisten fn.

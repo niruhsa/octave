@@ -25,14 +25,14 @@ use tokio::io::AsyncWriteExt;
 
 use super::artwork;
 use super::paths::{
-    ensure_dir, track_extension, track_file_name, track_path, PART_SUFFIX,
-    SETTING_DOWNLOADS_DIR, SETTING_WIFI_ONLY,
+    ensure_dir, episode_extension, episode_file_name, episode_path, track_extension,
+    track_file_name, track_path, PART_SUFFIX, SETTING_DOWNLOADS_DIR, SETTING_WIFI_ONLY,
 };
 use crate::auth::AuthManager;
 use crate::cache::repo;
 use crate::cache::model as cm;
 use crate::error::{AppError, AppResult};
-use crate::transport::{Credential, ServerClient};
+use crate::transport::Credential;
 
 /// Event channel for progress updates.
 pub const PROGRESS_EVENT: &str = "download-progress";
@@ -109,6 +109,7 @@ pub struct BatchDownloadResult {
 pub enum BatchKind {
     Album,
     Playlist,
+    Podcast,
 }
 
 /// Storage usage summary for the UI.
@@ -117,6 +118,11 @@ pub struct StorageUsage {
     pub bytes: i64,
     pub track_count: i64,
     pub cover_count: i64,
+    /// Downloaded podcast episodes + their byte total (additive to `bytes`).
+    #[serde(default)]
+    pub episode_count: i64,
+    #[serde(default)]
+    pub episode_bytes: i64,
 }
 
 pub struct DownloadManager {
@@ -296,7 +302,8 @@ impl DownloadManager {
         );
         ensure_dir(final_path.parent().unwrap_or(&self.downloads_root)).await?;
 
-        let bytes = self.stream_to_file(&cred, server, track_id, &final_path).await?;
+        let track_url = format!("{}/tracks/{}/stream", server.config().rest_root(), track_id);
+        let bytes = self.stream_to_file(&cred, &track_url, track_id, &final_path).await?;
 
         // Cache rows: artist + album + track + sync_state for each.
         let now = now_iso();
@@ -430,14 +437,16 @@ impl DownloadManager {
         })
     }
 
-    /// Stream `GET /tracks/{id}/stream` into `final_path.part` (resuming
-    /// from any existing partial), then rename to `final_path`. Returns
-    /// the total file size.
+    /// Stream a server byte-range endpoint (`…/tracks/{id}/stream` or
+    /// `…/podcasts/episodes/{id}/stream`) into `final_path.part` (resuming from
+    /// any existing partial), then rename to `final_path`. Returns the total
+    /// file size. `progress_id` is the id emitted on the track-scope progress
+    /// events (a track id or an episode id).
     async fn stream_to_file(
         &self,
         cred: &Credential,
-        server: &ServerClient,
-        track_id: &str,
+        url: &str,
+        progress_id: &str,
         final_path: &Path,
     ) -> AppResult<u64> {
         let part_path = final_path.with_extension(format!(
@@ -454,9 +463,8 @@ impl DownloadManager {
             existing = tokio::fs::metadata(&part_path).await.map(|m| m.len()).unwrap_or(0);
         }
 
-        let url = format!("{}/tracks/{}/stream", server.config().rest_root(), track_id);
         let auth = auth_header(cred);
-        let mut req = self.http.get(&url).header("Authorization", auth);
+        let mut req = self.http.get(url).header("Authorization", auth);
         if existing > 0 {
             req = req.header("Range", format!("bytes={existing}-"));
         }
@@ -493,7 +501,7 @@ impl DownloadManager {
 
         self.emit(ProgressEvent {
             scope: ProgressScope::Track,
-            id: track_id.to_string(),
+            id: progress_id.to_string(),
             phase: ProgressPhase::Start,
             received: Some(existing),
             total: if total > 0 { Some(total) } else { None },
@@ -524,7 +532,7 @@ impl DownloadManager {
             if last_emit.elapsed() > std::time::Duration::from_millis(100) {
                 self.emit(ProgressEvent {
                     scope: ProgressScope::Track,
-                    id: track_id.to_string(),
+                    id: progress_id.to_string(),
                     phase: ProgressPhase::Progress,
                     received: Some(received),
                     total: if total > 0 { Some(total) } else { None },
@@ -589,6 +597,149 @@ impl DownloadManager {
         self.run_batch(playlist_id, BatchKind::Playlist, ids).await
     }
 
+    // ----- podcasts ------------------------------------------------------
+
+    /// Download one episode for offline use. Triggers the server to fetch the
+    /// enclosure to its disk (the authoritative cached copy), then streams the
+    /// server's episode endpoint into the downloads root — the **same**
+    /// resumable path as a track. Idempotent: an already-downloaded episode
+    /// (cache hit + file present) is a no-op.
+    pub async fn download_episode(&self, episode_id: &str) -> AppResult<TrackDownloadResult> {
+        let cred = self.auth.credential().await?;
+        let server = self.auth.server();
+
+        // Already downloaded? Cache hit + file present → no-op.
+        if let Some(row) = repo::get_episode(&self.pool, episode_id).await? {
+            if let Some(lp) = &row.local_file_path {
+                if tokio::fs::metadata(lp).await.is_ok() {
+                    let bytes = row.file_size.unwrap_or(0) as u64;
+                    self.emit(ProgressEvent {
+                        scope: ProgressScope::Track,
+                        id: episode_id.to_string(),
+                        phase: ProgressPhase::Done,
+                        received: Some(bytes),
+                        total: Some(bytes),
+                        track_id: None,
+                        index: None,
+                        total_tracks: None,
+                        message: None,
+                    });
+                    return Ok(TrackDownloadResult {
+                        track_id: episode_id.to_string(),
+                        local_path: lp.clone(),
+                        bytes,
+                        skipped: true,
+                    });
+                }
+            }
+        }
+
+        // Ask the server to fetch the enclosure to its disk, then stream from it
+        // (so every client shares the one cached copy). Returns the episode row.
+        let ep = server.download_episode(&cred, episode_id).await?;
+        let podcast = server.get_podcast(&cred, &ep.podcast_id).await?;
+
+        let ext = episode_extension(&ep.enclosure_url, ep.codec.as_deref());
+        let file_name = episode_file_name(ep.episode_no, &ep.title, &ep.id);
+        let final_path = episode_path(&self.downloads_root, &podcast.title, &file_name, &ext);
+        ensure_dir(final_path.parent().unwrap_or(&self.downloads_root)).await?;
+
+        let url = format!(
+            "{}/podcasts/episodes/{}/stream",
+            server.config().rest_root(),
+            episode_id
+        );
+        let bytes = self.stream_to_file(&cred, &url, episode_id, &final_path).await?;
+
+        let now = now_iso();
+        let local_path = final_path.to_string_lossy().into_owned();
+
+        // Cache the show (preserve the subscribed flag if already cached).
+        let subscribed = repo::get_podcast(&self.pool, &podcast.id)
+            .await?
+            .map(|p| p.subscribed)
+            .unwrap_or(0);
+        repo::upsert_podcast(
+            &self.pool,
+            &cm::Podcast {
+                id: podcast.id.clone(),
+                feed_url: podcast.feed_url.clone(),
+                title: podcast.title.clone(),
+                author: podcast.author.clone(),
+                description: podcast.description.clone(),
+                image_url: podcast.image_url.clone(),
+                language: podcast.language.clone(),
+                categories: serde_json::to_string(&podcast.categories)
+                    .unwrap_or_else(|_| "[]".into()),
+                subscribed,
+                updated_at: now.clone(),
+            },
+        )
+        .await?;
+        repo::upsert_episode(
+            &self.pool,
+            &cm::PodcastEpisode {
+                id: ep.id.clone(),
+                podcast_id: ep.podcast_id.clone(),
+                guid: ep.guid.clone(),
+                title: ep.title.clone(),
+                description: ep.description.clone(),
+                enclosure_url: ep.enclosure_url.clone(),
+                episode_no: ep.episode_no,
+                season_no: ep.season_no,
+                duration_ms: ep.duration_ms,
+                codec: ep.codec.clone(),
+                bitrate_kbps: ep.bitrate_kbps,
+                file_size: Some(bytes as i64),
+                local_file_path: Some(local_path.clone()),
+                image_path: None,
+                published_at: ep.published_at.clone(),
+                metadata_json: "{}".to_string(),
+                downloaded_at: Some(now.clone()),
+                updated_at: now.clone(),
+            },
+        )
+        .await?;
+        stamp(&self.pool, "podcast", &podcast.id).await?;
+        stamp(&self.pool, "podcast_episode", &ep.id).await?;
+
+        self.emit(ProgressEvent {
+            scope: ProgressScope::Track,
+            id: episode_id.to_string(),
+            phase: ProgressPhase::Done,
+            received: Some(bytes),
+            total: Some(bytes),
+            track_id: None,
+            index: None,
+            total_tracks: None,
+            message: None,
+        });
+
+        Ok(TrackDownloadResult {
+            track_id: episode_id.to_string(),
+            local_path,
+            bytes,
+            skipped: false,
+        })
+    }
+
+    /// Download the newest `newest_n` not-yet-downloaded episodes of a show
+    /// (feeds are large, so we don't grab the whole back-catalog). Reuses the
+    /// batch machinery (progress events + Android foreground-service notif).
+    pub async fn download_podcast(
+        &self,
+        podcast_id: &str,
+        newest_n: Option<u32>,
+    ) -> AppResult<BatchDownloadResult> {
+        let cred = self.auth.credential().await?;
+        let server = self.auth.server();
+        // Newest-first page; the server already orders by published date.
+        let limit = newest_n.unwrap_or(10).clamp(1, 200) as i32;
+        let episodes = server.list_episodes(&cred, podcast_id, limit, 0).await?;
+        let ids: Vec<String> = episodes.into_iter().map(|e| e.id).collect();
+        self.run_batch(podcast_id, BatchKind::Podcast, ids).await
+    }
+
     async fn run_batch(
         &self,
         batch_id: &str,
@@ -600,6 +751,7 @@ impl DownloadManager {
         let title = match kind {
             BatchKind::Album => "Downloading album",
             BatchKind::Playlist => "Downloading playlist",
+            BatchKind::Podcast => "Downloading podcast",
         };
         self.emit(ProgressEvent {
             scope: ProgressScope::Batch,
@@ -626,13 +778,21 @@ impl DownloadManager {
             } else {
                 0
             };
+            let unit = match kind {
+                BatchKind::Podcast => "Episode",
+                _ => "Track",
+            };
             crate::download_session::update(
                 &self.app,
                 title,
-                &format!("Track {idx} of {total}"),
+                &format!("{unit} {idx} of {total}"),
                 pct,
             );
-            match self.download_track(tid).await {
+            let outcome = match kind {
+                BatchKind::Podcast => self.download_episode(tid).await,
+                _ => self.download_track(tid).await,
+            };
+            match outcome {
                 Ok(r) => {
                     if r.skipped {
                         skipped += 1;
@@ -735,16 +895,57 @@ impl DownloadManager {
         Ok(())
     }
 
+    /// Remove a downloaded episode: delete the file + clear the cache row's
+    /// local path (keeping the metadata for the show view) + its sync_state.
+    /// When the show has no downloaded episodes left and the user isn't
+    /// subscribed, drop the show row too; best-effort prune of the now-empty
+    /// show directory.
+    pub async fn delete_episode(&self, episode_id: &str) -> AppResult<()> {
+        let row = repo::get_episode(&self.pool, episode_id)
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("episode {episode_id} not in cache")))?;
+        let podcast_id = row.podcast_id.clone();
+        let path = row.local_file_path.as_ref().map(PathBuf::from);
+
+        if let Some(p) = &path {
+            let _ = tokio::fs::remove_file(p).await;
+        }
+        repo::delete_episode(&self.pool, episode_id).await?;
+        repo::delete_sync_state(&self.pool, "podcast_episode", episode_id).await?;
+
+        // If nothing of this show is downloaded any more and it isn't a
+        // subscription, drop the show + prune its (now-empty) directory.
+        if repo::count_downloaded_episodes_for_podcast(&self.pool, &podcast_id).await? == 0 {
+            let still_subscribed = repo::get_podcast(&self.pool, &podcast_id)
+                .await?
+                .map(|p| p.subscribed != 0)
+                .unwrap_or(false);
+            if !still_subscribed {
+                repo::delete_podcast(&self.pool, &podcast_id).await?;
+                repo::delete_sync_state(&self.pool, "podcast", &podcast_id).await?;
+            }
+            if let Some(show_dir) = path.as_ref().and_then(|p| p.parent()) {
+                let _ = tokio::fs::remove_dir(show_dir).await;
+            }
+        }
+        Ok(())
+    }
+
     // ----- storage accounting -------------------------------------------
 
     pub async fn storage_usage(&self) -> AppResult<StorageUsage> {
-        let bytes = repo::downloaded_bytes(&self.pool).await?;
+        let track_bytes = repo::downloaded_bytes(&self.pool).await?;
         let track_count = repo::count_downloaded_tracks(&self.pool).await?;
         let cover_count = repo::downloaded_cover_count(&self.pool).await?;
+        let episode_bytes = repo::downloaded_episode_bytes(&self.pool).await?;
+        let episode_count = repo::count_downloaded_episodes(&self.pool).await?;
         Ok(StorageUsage {
-            bytes,
+            // `bytes` is the grand total so existing UI keeps working.
+            bytes: track_bytes + episode_bytes,
             track_count,
             cover_count,
+            episode_count,
+            episode_bytes,
         })
     }
 

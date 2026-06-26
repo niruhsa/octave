@@ -60,9 +60,12 @@ impl SyncEngine {
         self.pull_albums(server, &cred, &mut report).await?;
         self.pull_tracks(server, &cred, &mut report).await?;
         self.pull_playlists(server, &cred, &mut report).await?;
+        self.pull_podcasts(server, &cred, &mut report).await?;
+        self.pull_podcast_episodes(server, &cred, &mut report).await?;
 
         // 3. Prune downloads whose files disappeared.
         self.prune_missing_files(&mut report).await?;
+        self.prune_missing_episode_files(&mut report).await?;
 
         tracing::info!(?report, "sync complete");
         Ok(report)
@@ -454,6 +457,107 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Reconcile cached podcast shows. Metadata-only — `subscribed` is
+    /// client-owned. A fetch error (offline / since-deleted) leaves the row
+    /// in place rather than risk pruning on a transient failure (a deleted
+    /// subscribed show simply stops appearing in the online `list_subscriptions`).
+    async fn pull_podcasts(
+        &self,
+        server: &ServerClient,
+        cred: &Credential,
+        report: &mut SyncReport,
+    ) -> AppResult<()> {
+        for row in repo::list_all_podcasts(&self.pool).await? {
+            match server.get_podcast(cred, &row.id).await {
+                Ok(srv) => {
+                    let cats =
+                        serde_json::to_string(&srv.categories).unwrap_or_else(|_| "[]".into());
+                    let hash = hash_fields(&[
+                        &srv.feed_url,
+                        &srv.title,
+                        srv.author.as_deref().unwrap_or(""),
+                        srv.description.as_deref().unwrap_or(""),
+                        srv.image_url.as_deref().unwrap_or(""),
+                        srv.language.as_deref().unwrap_or(""),
+                        &cats,
+                    ]);
+                    if self.changed("podcast", &row.id, &hash).await? {
+                        let updated = cm::Podcast {
+                            id: srv.id,
+                            feed_url: srv.feed_url,
+                            title: srv.title,
+                            author: srv.author,
+                            description: srv.description,
+                            image_url: srv.image_url,
+                            language: srv.language,
+                            categories: cats,
+                            subscribed: row.subscribed, // client-owned
+                            updated_at: now_iso(),
+                        };
+                        repo::upsert_podcast(&self.pool, &updated).await?;
+                        self.stamp("podcast", &updated.id, &hash).await?;
+                        report.entities_updated += 1;
+                    }
+                }
+                Err(e) => tracing::debug!(podcast = %row.id, err = %e, "podcast reconcile skipped"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Reconcile downloaded episodes' metadata. Client-owned fields
+    /// (`local_file_path` / `downloaded_at` / `file_size`) are preserved.
+    async fn pull_podcast_episodes(
+        &self,
+        server: &ServerClient,
+        cred: &Credential,
+        report: &mut SyncReport,
+    ) -> AppResult<()> {
+        for row in repo::list_downloaded_episodes(&self.pool).await? {
+            match server.get_episode(cred, &row.id).await {
+                Ok(srv) => {
+                    let hash = hash_fields(&[
+                        &srv.podcast_id,
+                        &srv.title,
+                        srv.description.as_deref().unwrap_or(""),
+                        &srv.enclosure_url,
+                        &srv.episode_no.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.season_no.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.duration_ms.map(|n| n.to_string()).unwrap_or_default(),
+                    ]);
+                    if self.changed("podcast_episode", &row.id, &hash).await? {
+                        let updated = cm::PodcastEpisode {
+                            id: srv.id,
+                            podcast_id: srv.podcast_id,
+                            guid: srv.guid,
+                            title: srv.title,
+                            description: srv.description,
+                            enclosure_url: srv.enclosure_url,
+                            episode_no: srv.episode_no,
+                            season_no: srv.season_no,
+                            duration_ms: srv.duration_ms.or(row.duration_ms),
+                            codec: srv.codec.or(row.codec.clone()),
+                            bitrate_kbps: srv.bitrate_kbps.or(row.bitrate_kbps),
+                            // client-owned (reflect the on-disk file)
+                            file_size: row.file_size,
+                            local_file_path: row.local_file_path.clone(),
+                            image_path: row.image_path.clone(),
+                            published_at: srv.published_at,
+                            metadata_json: row.metadata_json.clone(),
+                            downloaded_at: row.downloaded_at.clone(),
+                            updated_at: now_iso(),
+                        };
+                        repo::upsert_episode(&self.pool, &updated).await?;
+                        self.stamp("podcast_episode", &updated.id, &hash).await?;
+                        report.entities_updated += 1;
+                    }
+                }
+                Err(e) => tracing::debug!(episode = %row.id, err = %e, "episode reconcile skipped"),
+            }
+        }
+        Ok(())
+    }
+
     // ----- prune ---------------------------------------------------------
 
     async fn prune_missing_files(&self, report: &mut SyncReport) -> AppResult<()> {
@@ -463,6 +567,22 @@ impl SyncEngine {
                 tracing::warn!(track = %row.id, path = %row.local_file_path, "downloaded file missing; pruning row");
                 repo::delete_track(&self.pool, &row.id).await?;
                 repo::delete_sync_state(&self.pool, "track", &row.id).await?;
+                report.files_missing += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Prune downloaded-episode rows whose local file vanished from disk.
+    async fn prune_missing_episode_files(&self, report: &mut SyncReport) -> AppResult<()> {
+        for row in repo::list_downloaded_episodes(&self.pool).await? {
+            let Some(lp) = row.local_file_path.as_deref() else {
+                continue;
+            };
+            if tokio::fs::metadata(lp).await.is_err() {
+                tracing::warn!(episode = %row.id, path = %lp, "downloaded episode file missing; pruning row");
+                repo::delete_episode(&self.pool, &row.id).await?;
+                repo::delete_sync_state(&self.pool, "podcast_episode", &row.id).await?;
                 report.files_missing += 1;
             }
         }

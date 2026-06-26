@@ -65,6 +65,15 @@ export const ArtistIcon = (p: IconProps) => (
   </Line>
 );
 
+/** Microphone — podcasts. */
+export const PodcastIcon = (p: IconProps) => (
+  <Line {...p}>
+    <rect x="6" y="1.8" width="4" height="7" rx="2" />
+    <path d="M3.8 7.2a4.2 4.2 0 0 0 8.4 0" />
+    <path d="M8 11.4V14M6 14h4" />
+  </Line>
+);
+
 export const SongIcon = (p: IconProps) => (
   <Line {...p}>
     <path d="M5.5 11.5V4l7-1.5v7" />

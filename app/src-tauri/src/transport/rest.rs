@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier,
-    Playlist, PlaylistTrack, PlaylistWithTracks, RescanReport, ServerConfig, SingleUploadResult,
-    Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
-    UploadView,
+    Playlist, PlaylistTrack, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode,
+    RefreshReport, RescanReport, ServerConfig, SingleUploadResult, Track, UploadEvent,
+    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -913,6 +913,297 @@ impl RestClient {
         Ok(())
     }
 
+    // ----- Podcasts ------------------------------------------------------
+
+    pub async fn search_podcasts(
+        &self,
+        cred: &Credential,
+        term: &str,
+        limit: i32,
+    ) -> AppResult<Vec<PodcastCandidate>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            candidates: Vec<CandidateJson>,
+        }
+        let url = format!("{}/podcasts/search", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .query(&[("term", term), ("limit", &limit.to_string())])
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("search_podcasts"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("search_podcasts decode"))?;
+        Ok(body.candidates.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn subscribe_feed(
+        &self,
+        cred: &Credential,
+        feed_url: Option<&str>,
+        itunes_id: Option<i64>,
+    ) -> AppResult<Podcast> {
+        let url = format!("{}/podcasts", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "feed_url": feed_url, "itunes_id": itunes_id }))
+            .send()
+            .await
+            .map_err(rest_err("subscribe_feed"))?;
+        let body: PodcastJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("subscribe_feed decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn list_podcasts(
+        &self,
+        cred: &Credential,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<(Vec<Podcast>, i64)> {
+        #[derive(Deserialize)]
+        struct Resp {
+            podcasts: Vec<PodcastJson>,
+            total: i64,
+        }
+        let url = format!("{}/podcasts?limit={limit}&offset={offset}", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_podcasts"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_podcasts decode"))?;
+        Ok((body.podcasts.into_iter().map(Into::into).collect(), body.total))
+    }
+
+    pub async fn get_podcast(&self, cred: &Credential, id: &str) -> AppResult<Podcast> {
+        let url = format!("{}/podcasts/{id}", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_podcast"))?;
+        let body: PodcastJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("get_podcast decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn delete_podcast(&self, cred: &Credential, id: &str) -> AppResult<()> {
+        let url = format!("{}/podcasts/{id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("delete_podcast"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn refresh_podcast(&self, cred: &Credential, id: &str) -> AppResult<RefreshReport> {
+        #[derive(Deserialize)]
+        struct Resp {
+            podcast_id: String,
+            new_episodes: i64,
+            not_modified: bool,
+        }
+        let url = format!("{}/podcasts/{id}/refresh", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("refresh_podcast"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("refresh_podcast decode"))?;
+        Ok(RefreshReport {
+            podcast_id: body.podcast_id,
+            new_episodes: body.new_episodes,
+            not_modified: body.not_modified,
+        })
+    }
+
+    pub async fn set_podcast_auto_download(
+        &self,
+        cred: &Credential,
+        id: &str,
+        auto_download: i32,
+    ) -> AppResult<Podcast> {
+        let url = format!("{}/podcasts/{id}/auto-download", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "auto_download": auto_download }))
+            .send()
+            .await
+            .map_err(rest_err("set_auto_download"))?;
+        let body: PodcastJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_auto_download decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn list_episodes(
+        &self,
+        cred: &Credential,
+        podcast_id: &str,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<Vec<PodcastEpisode>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            episodes: Vec<EpisodeJson>,
+        }
+        let url = format!(
+            "{}/podcasts/{podcast_id}/episodes?limit={limit}&offset={offset}",
+            self.base
+        );
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_episodes"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_episodes decode"))?;
+        Ok(body.episodes.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn get_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
+        let url = format!("{}/podcasts/episodes/{id}", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_episode"))?;
+        let body: EpisodeJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("get_episode decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn download_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
+        let url = format!("{}/podcasts/episodes/{id}/download", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("download_episode"))?;
+        let body: EpisodeJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("download_episode decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn subscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        let url = format!("{}/podcasts/{id}/subscribe", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("subscribe"))?;
+        check_status(resp).await?;
+        Ok(true)
+    }
+
+    pub async fn unsubscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        let url = format!("{}/podcasts/{id}/subscribe", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("unsubscribe"))?;
+        check_status(resp).await?;
+        Ok(false)
+    }
+
+    pub async fn is_subscribed(&self, cred: &Credential, id: &str) -> AppResult<bool> {
+        #[derive(Deserialize)]
+        struct Resp {
+            subscribed: bool,
+        }
+        let url = format!("{}/podcasts/{id}/subscribe", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("is_subscribed"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("is_subscribed decode"))?;
+        Ok(body.subscribed)
+    }
+
+    pub async fn list_subscriptions(&self, cred: &Credential) -> AppResult<Vec<Podcast>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            podcasts: Vec<PodcastJson>,
+        }
+        let url = format!("{}/podcasts/subscriptions", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_subscriptions"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_subscriptions decode"))?;
+        Ok(body.podcasts.into_iter().map(Into::into).collect())
+    }
+
     // ----- Image upload (Phase 9; Manager+ gated, REST-only binary blob) ----
 
     /// `POST /albums/:id/cover` — raw `image/*` body. Returns `()`; the caller
@@ -1440,6 +1731,135 @@ impl From<PlaylistTrackJson> for PlaylistTrack {
     }
 }
 
+#[derive(Deserialize)]
+struct PodcastJson {
+    id: String,
+    feed_url: String,
+    title: String,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    image_url: Option<String>,
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    itunes_id: Option<i64>,
+    #[serde(default)]
+    podcastindex_id: Option<i64>,
+    auto_download: i32,
+    #[serde(default)]
+    last_refreshed_at: Option<String>,
+}
+impl From<PodcastJson> for Podcast {
+    fn from(p: PodcastJson) -> Self {
+        Self {
+            id: p.id,
+            feed_url: p.feed_url,
+            title: p.title,
+            author: p.author,
+            description: p.description,
+            image_url: p.image_url,
+            link: p.link,
+            language: p.language,
+            categories: p.categories,
+            itunes_id: p.itunes_id,
+            podcastindex_id: p.podcastindex_id,
+            auto_download: p.auto_download,
+            last_refreshed_at: p.last_refreshed_at,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CandidateJson {
+    feed_url: String,
+    title: String,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    image_url: Option<String>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    itunes_id: Option<i64>,
+    #[serde(default)]
+    podcastindex_id: Option<i64>,
+}
+impl From<CandidateJson> for PodcastCandidate {
+    fn from(c: CandidateJson) -> Self {
+        Self {
+            feed_url: c.feed_url,
+            title: c.title,
+            author: c.author,
+            description: c.description,
+            image_url: c.image_url,
+            categories: c.categories,
+            itunes_id: c.itunes_id,
+            podcastindex_id: c.podcastindex_id,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct EpisodeJson {
+    id: String,
+    podcast_id: String,
+    guid: String,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    enclosure_url: String,
+    #[serde(default)]
+    enclosure_type: Option<String>,
+    #[serde(default)]
+    episode_no: Option<i64>,
+    #[serde(default)]
+    season_no: Option<i64>,
+    #[serde(default)]
+    duration_ms: Option<i64>,
+    #[serde(default)]
+    codec: Option<String>,
+    #[serde(default)]
+    bitrate_kbps: Option<i64>,
+    #[serde(default)]
+    file_size: Option<i64>,
+    #[serde(default)]
+    image_url: Option<String>,
+    #[serde(default)]
+    published_at: Option<String>,
+    downloaded: bool,
+}
+impl From<EpisodeJson> for PodcastEpisode {
+    fn from(e: EpisodeJson) -> Self {
+        Self {
+            id: e.id,
+            podcast_id: e.podcast_id,
+            guid: e.guid,
+            title: e.title,
+            description: e.description,
+            enclosure_url: e.enclosure_url,
+            enclosure_type: e.enclosure_type,
+            episode_no: e.episode_no,
+            season_no: e.season_no,
+            duration_ms: e.duration_ms,
+            codec: e.codec,
+            bitrate_kbps: e.bitrate_kbps,
+            file_size: e.file_size,
+            image_url: e.image_url,
+            published_at: e.published_at,
+            downloaded: e.downloaded,
+        }
+    }
+}
+
 pub struct RestLoginOutcome {
     pub token: String,
     pub user_id: String,
@@ -1462,6 +1882,10 @@ struct NotificationJson {
     artist_id: Option<String>,
     #[serde(default)]
     album_id: Option<String>,
+    #[serde(default)]
+    podcast_id: Option<String>,
+    #[serde(default)]
+    episode_id: Option<String>,
     title: String,
     #[serde(default)]
     body: Option<String>,
@@ -1475,6 +1899,8 @@ impl From<NotificationJson> for super::Notification {
             kind: n.kind,
             artist_id: n.artist_id,
             album_id: n.album_id,
+            podcast_id: n.podcast_id,
+            episode_id: n.episode_id,
             title: n.title,
             body: n.body,
             read: n.read,

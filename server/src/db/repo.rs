@@ -302,3 +302,74 @@ pub trait UploadRepo: Send + Sync {
     /// Returns the file's `(received_chunks, total_chunks)` after the update.
     async fn mark_chunk_received(&self, file_id: Uuid, chunk_index: i32) -> Result<(i32, i32)>;
 }
+
+/// Podcast shows (the catalog). A show is the analogue of an artist; mutations
+/// are Manager+ at the service layer, reads are any authed user.
+#[async_trait]
+pub trait PodcastRepo: Send + Sync {
+    /// Insert or update by `feed_url` (a feed is a feed). The conflict path
+    /// refreshes the feed-derived metadata but leaves `image_path`,
+    /// `auto_download`, and the refresh bookkeeping untouched. Returns the row.
+    async fn upsert_by_feed_url(&self, new: NewPodcast) -> Result<Podcast>;
+    async fn get(&self, id: Uuid) -> Result<Option<Podcast>>;
+    async fn get_by_feed_url(&self, feed_url: &str) -> Result<Option<Podcast>>;
+    async fn list(&self, limit: i64, offset: i64) -> Result<Vec<Podcast>>;
+    async fn count(&self) -> Result<i64>;
+    async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Podcast>>;
+    /// Set (or clear) the cached cover path. Leaves everything else untouched.
+    async fn set_image(&self, id: Uuid, image_path: Option<&str>) -> Result<Option<Podcast>>;
+    /// Set the per-show auto-download policy (newest-N; 0 = metadata only).
+    async fn set_auto_download(&self, id: Uuid, n: i32) -> Result<Option<Podcast>>;
+    /// Record a successful refresh: bump `last_refreshed_at` to now and store
+    /// the conditional-GET validators for next time.
+    async fn touch_refreshed(
+        &self,
+        id: Uuid,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<()>;
+    /// Every podcast, oldest-refreshed first — drives the refresh poller.
+    async fn all_for_refresh(&self) -> Result<Vec<Podcast>>;
+    async fn delete(&self, id: Uuid) -> Result<()>;
+}
+
+/// Podcast episodes (the on-disk files). Mirrors `TrackRepo`.
+#[async_trait]
+pub trait PodcastEpisodeRepo: Send + Sync {
+    /// Insert or update by `(podcast_id, guid)`. Returns the row plus whether
+    /// it was newly **inserted** (`true`) — the signal the refresh uses to
+    /// detect a genuinely-new episode and fan out a notification.
+    async fn upsert_by_guid(&self, new: NewPodcastEpisode) -> Result<(PodcastEpisode, bool)>;
+    async fn get(&self, id: Uuid) -> Result<Option<PodcastEpisode>>;
+    /// Newest-first page for a show.
+    async fn list_for_podcast(
+        &self,
+        podcast_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PodcastEpisode>>;
+    /// The newest episodes that have no `file_path` yet (drives auto-download).
+    async fn newest_undownloaded(&self, podcast_id: Uuid, limit: i64) -> Result<Vec<PodcastEpisode>>;
+    /// Record the on-disk file + probed technical fields after a download.
+    async fn set_file(
+        &self,
+        id: Uuid,
+        file_path: &str,
+        file_size: Option<i64>,
+        codec: Option<&str>,
+        bitrate_kbps: Option<i32>,
+        duration_ms: Option<i64>,
+    ) -> Result<Option<PodcastEpisode>>;
+    /// Clear the on-disk file reference (local delete). Returns the updated row.
+    async fn clear_file(&self, id: Uuid) -> Result<Option<PodcastEpisode>>;
+    async fn delete(&self, id: Uuid) -> Result<()>;
+}
+
+/// Podcast subscriptions (user → show). Structurally identical to [`FollowRepo`].
+#[async_trait]
+pub trait PodcastSubscriptionRepo: Send + Sync {
+    async fn subscribe(&self, user_id: Uuid, podcast_id: Uuid) -> Result<()>;
+    async fn unsubscribe(&self, user_id: Uuid, podcast_id: Uuid) -> Result<()>;
+    async fn subscribers_of(&self, podcast_id: Uuid) -> Result<Vec<Uuid>>;
+    async fn subscriptions(&self, user_id: Uuid) -> Result<Vec<Uuid>>;
+}

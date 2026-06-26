@@ -157,7 +157,10 @@ export default function Downloads() {
             {storage ? formatBytes(storage.bytes) : "…"}
           </div>
           <div className="mt-0.5 font-mono text-[11px] text-oct-subtle">
-            {storage ? `${storage.track_count} tracks · ${storage.cover_count} covers` : ""}
+            {storage
+              ? `${storage.track_count} tracks · ${storage.cover_count} covers` +
+                (storage.episode_count > 0 ? ` · ${storage.episode_count} episodes` : "")
+              : ""}
           </div>
         </div>
         <div className="min-w-0">

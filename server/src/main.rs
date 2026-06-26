@@ -13,8 +13,9 @@ use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
     run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, FcmSender, ImageOptimizer,
-    IngestService, LibraryService, MetadataService, NotificationService, PlaylistService,
-    PushSender, ScanService, StreamingService, UploadHub, UploadsService,
+    IngestService, ItunesDirectory, LibraryService, MetadataService, NotificationService,
+    PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService, PushSender,
+    ScanService, StreamingService, UploadHub, UploadsService,
 };
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
@@ -80,7 +81,17 @@ async fn main() -> Result<()> {
     .with_primary_language(config.primary_language.clone())
     .with_notifications(notifications.clone());
     let scan = ScanService::new(library.clone(), config.library_path.clone());
-    let streaming = StreamingService::new(Arc::new(repos.clone()), config.library_path.clone());
+    // Ensure the podcast storage dir exists so the streaming path can canonicalize
+    // it (episode files live here). Best-effort — created on demand otherwise.
+    if let Some(pc) = &config.podcast
+        && let Err(e) = std::fs::create_dir_all(&pc.path)
+    {
+        warn!(path = %pc.path.display(), error = %e, "failed to create PODCAST_PATH");
+    }
+    let mut streaming = StreamingService::new(Arc::new(repos.clone()), config.library_path.clone());
+    if let Some(pc) = &config.podcast {
+        streaming = streaming.with_podcasts(Arc::new(repos.clone()), Some(pc.path.clone()));
+    }
     let playlists = PlaylistService::new(
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
@@ -147,6 +158,44 @@ async fn main() -> Result<()> {
         up.spawn_stall_sweeper();
     }
 
+    // Podcasts (optional — gated on PODCAST_PATH/LIBRARY_PATH). The directory is
+    // PodcastIndex when keyed (with an iTunes fallback), else iTunes-only. The
+    // service shares the new-episode fan-out with `notifications`.
+    let podcasts = config.podcast.as_ref().map(|pc| {
+        let directory: Arc<dyn PodcastDirectory> = match &pc.podcastindex {
+            Some(creds) => Arc::new(PodcastIndexDirectory::new(
+                creds.api_key.clone(),
+                creds.api_secret.clone(),
+                ItunesDirectory::new(),
+            )),
+            None => Arc::new(ItunesDirectory::new()),
+        };
+        info!(
+            path = %pc.path.display(),
+            podcastindex = pc.podcastindex.is_some(),
+            refresh_secs = pc.refresh_interval_secs,
+            "podcasts enabled"
+        );
+        PodcastService::new(
+            Arc::new(repos.clone()),
+            Arc::new(repos.clone()),
+            Arc::new(repos.clone()),
+            Arc::new(repos.clone()),
+            directory,
+            pc.path.clone(),
+        )
+        .with_notifications(notifications.clone())
+        .with_auto_download_default(pc.auto_download_default)
+        .with_refresh_interval(pc.refresh_interval_secs)
+    });
+    // Background feed refresh poller (0 disables) — mirrors the optimize pass /
+    // upload stall sweeper.
+    if let (Some(p), Some(pc)) = (&podcasts, &config.podcast)
+        && pc.refresh_interval_secs > 0
+    {
+        p.spawn_refresh_poller();
+    }
+
     // Image-optimization background work: optimize everything once on startup,
     // then on a timer. New/changed images are also handled on upload + on
     // demand at serve time — this pass is the catch-all (e.g. ingest-created
@@ -191,6 +240,7 @@ async fn main() -> Result<()> {
         streaming,
         playlists: playlists.clone(),
         notifications: notifications.clone(),
+        podcasts: podcasts.clone(),
         ingest: ingest.clone(),
         metadata: metadata.clone(),
         artwork: artwork.clone(),
@@ -210,6 +260,7 @@ async fn main() -> Result<()> {
         artwork,
         playlists,
         notifications,
+        podcasts,
         ingest,
         uploads,
         upload_hub,

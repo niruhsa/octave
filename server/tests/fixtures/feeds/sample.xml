@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Test Podcast</title>
+    <link>https://example.com/podcast</link>
+    <language>en-us</language>
+    <description>A fixture feed for unit tests.</description>
+    <itunes:author>Jane Host</itunes:author>
+    <itunes:image href="https://cdn.example.com/cover.jpg"/>
+    <image>
+      <url>https://cdn.example.com/cover.jpg</url>
+      <title>Test Podcast</title>
+      <link>https://example.com/podcast</link>
+    </image>
+    <itunes:category text="Technology"/>
+    <item>
+      <title>Episode One</title>
+      <guid isPermaLink="false">episode-001</guid>
+      <pubDate>Tue, 02 Jun 2026 10:00:00 GMT</pubDate>
+      <description>The first episode.</description>
+      <itunes:duration>1830</itunes:duration>
+      <enclosure url="https://cdn.example.com/ep1.mp3" type="audio/mpeg" length="29400000"/>
+    </item>
+    <item>
+      <title>Episode Two</title>
+      <guid isPermaLink="false">episode-002</guid>
+      <pubDate>Tue, 09 Jun 2026 10:00:00 GMT</pubDate>
+      <description>The second episode.</description>
+      <itunes:duration>00:42:15</itunes:duration>
+      <enclosure url="https://cdn.example.com/ep2.mp3" type="audio/mpeg" length="40500000"/>
+    </item>
+    <item>
+      <title>Notes Only</title>
+      <guid isPermaLink="false">no-audio-item</guid>
+      <pubDate>Tue, 16 Jun 2026 10:00:00 GMT</pubDate>
+      <description>An item with no audio enclosure; should be skipped.</description>
+    </item>
+  </channel>
+</rss>

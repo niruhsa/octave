@@ -13,6 +13,7 @@ A private, self-hosted music platform. A remote **server** hosts a lossless/down
 - **Uploads** — push new music individually or as archives (archive file, ISO, CD, and other popular formats).
 - **Ingest folder** — files placed there (e.g. completed torrents) are **copied, not moved**, then auto-organised into the library; sources are never altered.
 - **Follow + notifications** — follow artists and get notified of new releases.
+- **Podcasts** — discover shows via the official iTunes / PodcastIndex APIs, download episodes to disk, stream them like tracks, and get notified of new episodes — full-stack (server + client). See [`PODCASTS.md`](./PODCASTS.md).
 - **Audit log + rollback** — every change is logged, viewable by managers/admins, and reversible.
 
 ## Architecture
@@ -82,5 +83,6 @@ This repo keeps documentation layered so each domain owns its own status:
 - **[`server/AGENTS.md`](./server/AGENTS.md)** — server architecture, responsibilities, env vars, status.
 - **[`app/AGENTS.md`](./app/AGENTS.md)** — client architecture, platforms, build, status.
 - **[`FIREBASE_NOTIFICATIONS.md`](./FIREBASE_NOTIFICATIONS.md)** — step-by-step setup for real-time push notifications (Firebase Cloud Messaging) on Android.
+- **[`PODCASTS.md`](./PODCASTS.md)** — podcast support master plan, linking [`server/PODCASTS.md`](./server/PODCASTS.md) (server-side, complete) and [`app/PODCASTS.md`](./app/PODCASTS.md) (client-side, pending).
 
 **Maintenance rule:** when work changes a domain, update that domain's `AGENTS.md` first, then propagate high-level/status changes up to the root [`AGENTS.md`](./AGENTS.md) and this `README.md`. Keep the **Status** sections here and in each `AGENTS.md` in sync.

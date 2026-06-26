@@ -26,7 +26,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::auth::Identity;
-use crate::db::repo::TrackRepo;
+use crate::db::repo::{PodcastEpisodeRepo, TrackRepo};
 use crate::error::{AppError, Result};
 
 /// A file on disk that's safe to stream to the caller. The REST layer
@@ -46,6 +46,10 @@ pub struct ResolvedStream {
 pub struct StreamingService {
     tracks: Arc<dyn TrackRepo>,
     library_root: Option<PathBuf>,
+    /// Podcast episodes, when the feature is enabled. Resolved the same way as
+    /// tracks (byte-range, path-safety), under `podcast_root`.
+    episodes: Option<Arc<dyn PodcastEpisodeRepo>>,
+    podcast_root: Option<PathBuf>,
 }
 
 impl StreamingService {
@@ -59,7 +63,31 @@ impl StreamingService {
                 None
             }
         });
-        Self { tracks, library_root }
+        Self {
+            tracks,
+            library_root,
+            episodes: None,
+            podcast_root: None,
+        }
+    }
+
+    /// Enable podcast-episode streaming. `podcast_root` is canonicalized + added
+    /// to the allow-list so a downloaded episode resolves while traversal stays
+    /// blocked (a non-existent / missing root just rejects episode requests).
+    pub fn with_podcasts(
+        mut self,
+        episodes: Arc<dyn PodcastEpisodeRepo>,
+        podcast_root: Option<PathBuf>,
+    ) -> Self {
+        self.podcast_root = podcast_root.and_then(|p| match std::fs::canonicalize(&p) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                warn!(root = %p.display(), error = %e, "podcast_root canonicalize failed; episode streaming will reject relative paths");
+                None
+            }
+        });
+        self.episodes = Some(episodes);
+        self
     }
 
     /// Any authenticated user may stream (PLAN.md Phase 4 §2). The
@@ -126,6 +154,80 @@ impl StreamingService {
             }
         }
 
+        Ok(canonical)
+    }
+
+    /// Resolve a downloaded podcast episode to a streamable file. A not-yet-
+    /// downloaded episode (no `file_path`) is `NotFound` — the client streams
+    /// the enclosure URL from origin instead.
+    pub async fn resolve_episode(
+        &self,
+        _caller: &Identity,
+        episode_id: Uuid,
+    ) -> Result<ResolvedStream> {
+        let episodes = self
+            .episodes
+            .as_ref()
+            .ok_or_else(|| AppError::NotFound("podcasts are not enabled".into()))?;
+        let ep = episodes
+            .get(episode_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
+        let file_path = ep.file_path.ok_or_else(|| {
+            AppError::NotFound(format!("episode {episode_id} is not downloaded"))
+        })?;
+
+        let resolved = self.resolve_episode_path(&file_path)?;
+        let meta = fs::metadata(&resolved).await.map_err(|e| {
+            warn!(episode = %episode_id, path = %resolved.display(), error = %e, "episode stat failed");
+            AppError::NotFound(format!("episode {episode_id} file missing"))
+        })?;
+        if !meta.is_file() {
+            return Err(AppError::NotFound(format!("episode {episode_id} not a file")));
+        }
+
+        Ok(ResolvedStream {
+            track_id: episode_id,
+            content_type: content_type_for(&resolved),
+            size: meta.len(),
+            modified: meta.modified().ok(),
+            path: resolved,
+        })
+    }
+
+    /// Episode path-safety: the canonical path must live under `podcast_root`
+    /// (the primary media dir) or `library_root` (the default `PODCAST_PATH`
+    /// lives under the library). Absolute paths are validated against those
+    /// roots; relative paths anchor to `podcast_root`.
+    fn resolve_episode_path(&self, raw: &str) -> Result<PathBuf> {
+        let roots: Vec<&PathBuf> = self
+            .podcast_root
+            .iter()
+            .chain(self.library_root.iter())
+            .collect();
+        let candidate = PathBuf::from(raw);
+
+        let joined = if candidate.is_absolute() {
+            candidate
+        } else if let Some(root) = roots.first() {
+            (*root).join(&candidate)
+        } else {
+            return Err(AppError::Internal(
+                "episode file_path is relative but no PODCAST_PATH/LIBRARY_PATH is configured".into(),
+            ));
+        };
+
+        let canonical = std::fs::canonicalize(&joined).map_err(|e| {
+            warn!(path = %joined.display(), error = %e, "episode canonicalize failed");
+            AppError::NotFound("episode file missing".into())
+        })?;
+
+        if !roots.is_empty() && !roots.iter().any(|r| canonical.starts_with(r)) {
+            warn!(canonical = %canonical.display(), "episode path traversal attempt blocked");
+            return Err(AppError::PermissionDenied(
+                "episode file is outside the allowed roots".into(),
+            ));
+        }
         Ok(canonical)
     }
 }
