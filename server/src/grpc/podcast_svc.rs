@@ -44,6 +44,15 @@ fn opt_i64(v: i32) -> Option<i64> {
     if v > 0 { Some(v as i64) } else { None }
 }
 
+/// Serialize a timestamp as RFC 3339 (`2026-06-24T23:31:00Z`) so the client's
+/// `new Date()` can parse it. `OffsetDateTime`'s `Display` emits a
+/// space-separated form with a seconds-precision offset (`… +00:00:00`) that
+/// JS `Date.parse` rejects as `NaN` — which silently blanked episode dates.
+fn rfc3339(t: time::OffsetDateTime) -> String {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| t.to_string())
+}
+
 fn podcast_to_pb(p: m::Podcast) -> pb::Podcast {
     pb::Podcast {
         id: p.id.to_string(),
@@ -58,9 +67,9 @@ fn podcast_to_pb(p: m::Podcast) -> pb::Podcast {
         itunes_id: p.itunes_id.unwrap_or(0),
         podcastindex_id: p.podcastindex_id.unwrap_or(0),
         auto_download: p.auto_download,
-        last_refreshed_at: p.last_refreshed_at.map(|t| t.to_string()).unwrap_or_default(),
-        created_at: p.created_at.to_string(),
-        updated_at: p.updated_at.to_string(),
+        last_refreshed_at: p.last_refreshed_at.map(rfc3339).unwrap_or_default(),
+        created_at: rfc3339(p.created_at),
+        updated_at: rfc3339(p.updated_at),
     }
 }
 
@@ -95,7 +104,7 @@ fn episode_to_pb(e: m::PodcastEpisode) -> pb::Episode {
         file_path: e.file_path.unwrap_or_default(),
         file_size: e.file_size.unwrap_or(0),
         image_url: e.image_path.unwrap_or_default(),
-        published_at: e.published_at.map(|t| t.to_string()).unwrap_or_default(),
+        published_at: e.published_at.map(rfc3339).unwrap_or_default(),
         downloaded,
     }
 }
@@ -287,5 +296,23 @@ impl pb::podcast_service_server::PodcastService for PodcastServer {
             podcasts: items.into_iter().map(podcast_to_pb).collect(),
             total,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rfc3339;
+    use time::OffsetDateTime;
+
+    #[test]
+    fn rfc3339_emits_a_js_parseable_timestamp() {
+        let t = OffsetDateTime::from_unix_timestamp(1_782_689_460).unwrap();
+        let s = rfc3339(t);
+        // `OffsetDateTime`'s `Display` form (`… 23:31:00.0 +00:00:00`) makes JS
+        // `Date.parse` return NaN, which blanked episode release dates. RFC 3339
+        // uses a `T` separator and a minute-precision offset every engine accepts.
+        assert!(s.contains('T'), "want a T separator, got {s:?}");
+        assert!(!s.contains(' '), "want no spaces, got {s:?}");
+        assert!(!s.contains("+00:00:00"), "want a minute-precision offset, got {s:?}");
     }
 }

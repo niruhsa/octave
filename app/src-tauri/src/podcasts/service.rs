@@ -111,10 +111,8 @@ impl<'a> PodcastService<'a> {
     pub async fn list_episodes(
         &self,
         podcast_id: &str,
-        limit: i64,
-        offset: i64,
     ) -> AppResult<LibraryView<MergedEpisode>> {
-        match self.try_server_list_episodes(podcast_id, limit, offset).await {
+        match self.try_server_list_episodes(podcast_id).await {
             Ok(v) => Ok(v),
             Err(e) if is_offline_signal(&e) => {
                 tracing::info!(err = %e, "list_episodes: server unavailable, serving cache");
@@ -127,13 +125,23 @@ impl<'a> PodcastService<'a> {
     async fn try_server_list_episodes(
         &self,
         podcast_id: &str,
-        limit: i64,
-        offset: i64,
     ) -> AppResult<LibraryView<MergedEpisode>> {
-        let eps = self
-            .auth
-            .list_episodes(podcast_id, limit.clamp(1, 200) as i32, offset.max(0) as i32)
-            .await?;
+        // The server caps a single response at 200, so page through the whole
+        // feed — the show detail view wants every episode, not just the newest
+        // page. MAX_PAGES is a safety valve against a misbehaving feed.
+        const PAGE: i32 = 200;
+        const MAX_PAGES: i32 = 200;
+        let mut eps = Vec::new();
+        let mut offset: i32 = 0;
+        for _ in 0..MAX_PAGES {
+            let page = self.auth.list_episodes(podcast_id, PAGE, offset).await?;
+            let full = page.len() == PAGE as usize;
+            eps.extend(page);
+            if !full {
+                break;
+            }
+            offset += PAGE;
+        }
         // One cache query → id → local_file_path for downloaded episodes.
         let cached = repo::list_episodes_for_podcast(self.pool, podcast_id).await?;
         let local: HashMap<String, String> = cached

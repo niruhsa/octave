@@ -85,6 +85,13 @@ pub struct PodcastDto {
     pub created_at: String,
     pub updated_at: String,
 }
+/// RFC 3339 (`2026-06-24T23:31:00Z`) so the client's `new Date()` can parse it.
+/// `OffsetDateTime`'s `Display` emits a seconds-precision offset JS rejects.
+fn rfc3339(t: time::OffsetDateTime) -> String {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| t.to_string())
+}
+
 fn podcast_dto(p: m::Podcast) -> PodcastDto {
     PodcastDto {
         id: p.id.to_string(),
@@ -99,9 +106,9 @@ fn podcast_dto(p: m::Podcast) -> PodcastDto {
         itunes_id: p.itunes_id,
         podcastindex_id: p.podcastindex_id,
         auto_download: p.auto_download,
-        last_refreshed_at: p.last_refreshed_at.map(|t| t.to_string()),
-        created_at: p.created_at.to_string(),
-        updated_at: p.updated_at.to_string(),
+        last_refreshed_at: p.last_refreshed_at.map(rfc3339),
+        created_at: rfc3339(p.created_at),
+        updated_at: rfc3339(p.updated_at),
     }
 }
 
@@ -138,7 +145,7 @@ fn episode_dto(e: m::PodcastEpisode) -> EpisodeDto {
         codec: e.codec,
         bitrate_kbps: e.bitrate_kbps,
         file_size: e.file_size,
-        published_at: e.published_at.map(|t| t.to_string()),
+        published_at: e.published_at.map(rfc3339),
         downloaded: e.file_path.is_some(),
     }
 }

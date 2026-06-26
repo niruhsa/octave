@@ -74,6 +74,8 @@ export default function PlayerBar() {
   const dur = durationSec || (current ? current.duration_ms / 1000 : 0);
   const empty = queue.length === 0 && !current;
   const pct = dur > 0 ? (Math.min(positionSec, dur) / dur) * 100 : 0;
+  // Hour-plus tracks read as `H:MM:SS`; widen the readouts so they don't clip.
+  const longForm = dur >= 3600;
 
   // One persistent <audio>, mounted once at a stable position regardless of
   // `empty`, so a re-render never removes it from the document. It used to be
@@ -154,7 +156,7 @@ export default function PlayerBar() {
             </button>
           </div>
           <div className="flex w-full items-center gap-3">
-            <span className="w-9 text-right font-mono text-[11px] text-oct-subtle">
+            <span className={`${longForm ? "w-14" : "w-9"} text-right font-mono text-[11px] text-oct-subtle`}>
               {formatDuration(positionSec * 1000)}
             </span>
             <input
@@ -167,7 +169,7 @@ export default function PlayerBar() {
               disabled={!dur}
               className="oct-range flex-1"
             />
-            <span className="w-9 font-mono text-[11px] text-oct-subtle">
+            <span className={`${longForm ? "w-14" : "w-9"} font-mono text-[11px] text-oct-subtle`}>
               {formatDuration(dur * 1000)}
             </span>
           </div>

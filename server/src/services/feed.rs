@@ -139,8 +139,11 @@ fn parse_entry(entry: feed_rs::model::Entry) -> Option<ParsedEpisode> {
         .summary
         .map(|t| t.content)
         .or_else(|| entry.content.and_then(|c| c.body));
+    // Prefer the item's publish date; fall back to its updated date for feeds
+    // (often Atom) that only carry `<updated>`.
     let published_at = entry
         .published
+        .or(entry.updated)
         .and_then(|dt| OffsetDateTime::from_unix_timestamp(dt.timestamp()).ok());
 
     Some(ParsedEpisode {

@@ -513,8 +513,10 @@ export const podcastGet = (id: string) =>
   invoke<MergedPodcast>("podcast_get", { id });
 
 /** A show's episodes, newest-first (server-first, cache fallback). */
-export const podcastListEpisodes = (podcastId: string, page: Page = {}) =>
-  invoke<LibraryView<MergedEpisode>>("podcast_list_episodes", { podcastId, ...page });
+/** All of a show's episodes, newest-first (the Tauri command pages through the
+ *  whole feed; the server caps a single response at 200). */
+export const podcastListEpisodes = (podcastId: string) =>
+  invoke<LibraryView<MergedEpisode>>("podcast_list_episodes", { podcastId });
 
 /** Subscribe a feed to the catalog by feed URL, or by an iTunes id to resolve.
  *  Manager+ server-side. */

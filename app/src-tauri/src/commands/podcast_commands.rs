@@ -33,10 +33,6 @@ fn normalise_limit(limit: Option<i64>) -> i64 {
     if l <= 0 { DEFAULT_LIMIT } else { l.min(200) }
 }
 
-fn normalise_offset(offset: Option<i64>) -> i64 {
-    offset.unwrap_or(0).max(0)
-}
-
 #[tauri::command]
 pub async fn podcast_search(
     state: State<'_, AppStateHandle>,
@@ -68,11 +64,9 @@ pub async fn podcast_get(
 pub async fn podcast_list_episodes(
     state: State<'_, AppStateHandle>,
     podcast_id: String,
-    limit: Option<i64>,
-    offset: Option<i64>,
 ) -> AppResult<LibraryView<MergedEpisode>> {
     let svc = service(&state).await?;
-    svc.list_episodes(&podcast_id, normalise_limit(limit), normalise_offset(offset)).await
+    svc.list_episodes(&podcast_id).await
 }
 
 #[tauri::command]

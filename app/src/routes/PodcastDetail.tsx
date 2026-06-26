@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import {
@@ -14,14 +14,14 @@ import {
   type MergedEpisode,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
-import { DownloadIcon, PlayIcon, PodcastIcon, TrashIcon } from "../components/icons";
+import { DownloadIcon, PlayIcon, PodcastIcon, SearchIcon, TrashIcon } from "../components/icons";
 import { EqBars } from "../components/EqBars";
 import { usePlayerStore, episodeToQueueItem } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useAppStore } from "../store";
 import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
-import { btnGhostSm, btnPrimary, card, errorBox, label } from "../lib/ui";
+import { btnGhostSm, btnPrimary, card, errorBox, input, label } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
 
 function fmtDate(iso: string | null): string {
@@ -31,6 +31,22 @@ function fmtDate(iso: string | null): string {
     ? ""
     : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
+
+/** Published timestamp as a sortable number; missing/invalid dates sink last. */
+function pubTime(iso: string | null): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+type EpisodeSort = "newest" | "oldest" | "longest" | "shortest";
+
+const SORT_OPTIONS: { value: EpisodeSort; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "longest", label: "Longest" },
+  { value: "shortest", label: "Shortest" },
+];
 
 export default function PodcastDetail() {
   const { id = "" } = useParams();
@@ -47,7 +63,7 @@ export default function PodcastDetail() {
   });
   const epQ = useQuery({
     queryKey: ["podcasts", "episodes", id],
-    queryFn: () => podcastListEpisodes(id, { limit: 100 }),
+    queryFn: () => podcastListEpisodes(id),
     enabled: !!id,
   });
 
@@ -56,6 +72,8 @@ export default function PodcastDetail() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const active = useDownloadsStore((s) => s.active);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<EpisodeSort>("newest");
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["podcasts", "episodes", id] });
@@ -86,8 +104,36 @@ export default function PodcastDetail() {
 
   const episodes = epQ.data?.items ?? [];
 
+  // Search by title/description, then sort. A stable sort keeps the server's
+  // newest-first order as the tiebreaker for equal keys.
+  const visibleEpisodes = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? episodes.filter(
+          (e) =>
+            e.title.toLowerCase().includes(q) ||
+            (e.description?.toLowerCase().includes(q) ?? false),
+        )
+      : episodes;
+    return [...filtered].sort((a, b) => {
+      switch (sort) {
+        case "oldest":
+          return pubTime(a.published_at) - pubTime(b.published_at);
+        case "longest":
+          return (b.duration_ms ?? 0) - (a.duration_ms ?? 0);
+        case "shortest":
+          return (a.duration_ms ?? 0) - (b.duration_ms ?? 0);
+        case "newest":
+        default:
+          return pubTime(b.published_at) - pubTime(a.published_at);
+      }
+    });
+  }, [episodes, query, sort]);
+
+  // Play from the list as it's currently shown, so the queue order (and what
+  // "next" plays) matches the active search + sort.
   const play = (ep: MergedEpisode) => {
-    const items = episodes.map(episodeToQueueItem);
+    const items = visibleEpisodes.map(episodeToQueueItem);
     const start = Math.max(0, items.findIndex((i) => i.id === ep.id));
     playQueue(items, start);
   };
@@ -192,18 +238,58 @@ export default function PodcastDetail() {
       {actionErr && <div className={errorBox}>{actionErr}</div>}
 
       {/* ---- episodes ---- */}
-      <section className="space-y-2">
+      <section className="space-y-3">
         <div className="flex items-center gap-2">
           <h2 className={label}>EPISODES</h2>
           {epQ.data && <SourceBadge source={epQ.data.source} />}
+          {!epQ.isLoading && episodes.length > 0 && (
+            <span className="ml-auto font-mono text-[10.5px] text-oct-faint">
+              {query.trim() && visibleEpisodes.length !== episodes.length
+                ? `${visibleEpisodes.length} / ${episodes.length}`
+                : episodes.length}
+            </span>
+          )}
         </div>
+
+        {/* search within the series + sort/filter */}
+        {!epQ.isLoading && episodes.length > 0 && (
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-oct-faint">
+                <SearchIcon size={15} sw={1.4} />
+              </span>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search episodes"
+                aria-label="Search episodes"
+                className={`${input} pl-9`}
+              />
+            </div>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as EpisodeSort)}
+              aria-label="Sort episodes"
+              className="shrink-0 rounded-lg border border-oct-border-strong bg-oct-card px-2.5 py-2 text-sm text-oct-text focus:border-oct-accent focus:outline-none"
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {epQ.isLoading ? (
           <p className="text-sm text-oct-dim">Loading…</p>
         ) : episodes.length === 0 ? (
           <p className="text-sm text-oct-dim">No episodes.</p>
+        ) : visibleEpisodes.length === 0 ? (
+          <p className="text-sm text-oct-dim">No episodes match “{query.trim()}”.</p>
         ) : (
           <ul className={`${card} divide-y divide-oct-border`}>
-            {episodes.map((ep) => {
+            {visibleEpisodes.map((ep) => {
               const live = active[ep.id];
               const downloading = live && !live.done && !live.error;
               const pct =
@@ -223,9 +309,14 @@ export default function PodcastDetail() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{ep.title}</div>
                     <div className="flex items-center gap-2 text-[11px] text-oct-faint">
-                      {ep.published_at && <span>{fmtDate(ep.published_at)}</span>}
+                      {ep.published_at && (
+                        <span className="text-oct-dim">{fmtDate(ep.published_at)}</span>
+                      )}
                       {ep.duration_ms != null && ep.duration_ms > 0 && (
-                        <span>· {formatDuration(ep.duration_ms)}</span>
+                        <span>
+                          {ep.published_at ? "· " : ""}
+                          {formatDuration(ep.duration_ms)}
+                        </span>
                       )}
                       <DownloadedDot downloaded={ep.downloaded} />
                     </div>

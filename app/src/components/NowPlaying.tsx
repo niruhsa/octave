@@ -83,6 +83,9 @@ export default function NowPlaying() {
 
   const dur = durationSec || current.duration_ms / 1000;
   const pct = dur > 0 ? (Math.min(positionSec, dur) / dur) * 100 : 0;
+  // Hour-plus tracks (podcasts, long mixes) read as `H:MM:SS`, so the time
+  // readouts need extra room to avoid clipping the leading hour digits.
+  const longForm = dur >= 3600;
 
   return (
     <div
@@ -136,8 +139,8 @@ export default function NowPlaying() {
             </div>
 
             {/* ── title + format readout ── */}
-            <div className="mt-6 text-center">
-              <div className="truncate text-[23px] font-semibold tracking-tight">
+            <div className="mt-6 w-full text-center">
+              <div className="line-clamp-2 text-[23px] font-semibold leading-tight tracking-tight">
                 {current.title}
               </div>
               {(meta.artistName || meta.albumTitle) && (
@@ -179,7 +182,7 @@ export default function NowPlaying() {
 
         {/* ── scrubber ── */}
         <div className="mt-5 flex w-full items-center gap-3">
-          <span className="w-10 text-right font-mono text-[11px] text-oct-muted">
+          <span className={`${longForm ? "w-16" : "w-10"} text-right font-mono text-[11px] text-oct-muted`}>
             {formatDuration(positionSec * 1000)}
           </span>
           <input
@@ -194,7 +197,7 @@ export default function NowPlaying() {
             className="oct-range flex-1"
             style={{ background: `linear-gradient(to right, var(--color-oct-accent) ${pct}%, var(--color-oct-line) ${pct}%)` }}
           />
-          <span className="w-10 font-mono text-[11px] text-oct-muted">
+          <span className={`${longForm ? "w-16" : "w-10"} font-mono text-[11px] text-oct-muted`}>
             {formatDuration(dur * 1000)}
           </span>
         </div>
