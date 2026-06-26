@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::auth::Identity;
 use crate::db::models as m;
 use crate::rest::{ApiError, RestState};
+use crate::time_fmt::rfc3339;
 
 pub fn router() -> Router<RestState> {
     Router::new()
@@ -88,7 +89,7 @@ fn notification_dto(n: m::Notification) -> NotificationDto {
         title: n.title,
         body: n.body,
         read: n.read_at.is_some(),
-        created_at: n.created_at.to_string(),
+        created_at: rfc3339(n.created_at),
     }
 }
 

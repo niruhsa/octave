@@ -8,6 +8,7 @@ use crate::auth::Identity;
 use crate::db::models::PermissionLevel;
 use crate::error::AppError;
 use crate::grpc::{interceptor::AuthInterceptor, proto::auth as pb};
+use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
 pub struct AuthServer {
@@ -37,7 +38,7 @@ impl pb::auth_service_server::AuthService for AuthServer {
             token: out.token,
             user_id: out.user_id.to_string(),
             level: to_pb_level(out.level) as i32,
-            expires_at: out.expires_at.to_string(),
+            expires_at: rfc3339(out.expires_at),
         }))
     }
 

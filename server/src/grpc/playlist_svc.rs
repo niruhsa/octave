@@ -9,6 +9,7 @@ use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::playlist as pb;
 use crate::services::PlaylistService;
+use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
 pub struct PlaylistServer {
@@ -35,8 +36,8 @@ fn playlist_to_pb(p: m::Playlist) -> pb::Playlist {
         id: p.id.to_string(),
         owner_id: p.owner_id.to_string(),
         name: p.name,
-        created_at: p.created_at.to_string(),
-        updated_at: p.updated_at.to_string(),
+        created_at: rfc3339(p.created_at),
+        updated_at: rfc3339(p.updated_at),
     }
 }
 
@@ -45,7 +46,7 @@ fn track_to_pb(t: m::PlaylistTrack) -> pb::PlaylistTrack {
         playlist_id: t.playlist_id.to_string(),
         track_id: t.track_id.to_string(),
         position: t.position,
-        added_at: t.added_at.to_string(),
+        added_at: rfc3339(t.added_at),
     }
 }
 

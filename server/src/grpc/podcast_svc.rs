@@ -10,6 +10,7 @@ use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::podcast as pb;
 use crate::services::podcast_dir::PodcastCandidate;
 use crate::services::PodcastService;
+use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
 pub struct PodcastServer {
@@ -42,15 +43,6 @@ fn parse_uuid(s: &str, what: &str) -> Result<Uuid, Status> {
 /// 0 (proto default) → "unset" for limit/offset → let the service default.
 fn opt_i64(v: i32) -> Option<i64> {
     if v > 0 { Some(v as i64) } else { None }
-}
-
-/// Serialize a timestamp as RFC 3339 (`2026-06-24T23:31:00Z`) so the client's
-/// `new Date()` can parse it. `OffsetDateTime`'s `Display` emits a
-/// space-separated form with a seconds-precision offset (`… +00:00:00`) that
-/// JS `Date.parse` rejects as `NaN` — which silently blanked episode dates.
-fn rfc3339(t: time::OffsetDateTime) -> String {
-    t.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| t.to_string())
 }
 
 fn podcast_to_pb(p: m::Podcast) -> pb::Podcast {
@@ -296,23 +288,5 @@ impl pb::podcast_service_server::PodcastService for PodcastServer {
             podcasts: items.into_iter().map(podcast_to_pb).collect(),
             total,
         }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::rfc3339;
-    use time::OffsetDateTime;
-
-    #[test]
-    fn rfc3339_emits_a_js_parseable_timestamp() {
-        let t = OffsetDateTime::from_unix_timestamp(1_782_689_460).unwrap();
-        let s = rfc3339(t);
-        // `OffsetDateTime`'s `Display` form (`… 23:31:00.0 +00:00:00`) makes JS
-        // `Date.parse` return NaN, which blanked episode release dates. RFC 3339
-        // uses a `T` separator and a minute-precision offset every engine accepts.
-        assert!(s.contains('T'), "want a T separator, got {s:?}");
-        assert!(!s.contains(' '), "want no spaces, got {s:?}");
-        assert!(!s.contains("+00:00:00"), "want a minute-precision offset, got {s:?}");
     }
 }

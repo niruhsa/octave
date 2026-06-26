@@ -12,6 +12,7 @@ use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::library as pb;
 use crate::services::{ArtworkService, LibraryService, MetadataEdit, MetadataService, ScanService};
+use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
 pub struct LibraryServer {
@@ -91,8 +92,8 @@ fn artist_to_pb(a: m::Artist) -> pb::Artist {
         id: a.id.to_string(),
         name: a.name,
         sort_name: a.sort_name.unwrap_or_default(),
-        created_at: a.created_at.to_string(),
-        updated_at: a.updated_at.to_string(),
+        created_at: rfc3339(a.created_at),
+        updated_at: rfc3339(a.updated_at),
         image_path: a.image_path.unwrap_or_default(),
         aliases: Vec::new(),
     }
@@ -104,8 +105,8 @@ fn album_to_pb(a: m::Album) -> pb::Album {
         title: a.title,
         release_year: a.release_year.unwrap_or(0),
         cover_path: a.cover_path.unwrap_or_default(),
-        created_at: a.created_at.to_string(),
-        updated_at: a.updated_at.to_string(),
+        created_at: rfc3339(a.created_at),
+        updated_at: rfc3339(a.updated_at),
         aliases: Vec::new(),
     }
 }
@@ -123,8 +124,8 @@ fn track_to_pb(t: m::Track) -> pb::Track {
         file_path: t.file_path,
         file_size: t.file_size.unwrap_or(0),
         metadata_json: t.metadata_json,
-        created_at: t.created_at.to_string(),
-        updated_at: t.updated_at.to_string(),
+        created_at: rfc3339(t.created_at),
+        updated_at: rfc3339(t.updated_at),
         is_single_release: t.is_single_release,
     }
 }

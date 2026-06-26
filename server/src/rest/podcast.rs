@@ -23,6 +23,7 @@ use crate::db::models as m;
 use crate::error::AppError;
 use crate::rest::{ApiError, RestState};
 use crate::services::PodcastService;
+use crate::time_fmt::rfc3339;
 
 pub fn router() -> Router<RestState> {
     Router::new()
@@ -85,13 +86,6 @@ pub struct PodcastDto {
     pub created_at: String,
     pub updated_at: String,
 }
-/// RFC 3339 (`2026-06-24T23:31:00Z`) so the client's `new Date()` can parse it.
-/// `OffsetDateTime`'s `Display` emits a seconds-precision offset JS rejects.
-fn rfc3339(t: time::OffsetDateTime) -> String {
-    t.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| t.to_string())
-}
-
 fn podcast_dto(p: m::Podcast) -> PodcastDto {
     PodcastDto {
         id: p.id.to_string(),

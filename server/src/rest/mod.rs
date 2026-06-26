@@ -33,6 +33,7 @@ use crate::auth::service::{AuthService, Credential};
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
+use crate::time_fmt::rfc3339;
 use crate::services::{
     ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
     NotificationService, PlaylistService, PodcastService, ScanService, StreamingService, UploadHub,
@@ -186,7 +187,7 @@ async fn login(
         token: out.token,
         user_id: out.user_id.to_string(),
         level: out.level,
-        expires_at: out.expires_at.to_string(),
+        expires_at: rfc3339(out.expires_at),
     }))
 }
 

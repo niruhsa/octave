@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import {
@@ -14,6 +14,7 @@ import {
   type MergedEpisode,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
+import { DownloadStatus } from "../components/DownloadStatus";
 import { DownloadIcon, PlayIcon, PodcastIcon, SearchIcon, TrashIcon } from "../components/icons";
 import { EqBars } from "../components/EqBars";
 import { usePlayerStore, episodeToQueueItem } from "../player/store";
@@ -71,7 +72,13 @@ export default function PodcastDetail() {
   const nowPlayingId = usePlayerStore((s) => s.queue[s.currentIndex]?.id);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const active = useDownloadsStore((s) => s.active);
+  const clearDownload = useDownloadsStore((s) => s.clear);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  // Episodes tapped for download whose transfer hasn't begun yet (drives the
+  // pending ring). `downloadStarted` is a synchronous guard so a burst of taps
+  // before the first re-render can't each kick off a duplicate download.
+  const [pendingIds, setPendingIds] = useState<Record<string, boolean>>({});
+  const downloadStarted = useRef<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<EpisodeSort>("newest");
 
@@ -139,18 +146,32 @@ export default function PodcastDetail() {
   };
 
   const download = async (ep: MergedEpisode) => {
+    // Ignore repeat taps: already downloaded, queued, or transfer in flight.
+    if (ep.downloaded || downloadStarted.current.has(ep.id) || active[ep.id]) return;
+    downloadStarted.current.add(ep.id);
+    setPendingIds((p) => ({ ...p, [ep.id]: true }));
     setActionErr(null);
     try {
       await podcastDownloadEpisode(ep.id);
       invalidate();
     } catch (e) {
       setActionErr(formatError(e));
+    } finally {
+      downloadStarted.current.delete(ep.id);
+      setPendingIds((p) => {
+        const next = { ...p };
+        delete next[ep.id];
+        return next;
+      });
     }
   };
   const remove = async (ep: MergedEpisode) => {
     setActionErr(null);
     try {
       await podcastDeleteEpisode(ep.id);
+      // Drop any finished progress entry so the row resets to a download button
+      // (the store keeps terminal entries until the app restarts).
+      clearDownload(ep.id);
       invalidate();
     } catch (e) {
       setActionErr(formatError(e));
@@ -291,11 +312,7 @@ export default function PodcastDetail() {
           <ul className={`${card} divide-y divide-oct-border`}>
             {visibleEpisodes.map((ep) => {
               const live = active[ep.id];
-              const downloading = live && !live.done && !live.error;
-              const pct =
-                downloading && live.total
-                  ? Math.round((live.received / live.total) * 100)
-                  : null;
+              const inProgress = (live && !live.error) || pendingIds[ep.id];
               const playingThis = nowPlayingId === ep.id;
               return (
                 <li key={ep.id} className="flex items-center gap-3 p-3">
@@ -321,11 +338,7 @@ export default function PodcastDetail() {
                       <DownloadedDot downloaded={ep.downloaded} />
                     </div>
                   </div>
-                  {downloading ? (
-                    <span className="text-[11px] text-oct-accent shrink-0">
-                      {pct != null ? `${pct}%` : "…"}
-                    </span>
-                  ) : ep.downloaded ? (
+                  {ep.downloaded ? (
                     <button
                       onClick={() => void remove(ep)}
                       className="text-oct-accent hover:text-oct-accent-bright shrink-0"
@@ -333,6 +346,14 @@ export default function PodcastDetail() {
                     >
                       <TrashIcon size={15} />
                     </button>
+                  ) : inProgress ? (
+                    <span className="flex h-[15px] w-[15px] shrink-0 items-center justify-center">
+                      <DownloadStatus
+                        trackId={ep.id}
+                        downloaded={ep.downloaded}
+                        pending={!!pendingIds[ep.id]}
+                      />
+                    </span>
                   ) : (
                     <button
                       onClick={() => void download(ep)}

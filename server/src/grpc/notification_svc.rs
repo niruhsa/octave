@@ -9,6 +9,7 @@ use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::notification as pb;
 use crate::services::NotificationService;
+use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
 pub struct NotificationServer {
@@ -48,7 +49,7 @@ fn notification_to_pb(n: m::Notification) -> pb::Notification {
         title: n.title,
         body: n.body.unwrap_or_default(),
         read: n.read_at.is_some(),
-        created_at: n.created_at.to_string(),
+        created_at: rfc3339(n.created_at),
         podcast_id: n.podcast_id.map(|id| id.to_string()).unwrap_or_default(),
         episode_id: n.episode_id.map(|id| id.to_string()).unwrap_or_default(),
     }
