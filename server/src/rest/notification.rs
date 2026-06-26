@@ -33,6 +33,8 @@ pub fn router() -> Router<RestState> {
         .route("/notifications/unread-count", get(unread_count))
         .route("/notifications/mark-read", post(mark_read))
         .route("/notifications/mark-all-read", post(mark_all_read))
+        // Device push tokens (FCM)
+        .route("/devices", post(register_device).delete(unregister_device))
 }
 
 // ---------------------------------------------------------------------------
@@ -213,4 +215,46 @@ async fn mark_all_read(
     let caller = id(&req)?;
     let marked = state.notifications.mark_all_read(&caller).await?;
     Ok(Json(serde_json::json!({ "marked": marked })))
+}
+
+// ---------------------------------------------------------------------------
+// Device push tokens (FCM)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct RegisterDeviceBody {
+    pub token: String,
+    #[serde(default)]
+    pub platform: String,
+}
+
+async fn register_device(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> Result<StatusCode, ApiError> {
+    let caller = id(&req)?;
+    let body: RegisterDeviceBody = crate::rest::parse_json(req).await?;
+    state
+        .notifications
+        .register_device(&caller, &body.token, &body.platform)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct UnregisterDeviceBody {
+    pub token: String,
+}
+
+async fn unregister_device(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> Result<StatusCode, ApiError> {
+    let caller = id(&req)?;
+    let body: UnregisterDeviceBody = crate::rest::parse_json(req).await?;
+    state
+        .notifications
+        .unregister_device(&caller, &body.token)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

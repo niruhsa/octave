@@ -656,6 +656,33 @@ impl ServerClient {
         self.rest.mark_all_notifications_read(cred).await
     }
 
+    pub async fn register_device(
+        &self,
+        cred: &Credential,
+        token: &str,
+        platform: &str,
+    ) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.register_device(cred, token, platform).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("register_device", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.register_device(cred, token, platform).await
+    }
+
+    pub async fn unregister_device(&self, cred: &Credential, token: &str) -> AppResult<()> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.unregister_device(cred, token).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_transport_error(&e) => fallback_log("unregister_device", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.unregister_device(cred, token).await
+    }
+
     // ----- Image upload (Phase 9) ------------------------------------------
     //
     // REST-only: binary blob upload, mirroring the REST-only cover *serving*

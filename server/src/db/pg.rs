@@ -1171,6 +1171,53 @@ impl AliasRepo for PgRepos {
 }
 
 // ---------------------------------------------------------------------------
+// DeviceTokenRepo
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl DeviceTokenRepo for PgRepos {
+    async fn upsert(&self, new: NewDeviceToken) -> Result<DeviceToken> {
+        // On a token conflict, re-own it (the device re-logged-in as another
+        // user) + bump last_seen_at.
+        sqlx::query_as::<_, DeviceToken>(
+            r#"INSERT INTO device_tokens (token, user_id, platform)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (token) DO UPDATE
+                 SET user_id = EXCLUDED.user_id,
+                     platform = EXCLUDED.platform,
+                     last_seen_at = now()
+               RETURNING token, user_id, platform, created_at, last_seen_at"#,
+        )
+        .bind(&new.token)
+        .bind(new.user_id)
+        .bind(&new.platform)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<DeviceToken>> {
+        sqlx::query_as::<_, DeviceToken>(
+            r#"SELECT token, user_id, platform, created_at, last_seen_at
+               FROM device_tokens WHERE user_id = $1"#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn delete(&self, token: &str) -> Result<()> {
+        sqlx::query("DELETE FROM device_tokens WHERE token = $1")
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AuditRepo
 // ---------------------------------------------------------------------------
 

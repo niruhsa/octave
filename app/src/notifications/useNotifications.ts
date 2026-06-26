@@ -25,6 +25,7 @@ import {
   notifBackgroundSyncEnable,
   notificationsList,
   notificationsUnreadCount,
+  pushRegister,
 } from "../ipc";
 import { useAppStore } from "../store";
 
@@ -149,14 +150,35 @@ export function useNotificationsScheduler() {
     if (!isUser) setUnread(0);
   }, [isUser, setUnread]);
 
-  // Drive the native Android background poll (no-op on desktop). Enabling
-  // re-pushes the current bearer token to the worker, so re-running on a
-  // session change (login / token refresh) keeps it fresh; disabling on
-  // sign-out / a SECRET_KEY session cancels the work + clears the token.
-  // Keyed on the session identity bits so a re-login re-arms it.
+  // Wire up while-closed delivery for a signed-in user, preferring real-time
+  // FCM push and falling back to the WorkManager background poll when FCM is
+  // unavailable (desktop / no Google Play Services). Both no-op on desktop.
+  // Keyed on the session identity bits so a re-login re-arms with a fresh token.
   useEffect(() => {
-    if (isUser) void notifBackgroundSyncEnable().catch(() => {});
-    else void notifBackgroundSyncDisable().catch(() => {});
+    let cancelled = false;
+    if (isUser) {
+      void (async () => {
+        let fcm = false;
+        try {
+          fcm = await pushRegister();
+        } catch {
+          /* desktop / plugin unavailable */
+        }
+        if (cancelled) return;
+        try {
+          // FCM delivers while closed → the poll would only double-post.
+          if (fcm) await notifBackgroundSyncDisable();
+          else await notifBackgroundSyncEnable();
+        } catch {
+          /* no-op on desktop */
+        }
+      })();
+    } else {
+      void notifBackgroundSyncDisable().catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [isUser, session?.user_id, session?.expires_at]);
 
   // Poll while online + signed in (immediately, then on the floor interval).

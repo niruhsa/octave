@@ -19,12 +19,15 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use tracing::warn;
+
 use crate::auth::Identity;
 use crate::db::models::{
-    Album, Artist, NewAuditEntry, NewNotification, Notification, PermissionLevel,
+    Album, Artist, NewAuditEntry, NewDeviceToken, NewNotification, Notification, PermissionLevel,
 };
-use crate::db::repo::{ArtistRepo, AuditRepo, FollowRepo, NotificationRepo};
+use crate::db::repo::{ArtistRepo, AuditRepo, DeviceTokenRepo, FollowRepo, NotificationRepo};
 use crate::error::{AppError, Result};
+use crate::services::fcm::{PushOutcome, PushSender};
 
 const MAX_PAGE_LIMIT: i64 = 200;
 const DEFAULT_PAGE_LIMIT: i64 = 50;
@@ -40,6 +43,11 @@ pub struct NotificationService {
     /// new-release notification title.
     pub artists: Arc<dyn ArtistRepo>,
     pub audit: Arc<dyn AuditRepo>,
+    /// Registered device push tokens (per follower) for the FCM fan-out.
+    pub device_tokens: Arc<dyn DeviceTokenRepo>,
+    /// Optional push backend (FCM). `None` when push is disabled — the client
+    /// then relies on polling. Set via [`with_push`](Self::with_push).
+    pub push: Option<Arc<dyn PushSender>>,
 }
 
 impl NotificationService {
@@ -48,13 +56,62 @@ impl NotificationService {
         notifications: Arc<dyn NotificationRepo>,
         artists: Arc<dyn ArtistRepo>,
         audit: Arc<dyn AuditRepo>,
+        device_tokens: Arc<dyn DeviceTokenRepo>,
     ) -> Self {
         Self {
             follows,
             notifications,
             artists,
             audit,
+            device_tokens,
+            push: None,
         }
+    }
+
+    /// Wire in a push backend so the new-release fan-out also delivers a
+    /// real-time push to followers' registered devices (Phase 10 — FCM).
+    pub fn with_push(mut self, push: Option<Arc<dyn PushSender>>) -> Self {
+        self.push = push;
+        self
+    }
+
+    // -----------------------------------------------------------------------
+    // Device tokens (push registration)
+    // -----------------------------------------------------------------------
+
+    /// Register (or re-own) a device push token for the caller. Any authed
+    /// user; `SECRET_KEY` rejected (no user to own the token).
+    pub async fn register_device(
+        &self,
+        caller: &Identity,
+        token: &str,
+        platform: &str,
+    ) -> Result<()> {
+        caller.require(PermissionLevel::User)?;
+        let user_id = self.caller_user_id(caller)?;
+        if token.trim().is_empty() {
+            return Err(AppError::InvalidArgument("device token is required".into()));
+        }
+        let platform = if platform.trim().is_empty() {
+            "android".to_string()
+        } else {
+            platform.trim().to_string()
+        };
+        self.device_tokens
+            .upsert(NewDeviceToken {
+                token: token.to_string(),
+                user_id,
+                platform,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Unregister a device push token (logout). Any authed user; idempotent.
+    pub async fn unregister_device(&self, caller: &Identity, token: &str) -> Result<()> {
+        caller.require(PermissionLevel::User)?;
+        self.caller_user_id(caller)?;
+        self.device_tokens.delete(token).await
     }
 
     // -----------------------------------------------------------------------
@@ -148,24 +205,84 @@ impl NotificationService {
             None => "an artist you follow".to_string(),
         };
         let title = format!("New release from {artist_name}");
-        let body = Some(album.title.clone());
+        let body_text = album.title.clone();
 
-        let items: Vec<NewNotification> = followers
+        let recipients: Vec<Uuid> = followers
             .into_iter()
             .filter(|uid| Some(*uid) != actor)
+            .collect();
+        if recipients.is_empty() {
+            return Ok(0);
+        }
+        let items: Vec<NewNotification> = recipients
+            .iter()
             .map(|uid| NewNotification {
-                user_id: uid,
+                user_id: *uid,
                 kind: KIND_NEW_RELEASE.to_string(),
                 artist_id: Some(artist_id),
                 album_id: Some(album.id),
                 title: title.clone(),
-                body: body.clone(),
+                body: Some(body_text.clone()),
             })
             .collect();
-        if items.is_empty() {
-            return Ok(0);
+        let created = self.notifications.create_many(&items).await?;
+
+        // Real-time push to followers' devices (FCM). Best-effort + in the
+        // background: a slow/failing push must never delay or fail album
+        // creation. Persisted notifications above are the source of truth; push
+        // is the delivery channel, and the client also polls as a fallback.
+        if self.push.is_some() {
+            let this = self.clone();
+            let album_id = album.id;
+            tokio::spawn(async move {
+                this.push_fanout(&recipients, &title, &body_text, artist_id, album_id)
+                    .await;
+            });
         }
-        self.notifications.create_many(&items).await
+        Ok(created)
+    }
+
+    /// Push a new-release notification to every registered device of each
+    /// recipient. Prunes tokens FCM reports as unregistered. Best-effort: all
+    /// errors are logged, never propagated.
+    async fn push_fanout(
+        &self,
+        recipients: &[Uuid],
+        title: &str,
+        body: &str,
+        artist_id: Uuid,
+        album_id: Uuid,
+    ) {
+        let Some(push) = &self.push else {
+            return;
+        };
+        // Data payload for tap-routing on the device.
+        let data = vec![
+            ("kind".to_string(), KIND_NEW_RELEASE.to_string()),
+            ("artist_id".to_string(), artist_id.to_string()),
+            ("album_id".to_string(), album_id.to_string()),
+        ];
+        for uid in recipients {
+            let tokens = match self.device_tokens.list_for_user(*uid).await {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(user_id = %uid, error = %e, "push: list device tokens failed");
+                    continue;
+                }
+            };
+            for dt in tokens {
+                match push.send(&dt.token, title, body, &data).await {
+                    Ok(PushOutcome::Delivered) => {}
+                    Ok(PushOutcome::Unregistered) => {
+                        // Dead token — prune so we stop trying it.
+                        if let Err(e) = self.device_tokens.delete(&dt.token).await {
+                            warn!(error = %e, "push: prune unregistered token failed");
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "push: fcm send failed"),
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -286,9 +403,12 @@ mod tests {
 
     use super::*;
     use crate::db::models::{
-        AuditEntry, NewArtist, NewNotification, NewUser, PermissionLevel, User,
+        AuditEntry, DeviceToken, NewArtist, NewNotification, NewUser, PermissionLevel, User,
     };
-    use crate::db::repo::{ArtistRepo, AuditRepo, FollowRepo, NotificationRepo, TrackIdPath};
+    use crate::db::repo::{
+        ArtistRepo, AuditRepo, DeviceTokenRepo, FollowRepo, NotificationRepo, TrackIdPath,
+    };
+    use crate::services::fcm::{PushOutcome, PushSender};
     use async_trait::async_trait;
     use std::sync::Mutex;
     use time::OffsetDateTime;
@@ -532,6 +652,94 @@ mod tests {
         }
     }
 
+    // ---- Device-token fake ----
+    #[derive(Default)]
+    struct FakeDeviceTokens {
+        rows: Mutex<Vec<DeviceToken>>,
+    }
+    impl FakeDeviceTokens {
+        fn add(&self, user_id: Uuid, token: &str) {
+            self.rows.lock().unwrap().push(DeviceToken {
+                token: token.to_string(),
+                user_id,
+                platform: "android".into(),
+                created_at: now(),
+                last_seen_at: now(),
+            });
+        }
+        fn tokens_for(&self, user_id: Uuid) -> Vec<String> {
+            self.rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|d| d.user_id == user_id)
+                .map(|d| d.token.clone())
+                .collect()
+        }
+    }
+    #[async_trait]
+    impl DeviceTokenRepo for FakeDeviceTokens {
+        async fn upsert(&self, new: NewDeviceToken) -> Result<DeviceToken> {
+            let mut g = self.rows.lock().unwrap();
+            g.retain(|d| d.token != new.token); // re-own on conflict
+            let row = DeviceToken {
+                token: new.token,
+                user_id: new.user_id,
+                platform: new.platform,
+                created_at: now(),
+                last_seen_at: now(),
+            };
+            g.push(row.clone());
+            Ok(row)
+        }
+        async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<DeviceToken>> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|d| d.user_id == user_id)
+                .cloned()
+                .collect())
+        }
+        async fn delete(&self, token: &str) -> Result<()> {
+            self.rows.lock().unwrap().retain(|d| d.token != token);
+            Ok(())
+        }
+    }
+
+    // ---- Push-sender fake ----
+    #[derive(Default)]
+    struct FakePush {
+        sent: Mutex<Vec<String>>,
+        unregistered: Mutex<std::collections::HashSet<String>>,
+    }
+    impl FakePush {
+        fn set_unregistered(&self, token: &str) {
+            self.unregistered.lock().unwrap().insert(token.to_string());
+        }
+        fn sent(&self) -> Vec<String> {
+            self.sent.lock().unwrap().clone()
+        }
+    }
+    #[async_trait]
+    impl PushSender for FakePush {
+        async fn send(
+            &self,
+            token: &str,
+            _title: &str,
+            _body: &str,
+            _data: &[(String, String)],
+        ) -> Result<PushOutcome> {
+            self.sent.lock().unwrap().push(token.to_string());
+            if self.unregistered.lock().unwrap().contains(token) {
+                Ok(PushOutcome::Unregistered)
+            } else {
+                Ok(PushOutcome::Delivered)
+            }
+        }
+    }
+
     // Keep the unused imports honest (User/NewUser referenced by trait sigs only).
     #[allow(dead_code)]
     fn _types(_: User, _: NewUser, _: TrackIdPath) {}
@@ -547,13 +755,40 @@ mod tests {
         let notifs = Arc::new(FakeNotifications::default());
         let artists = Arc::new(FakeArtists::default());
         let audit = Arc::new(FakeAudit::default());
+        let devices = Arc::new(FakeDeviceTokens::default());
         let svc = NotificationService::new(
             follows.clone(),
             notifs.clone(),
             artists.clone(),
             audit.clone(),
+            devices,
         );
         (svc, follows, notifs, artists, audit)
+    }
+
+    /// Variant exposing the device-token + push fakes for the FCM tests.
+    fn make_service_with_push() -> (
+        NotificationService,
+        Arc<FakeFollows>,
+        Arc<FakeArtists>,
+        Arc<FakeDeviceTokens>,
+        Arc<FakePush>,
+    ) {
+        let follows = Arc::new(FakeFollows::default());
+        let notifs = Arc::new(FakeNotifications::default());
+        let artists = Arc::new(FakeArtists::default());
+        let audit = Arc::new(FakeAudit::default());
+        let devices = Arc::new(FakeDeviceTokens::default());
+        let push = Arc::new(FakePush::default());
+        let svc = NotificationService::new(
+            follows.clone(),
+            notifs,
+            artists.clone(),
+            audit,
+            devices.clone(),
+        )
+        .with_push(Some(push.clone()));
+        (svc, follows, artists, devices, push)
     }
 
     fn user(level: PermissionLevel) -> Identity {
@@ -739,5 +974,51 @@ mod tests {
         assert!(matches!(err, AppError::NotFound(_)));
         // Owner's notification is untouched.
         assert_eq!(svc.unread_count(&owner).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn register_device_gated_and_upserts() {
+        let (svc, _f, _a, devices, _p) = make_service_with_push();
+        // SECRET_KEY has no user to own a token → rejected.
+        let err = svc
+            .register_device(&Identity::SecretKey, "tok", "android")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        // Empty token rejected.
+        let me = user(PermissionLevel::User);
+        let err = svc.register_device(&me, "  ", "android").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)));
+        // A real user registers + the token lands; unregister removes it.
+        svc.register_device(&me, "tok-1", "android").await.unwrap();
+        assert_eq!(devices.tokens_for(me.user_id().unwrap()), vec!["tok-1"]);
+        svc.unregister_device(&me, "tok-1").await.unwrap();
+        assert!(devices.tokens_for(me.user_id().unwrap()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn push_fanout_delivers_to_devices_and_prunes_unregistered() {
+        let (svc, follows, artists, devices, push) = make_service_with_push();
+        let artist = artists.insert("Hearts2Hearts");
+        let fan1 = user(PermissionLevel::User);
+        let fan2 = user(PermissionLevel::User);
+        let (u1, u2) = (fan1.user_id().unwrap(), fan2.user_id().unwrap());
+        follows.follow(u1, artist.id).await.unwrap();
+        follows.follow(u2, artist.id).await.unwrap();
+        devices.add(u1, "good");
+        devices.add(u2, "dead");
+        push.set_unregistered("dead");
+
+        // Call the fan-out directly (deterministic — avoids the bg spawn).
+        svc.push_fanout(&[u1, u2], "New release", "The Chase", artist.id, Uuid::new_v4())
+            .await;
+
+        // Both tokens were attempted.
+        let mut sent = push.sent();
+        sent.sort();
+        assert_eq!(sent, vec!["dead".to_string(), "good".to_string()]);
+        // The unregistered one was pruned; the good one kept.
+        assert_eq!(devices.tokens_for(u1), vec!["good"]);
+        assert!(devices.tokens_for(u2).is_empty());
     }
 }

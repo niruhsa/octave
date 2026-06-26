@@ -432,6 +432,19 @@ export const notifBackgroundSyncEnable = () =>
 export const notifBackgroundSyncDisable = () =>
   invoke<void>("notif_background_sync_disable");
 
+/**
+ * Register this device for **real-time FCM push** (Android). Fetches the FCM
+ * token natively and registers it with the server (bearer token read in Rust,
+ * never the WebView). Returns `true` when FCM is available + registered;
+ * `false` on desktop / no Google Play Services / no bearer session — the caller
+ * then falls back to the WorkManager background poll.
+ */
+export const pushRegister = () => invoke<boolean>("push_register");
+
+/** Unregister this device from FCM push (call on sign-out, before clearing the
+ *  session). No-op on desktop. */
+export const pushUnregister = () => invoke<void>("push_unregister");
+
 // ---------------------------------------------------------------------------
 // playlists (Phase 7)
 //

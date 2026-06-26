@@ -880,6 +880,39 @@ impl RestClient {
         Ok(body.marked)
     }
 
+    pub async fn register_device(
+        &self,
+        cred: &Credential,
+        token: &str,
+        platform: &str,
+    ) -> AppResult<()> {
+        let url = format!("{}/devices", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "token": token, "platform": platform }))
+            .send()
+            .await
+            .map_err(rest_err("register_device"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    pub async fn unregister_device(&self, cred: &Credential, token: &str) -> AppResult<()> {
+        let url = format!("{}/devices", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "token": token }))
+            .send()
+            .await
+            .map_err(rest_err("unregister_device"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
     // ----- Image upload (Phase 9; Manager+ gated, REST-only binary blob) ----
 
     /// `POST /albums/:id/cover` — raw `image/*` body. Returns `()`; the caller

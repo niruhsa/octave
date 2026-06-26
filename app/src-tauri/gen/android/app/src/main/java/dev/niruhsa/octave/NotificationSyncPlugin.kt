@@ -2,6 +2,7 @@ package dev.niruhsa.octave
 
 import android.app.Activity
 import android.content.Context
+import android.util.Log
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -31,6 +32,7 @@ class NotificationSyncPlugin(private val activity: Activity) : Plugin(activity) 
   fun start(invoke: Invoke) {
     val args = invoke.parseArgs(StartArgs::class.java)
     val ctx = activity.applicationContext
+    Log.i(NotificationPollWorker.TAG, "plugin.start: base=${args.baseUrl}")
     ctx.getSharedPreferences(NotificationPollWorker.PREFS, Context.MODE_PRIVATE)
       .edit()
       .putString(NotificationPollWorker.KEY_BASE, args.baseUrl)
@@ -43,6 +45,7 @@ class NotificationSyncPlugin(private val activity: Activity) : Plugin(activity) 
   @Command
   fun stop(invoke: Invoke) {
     val ctx = activity.applicationContext
+    Log.i(NotificationPollWorker.TAG, "plugin.stop")
     NotificationPollWorker.cancel(ctx)
     // Clear everything (token + seen-set + seeded flag) so a different/next
     // session starts fresh and an expired token is never reused.

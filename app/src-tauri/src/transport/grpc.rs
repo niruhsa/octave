@@ -800,6 +800,36 @@ impl GrpcClient {
         Ok(resp.marked.max(0) as u64)
     }
 
+    pub async fn register_device(
+        &self,
+        cred: &Credential,
+        token: &str,
+        platform: &str,
+    ) -> AppResult<()> {
+        let mut req = Request::new(npb::RegisterDeviceRequest {
+            token: token.to_string(),
+            platform: platform.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        self.notifications()
+            .register_device(req)
+            .await
+            .map_err(map_mutation_err("register_device"))?;
+        Ok(())
+    }
+
+    pub async fn unregister_device(&self, cred: &Credential, token: &str) -> AppResult<()> {
+        let mut req = Request::new(npb::UnregisterDeviceRequest {
+            token: token.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        self.notifications()
+            .unregister_device(req)
+            .await
+            .map_err(map_mutation_err("unregister_device"))?;
+        Ok(())
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {

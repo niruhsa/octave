@@ -102,6 +102,11 @@ bzip2 = "0.5"
 xz2 = "0.1"
 sha2 = "0.10"
 
+# Follow notifications (Phase 10): real-time push via Firebase Cloud Messaging
+# (HTTP v1 API). `jsonwebtoken` signs the service-account JWT used to mint the
+# OAuth2 access token; the HTTP calls reuse `reqwest`. Only used when FCM_ENABLED.
+jsonwebtoken = "9"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"

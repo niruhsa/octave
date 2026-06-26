@@ -183,4 +183,30 @@ impl pb::notification_service_server::NotificationService for NotificationServer
             .map_err(map_err)? as i64;
         Ok(Response::new(pb::MarkAllReadResponse { marked }))
     }
+
+    async fn register_device(
+        &self,
+        req: Request<pb::RegisterDeviceRequest>,
+    ) -> Result<Response<pb::RegisterDeviceResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        self.notifications
+            .register_device(&caller, &body.token, &body.platform)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::RegisterDeviceResponse {}))
+    }
+
+    async fn unregister_device(
+        &self,
+        req: Request<pb::UnregisterDeviceRequest>,
+    ) -> Result<Response<pb::UnregisterDeviceResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        self.notifications
+            .unregister_device(&caller, &body.token)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::UnregisterDeviceResponse {}))
+    }
 }

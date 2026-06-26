@@ -216,6 +216,19 @@ pub trait NotificationRepo: Send + Sync {
     async fn mark_all_read(&self, user_id: Uuid) -> Result<u64>;
 }
 
+/// Device push tokens (Phase 10 — FCM). One row per registration token, owned
+/// by a user; the new-release fan-out reads them to push.
+#[async_trait]
+pub trait DeviceTokenRepo: Send + Sync {
+    /// Register (or re-own, on a token conflict) a device token, bumping
+    /// `last_seen_at`.
+    async fn upsert(&self, new: NewDeviceToken) -> Result<DeviceToken>;
+    /// Every token registered by a user (all their devices).
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<DeviceToken>>;
+    /// Remove a token (logout, or pruning a token FCM reports unregistered).
+    async fn delete(&self, token: &str) -> Result<()>;
+}
+
 #[async_trait]
 pub trait AuditRepo: Send + Sync {
     async fn record(&self, entry: NewAuditEntry) -> Result<AuditEntry>;

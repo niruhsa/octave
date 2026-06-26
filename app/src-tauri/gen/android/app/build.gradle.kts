@@ -71,9 +71,24 @@ dependencies {
     // NotificationPollWorker / NotificationSyncPlugin). Pulls in coroutines for
     // CoroutineWorker.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Firebase Cloud Messaging (Phase 10): real-time push notifications. The
+    // dependency is always present, but the google-services plugin (which wires
+    // FirebaseApp from google-services.json) is only applied below when that
+    // file exists — so without Firebase configured, FCM init fails gracefully
+    // and the app falls back to the WorkManager poll.
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
 }
 
 apply(from = "tauri.build.gradle.kts")
+
+// Apply the Firebase google-services plugin only when the config file is
+// present, so the project builds without Firebase set up (FCM then no-ops and
+// the app falls back to the WorkManager poll). Drop the Firebase console's
+// `google-services.json` into this directory (app/) to enable real-time push.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

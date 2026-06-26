@@ -12,9 +12,9 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, ImageOptimizer,
+    run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, FcmSender, ImageOptimizer,
     IngestService, LibraryService, MetadataService, NotificationService, PlaylistService,
-    ScanService, StreamingService, UploadHub, UploadsService,
+    PushSender, ScanService, StreamingService, UploadHub, UploadsService,
 };
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
@@ -45,6 +45,18 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
     );
+    // Optional FCM push backend (Phase 10 — real-time notifications). Built only
+    // when FCM_ENABLED; a bad credential path/key is a hard startup error so a
+    // misconfigured push setup never boots silently broken.
+    let push: Option<Arc<dyn PushSender>> = match &config.fcm {
+        Some(cfg) => {
+            let sender = FcmSender::from_config(cfg)?;
+            info!(project = %cfg.project_id, "FCM push enabled");
+            Some(Arc::new(sender))
+        }
+        None => None,
+    };
+
     // Follows & notifications (Phase 10). Constructed before the library so the
     // library's `create_album` can fan out new-release notifications to
     // followers via this service.
@@ -53,7 +65,9 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()), // notifications
         Arc::new(repos.clone()), // artists
         Arc::new(repos.clone()), // audit
-    );
+        Arc::new(repos.clone()), // device_tokens
+    )
+    .with_push(push);
     let library = LibraryService::new(
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),

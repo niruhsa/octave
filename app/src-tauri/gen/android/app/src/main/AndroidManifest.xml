@@ -85,6 +85,22 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- FCM (Phase 10): receives push messages. The OS auto-displays the
+             server's notification messages while the app is backgrounded /
+             swiped away (no process needed). -->
+        <service
+            android:name=".OctaveFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <!-- Channel for FCM-auto-displayed notifications (created at startup in
+             MainActivity; shared with the WorkManager fallback). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="octave_new_release" />
+
         <!-- Routes hardware / Bluetooth / notification media buttons to the session. -->
         <receiver
             android:name="androidx.media.session.MediaButtonReceiver"

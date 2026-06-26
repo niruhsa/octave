@@ -362,6 +362,16 @@ impl AuthManager {
         self.server.mark_all_notifications_read(&cred).await
     }
 
+    pub async fn register_device(&self, token: &str, platform: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.register_device(&cred, token, platform).await
+    }
+
+    pub async fn unregister_device(&self, token: &str) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.unregister_device(&cred, token).await
+    }
+
     // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------
 
     pub async fn merge_artists(&self, survivor_id: &str, duplicate_id: &str) -> AppResult<Artist> {

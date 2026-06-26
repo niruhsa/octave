@@ -20,6 +20,7 @@ pub mod library;
 pub mod media_session;
 pub mod notify_sync;
 pub mod player;
+pub mod push;
 pub mod playlists;
 pub mod sync;
 pub mod transport;
@@ -82,6 +83,10 @@ pub fn run() {
         // (WorkManager) that surfaces new-release notifications while the app is
         // closed. Binds the Kotlin `NotificationSyncPlugin`; no-op on desktop.
         .plugin(notify_sync::init())
+        // Phase 10 — real-time push via FCM. Binds the Kotlin `PushPlugin`
+        // (fetch/delete the registration token); no-op on desktop. When FCM is
+        // available it supersedes the WorkManager poll above.
+        .plugin(push::init())
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
         // (Playback no longer uses a custom protocol — see the loopback HTTP
@@ -243,6 +248,9 @@ pub fn run() {
             // background notification poll (Android WorkManager; no-op on desktop)
             notify_sync::notif_background_sync_enable,
             notify_sync::notif_background_sync_disable,
+            // real-time push registration (Android FCM; no-op on desktop)
+            push::push_register,
+            push::push_unregister,
             // playlists (Phase 7)
             commands::playlist_commands::playlist_list,
             commands::playlist_commands::playlist_get,

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
@@ -41,7 +42,9 @@ import java.util.concurrent.TimeUnit
  *
  * This is the lighter, no-Firebase alternative to true push (FCM/APNs): it
  * needs no server push transport, but it isn't instant (≥15 min, and Android
- * can defer it further under Doze / battery saver).
+ * can defer it further under Doze / battery saver / OEM battery management).
+ *
+ * Debug with: `adb logcat -s OctaveNotif`.
  */
 class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
   CoroutineWorker(ctx, params) {
@@ -52,59 +55,65 @@ class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
     val token = prefs.getString(KEY_TOKEN, null)
     // No signed-in user (logged out, or a SECRET_KEY session that has no
     // per-user notifications) → nothing to poll.
-    if (base.isNullOrEmpty() || token.isNullOrEmpty()) return Result.success()
-
-    // While the app is foreground the in-app JS poller owns surfacing; skip so
-    // the two paths don't double-post. Lifecycle state is main-thread-only.
-    val foreground = withContext(Dispatchers.Main) {
-      ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+    if (base.isNullOrEmpty() || token.isNullOrEmpty()) {
+      Log.i(TAG, "run: no base/token → nothing to poll")
+      return Result.success()
     }
-    if (foreground) return Result.success()
 
     val body = try {
       withContext(Dispatchers.IO) { fetchUnread(base, token) }
     } catch (e: Exception) {
-      // Transient network/IO — let WorkManager retry on its backoff schedule.
-      return Result.retry()
-    } ?: return Result.success() // non-2xx (e.g. token expired) — wait quietly
-
-    val arr = body.optJSONArray("notifications") ?: return Result.success()
-
-    // `seen` tracks ids already surfaced. We prune it to the ids currently in
-    // the unread feed at the end, so it stays bounded (read notifications drop
-    // out of the feed and out of `seen`) and never grows without limit.
-    val seen = prefs.getStringSet(KEY_SEEN, emptySet())!!.toMutableSet()
-    val currentIds = HashSet<String>()
-    val seeded = prefs.getBoolean(KEY_SEEDED, false)
-
-    // First-ever background run: seed the current backlog silently (mirrors the
-    // JS poller) so we don't post one notification per pre-existing unread row.
-    if (!seeded) {
-      for (i in 0 until arr.length()) {
-        arr.optJSONObject(i)?.optString("id")?.let { if (it.isNotEmpty()) seen.add(it) }
-      }
-      prefs.edit().putStringSet(KEY_SEEN, seen).putBoolean(KEY_SEEDED, true).apply()
+      Log.w(TAG, "run: fetch failed (${e.message}) → retry")
+      return Result.retry() // transient network/IO — retry on backoff
+    } ?: run {
+      Log.i(TAG, "run: non-2xx (token expired?) → waiting")
       return Result.success()
     }
 
-    var changed = false
+    val arr = body.optJSONArray("notifications") ?: return Result.success()
+    val seen = prefs.getStringSet(KEY_SEEN, emptySet())!!.toMutableSet()
+    val currentIds = HashSet<String>()
+    val fresh = ArrayList<JSONObject>()
     for (i in 0 until arr.length()) {
       val o = arr.optJSONObject(i) ?: continue
       val id = o.optString("id")
       if (id.isEmpty()) continue
       currentIds.add(id)
-      if (seen.contains(id)) continue
-      val title = o.optString("title", "New release")
-      val text = o.optString("body", "")
-      post(id, title, text)
-      seen.add(id)
-      changed = true
+      if (!seen.contains(id)) fresh.add(o)
     }
 
-    // Keep only ids still unread (+ any we just added, which are in currentIds).
-    if (seen.retainAll(currentIds) || changed) {
-      prefs.edit().putStringSet(KEY_SEEN, seen).apply()
+    // While the app is foreground the in-app JS poller owns surfacing — record
+    // everything as seen (so we don't re-post after backgrounding) but don't
+    // post. Fail open: any error reading lifecycle state → treat as background.
+    val foreground = try {
+      withContext(Dispatchers.Main) {
+        ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+      }
+    } catch (e: Exception) {
+      false
     }
+
+    Log.i(TAG, "run: unread=${currentIds.size} fresh=${fresh.size} foreground=$foreground")
+
+    if (!foreground) {
+      when {
+        fresh.isEmpty() -> {}
+        // A handful → individual notifications (the common new-release case).
+        fresh.size <= MAX_INDIVIDUAL -> fresh.forEach { o ->
+          post(o.optString("id"), o.optString("title", "New release"), o.optString("body", ""))
+        }
+        // A large batch (e.g. first enable with a backlog) → one summary so we
+        // never blast one notification per row.
+        else -> postSummary(fresh.size)
+      }
+    }
+
+    // Mark everything currently unread as seen (posted, summarised, or handled
+    // by the foreground JS poller) and prune to the current feed so the set
+    // stays bounded (read notifications drop out).
+    seen.addAll(currentIds)
+    seen.retainAll(currentIds)
+    prefs.edit().putStringSet(KEY_SEEN, seen).apply()
     return Result.success()
   }
 
@@ -120,7 +129,11 @@ class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
       readTimeout = 15_000
     }
     return try {
-      if (conn.responseCode != 200) return null
+      val code = conn.responseCode
+      if (code != 200) {
+        Log.i(TAG, "fetch: HTTP $code")
+        return null
+      }
       JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
     } finally {
       conn.disconnect()
@@ -129,17 +142,42 @@ class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
 
   /** Post one new-release notification. Tapping it opens the app. */
   private fun post(id: String, title: String, text: String) {
+    if (id.isEmpty()) return
     val ctx = applicationContext
     createChannel(ctx)
+    val b = baseBuilder(ctx, title, text, id.hashCode())
+    if (text.isNotEmpty()) b.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+    notify(ctx, id.hashCode(), b)
+  }
+
+  /** Collapse a large batch into a single summary notification. */
+  private fun postSummary(count: Int) {
+    val ctx = applicationContext
+    createChannel(ctx)
+    val b = baseBuilder(
+      ctx,
+      "$count new releases",
+      "From artists you follow",
+      SUMMARY_ID,
+    )
+    notify(ctx, SUMMARY_ID, b)
+  }
+
+  private fun baseBuilder(
+    ctx: Context,
+    title: String,
+    text: String,
+    requestCode: Int,
+  ): NotificationCompat.Builder {
     val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
       ?.apply { addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP) }
     val pi = launch?.let {
       PendingIntent.getActivity(
-        ctx, id.hashCode(), it,
+        ctx, requestCode, it,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
     }
-    val b = NotificationCompat.Builder(ctx, CHANNEL_ID)
+    return NotificationCompat.Builder(ctx, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.ic_popup_reminder)
       .setContentTitle(title)
       .setContentText(text)
@@ -149,13 +187,14 @@ class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
       .setContentIntent(pi)
-    if (text.isNotEmpty()) b.setStyle(NotificationCompat.BigTextStyle().bigText(text))
+  }
+
+  private fun notify(ctx: Context, notifId: Int, b: NotificationCompat.Builder) {
     try {
-      // Distinct id per notification so multiple new releases stack (and a
-      // re-post of the same id updates rather than duplicates).
-      NotificationManagerCompat.from(ctx).notify(id.hashCode(), b.build())
+      NotificationManagerCompat.from(ctx).notify(notifId, b.build())
     } catch (e: SecurityException) {
       // POST_NOTIFICATIONS not granted — nothing to show.
+      Log.w(TAG, "notify: POST_NOTIFICATIONS not granted")
     }
   }
 
@@ -174,13 +213,15 @@ class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
   }
 
   companion object {
+    const val TAG = "OctaveNotif"
     const val PREFS = "octave_notif_sync"
     const val KEY_BASE = "base_url"
     const val KEY_TOKEN = "token"
     const val KEY_SEEN = "seen_ids"
-    const val KEY_SEEDED = "seeded"
     const val CHANNEL_ID = "octave_new_release"
     const val UNIQUE_WORK = "octave_notif_poll"
+    private const val MAX_INDIVIDUAL = 5
+    private val SUMMARY_ID = "octave_notif_summary".hashCode()
 
     /** Enqueue the periodic poll (idempotent — keeps an existing schedule). */
     fun enqueue(ctx: Context) {
@@ -191,10 +232,12 @@ class NotificationPollWorker(ctx: Context, params: WorkerParameters) :
         .build()
       WorkManager.getInstance(ctx)
         .enqueueUniquePeriodicWork(UNIQUE_WORK, ExistingPeriodicWorkPolicy.KEEP, req)
+      Log.i(TAG, "enqueued unique periodic work ($UNIQUE_WORK, 15 min)")
     }
 
     fun cancel(ctx: Context) {
       WorkManager.getInstance(ctx).cancelUniqueWork(UNIQUE_WORK)
+      Log.i(TAG, "cancelled unique work ($UNIQUE_WORK)")
     }
   }
 }

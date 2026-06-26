@@ -8,7 +8,7 @@
 // full-width.
 
 import { NavLink, useNavigate } from "react-router-dom";
-import { authLogout, authRefreshTransports } from "../ipc";
+import { authLogout, authRefreshTransports, pushUnregister } from "../ipc";
 import type { TransportHealth } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
@@ -87,6 +87,9 @@ export default function Sidebar() {
   const library = NAV.filter((n) => n.group === "library" && visible(n));
 
   async function logout() {
+    // Drop this device's push token first (needs the still-valid credential)
+    // so the signed-out device stops receiving the user's notifications.
+    await pushUnregister().catch(() => {});
     await authLogout();
     setSession(null);
     navigate("/login");

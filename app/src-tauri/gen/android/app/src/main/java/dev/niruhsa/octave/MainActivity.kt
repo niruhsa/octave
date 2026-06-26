@@ -1,5 +1,8 @@
 package dev.niruhsa.octave
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import androidx.activity.enableEdgeToEdge
@@ -10,6 +13,24 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    // Ensure the new-release notification channel exists so notifications shown
+    // by FCM auto-display (app closed) and by the WorkManager fallback both have
+    // a channel on Android 8+. Idempotent. The user logs in (and registers for
+    // push) only after the app has run, so the channel is always present before
+    // the first push arrives.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val mgr = getSystemService(NotificationManager::class.java)
+      if (mgr != null && mgr.getNotificationChannel(NotificationPollWorker.CHANNEL_ID) == null) {
+        val ch = NotificationChannel(
+          NotificationPollWorker.CHANNEL_ID,
+          "New releases",
+          NotificationManager.IMPORTANCE_DEFAULT,
+        )
+        ch.description = "New releases from artists you follow"
+        mgr.createNotificationChannel(ch)
+      }
+    }
 
     // Edge-to-edge (enableEdgeToEdge / decorFitsSystemWindows=false) makes the
     // soft keyboard *overlay* the WebView instead of resizing it, so focused

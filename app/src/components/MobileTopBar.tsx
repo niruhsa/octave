@@ -6,7 +6,7 @@
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { authLogout, authRefreshTransports } from "../ipc";
+import { authLogout, authRefreshTransports, pushUnregister } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
 import { useNotificationsStore } from "../notifications/useNotifications";
@@ -51,6 +51,7 @@ export default function MobileTopBar() {
   }
   async function logout() {
     setOpen(false);
+    await pushUnregister().catch(() => {});
     await authLogout();
     setSession(null);
     navigate("/login");

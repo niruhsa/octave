@@ -18,6 +18,10 @@ service NotificationService {
   rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse);
   rpc MarkNotificationRead(MarkReadRequest) returns (MarkReadResponse);
   rpc MarkAllNotificationsRead(MarkAllReadRequest) returns (MarkAllReadResponse);
+
+  // ----- Device push tokens (FCM) -----
+  rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+  rpc UnregisterDevice(UnregisterDeviceRequest) returns (UnregisterDeviceResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -76,3 +80,14 @@ message MarkReadResponse {}
 
 message MarkAllReadRequest {}
 message MarkAllReadResponse { int64 marked = 1; }
+
+// Register (or re-own) a device push token for the caller. `platform` is
+// "android" today (empty defaults to "android").
+message RegisterDeviceRequest {
+  string token = 1;
+  string platform = 2;
+}
+message RegisterDeviceResponse {}
+
+message UnregisterDeviceRequest { string token = 1; }
+message UnregisterDeviceResponse {}

@@ -164,6 +164,18 @@ pub struct Notification {
     pub created_at: OffsetDateTime,
 }
 
+/// A registered device push token (Phase 10 — FCM). `token` is the FCM
+/// registration token; `platform` is `"android"` today. Owned by a user; the
+/// new-release fan-out pushes to every token of each follower.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct DeviceToken {
+    pub token: String,
+    pub user_id: Uuid,
+    pub platform: String,
+    pub created_at: OffsetDateTime,
+    pub last_seen_at: OffsetDateTime,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub id: Uuid,
@@ -258,6 +270,14 @@ pub struct NewNotification {
     pub album_id: Option<Uuid>,
     pub title: String,
     pub body: Option<String>,
+}
+
+/// Insert/upsert shape for a device push token.
+#[derive(Debug, Clone)]
+pub struct NewDeviceToken {
+    pub token: String,
+    pub user_id: Uuid,
+    pub platform: String,
 }
 
 #[derive(Debug, Clone)]

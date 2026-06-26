@@ -70,9 +70,24 @@ pub struct Config {
     /// (normalized to a label like `"English"`); defaults to `"English"`.
     /// A per-user setting later; an env var for now.
     pub primary_language: String,
+    /// Optional Firebase Cloud Messaging push. `Some` when `FCM_ENABLED` is on;
+    /// the new-release fan-out then also pushes to followers' registered
+    /// devices. Off by default (the client polls instead).
+    pub fcm: Option<FcmConfig>,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
+}
+
+/// Firebase Cloud Messaging config (Phase 10 — real-time push). The credentials
+/// file is a Google **service-account JSON key** (used to mint an OAuth2 token
+/// for the FCM HTTP v1 API); only its path is held, never the key bytes.
+#[derive(Debug, Clone)]
+pub struct FcmConfig {
+    /// Firebase project id (the `messages:send` URL embeds it).
+    pub project_id: String,
+    /// Service-account JSON key path. Absolute (resolved against the anchor).
+    pub credentials_path: PathBuf,
 }
 
 /// PEM file paths for gRPC TLS. Paths only — never the key bytes, which must
@@ -93,6 +108,7 @@ impl Config {
 
         let grpc_addr = parse_addr("GRPC_ADDR", "0.0.0.0:50051")?;
         let grpc_tls = load_grpc_tls(&anchor)?;
+        let fcm = load_fcm(&anchor)?;
         let rest_addr = parse_addr("REST_ADDR", "0.0.0.0:8080")?;
 
         let secret_key = env::var("SECRET_KEY")
@@ -153,6 +169,7 @@ impl Config {
             image_quality,
             image_optimize_interval_secs,
             primary_language,
+            fcm,
             config_anchor: anchor,
         })
     }
@@ -253,6 +270,28 @@ fn load_grpc_tls(anchor: &Path) -> Result<Option<GrpcTlsConfig>> {
     Ok(Some(GrpcTlsConfig {
         cert_path: resolve_path(anchor, &cert),
         key_path: resolve_path(anchor, &key),
+    }))
+}
+
+/// Optional FCM push, enabled by the `FCM_ENABLED` flag. When on,
+/// `FCM_PROJECT_ID` and `FCM_CREDENTIALS` (service-account JSON path, resolved
+/// against the config anchor) are both required — a missing one is a hard
+/// config error so push is never silently half-configured.
+fn load_fcm(anchor: &Path) -> Result<Option<FcmConfig>> {
+    if !env_flag("FCM_ENABLED") {
+        return Ok(None);
+    }
+    let project_id = env::var("FCM_PROJECT_ID").map_err(|_| {
+        AppError::Config("FCM_ENABLED is on but FCM_PROJECT_ID is not set".into())
+    })?;
+    let credentials = env::var("FCM_CREDENTIALS").map_err(|_| {
+        AppError::Config(
+            "FCM_ENABLED is on but FCM_CREDENTIALS (service-account JSON path) is not set".into(),
+        )
+    })?;
+    Ok(Some(FcmConfig {
+        project_id,
+        credentials_path: resolve_path(anchor, &credentials),
     }))
 }
 

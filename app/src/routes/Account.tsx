@@ -9,6 +9,7 @@ import {
   authLogout,
   authRefreshTransports,
   authServerConfig,
+  pushUnregister,
 } from "../ipc";
 import { formatError } from "../lib/error";
 import { useAppStore } from "../store";
@@ -315,6 +316,8 @@ function ServerSession() {
 
   async function signOut() {
     setSigningOut(true);
+    // Drop this device's push token first (needs the still-valid credential).
+    await pushUnregister().catch(() => {});
     try {
       await authLogout();
     } catch {
