@@ -18,6 +18,7 @@ import {
   MenuIcon,
   PlusIcon,
   PowerIcon,
+  SlidersIcon,
   SyncIcon,
   UploadIcon,
   type IconProps,
@@ -104,6 +105,7 @@ export default function MobileTopBar() {
             {isManager && <MenuItem Icon={UploadIcon} label="Upload" onClick={() => go("/upload")} />}
             <MenuItem Icon={ArtistIcon} label="Account" onClick={() => go("/account")} />
             {isAdmin && <MenuItem Icon={PlusIcon} label="Create account" onClick={() => go("/register")} />}
+            <MenuItem Icon={SlidersIcon} label="Settings" onClick={() => go("/settings")} />
             <div className="h-px bg-oct-border" />
             <button
               onClick={() => {

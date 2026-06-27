@@ -28,6 +28,7 @@ import {
   PodcastIcon,
   PowerIcon,
   SearchIcon,
+  SlidersIcon,
   SyncIcon,
   UploadIcon,
   type IconProps,
@@ -61,6 +62,7 @@ const NAV: NavItem[] = [
   { to: "/uploads", label: "Upload reports", Icon: SyncIcon, group: "library", managerOnly: true, requiresConnection: true },
   { to: "/account", label: "Account", Icon: ArtistIcon, group: "library", requiresConnection: true },
   { to: "/register", label: "Create account", Icon: PlusIcon, group: "library", adminOnly: true, requiresConnection: true },
+  { to: "/settings", label: "Settings", Icon: SlidersIcon, group: "library" },
 ];
 
 export default function Sidebar() {

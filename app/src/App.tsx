@@ -27,6 +27,7 @@ import Uploads from "./routes/Uploads";
 import Notifications from "./routes/Notifications";
 import Podcasts from "./routes/Podcasts";
 import PodcastDetail from "./routes/PodcastDetail";
+import Settings from "./routes/Settings";
 import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
 import MobileTopBar from "./components/MobileTopBar";
@@ -37,6 +38,7 @@ import { useSyncScheduler } from "./sync/useSync";
 import { useDownloadListener } from "./downloads/useDownloads";
 import { useUploadEvents } from "./uploads/useUploads";
 import { useNotificationsScheduler } from "./notifications/useNotifications";
+import { useHotkeys } from "./settings/useHotkeys";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -175,6 +177,9 @@ function RootLayout() {
   // Cross-tab query invalidation.
   useQuerySync();
 
+  // Keyboard shortcuts (play/next/nav/…), user-configurable in Settings.
+  useHotkeys();
+
   // On boot, ask Rust for any cached session so the UI starts with the
   // right tier without a network round-trip. Errors are non-fatal — they
   // just mean no server was ever configured.
@@ -238,6 +243,7 @@ const router = createBrowserRouter([
       { path: "upload", element: <Upload /> },
       { path: "uploads", element: <Uploads /> },
       { path: "notifications", element: <Notifications /> },
+      { path: "settings", element: <Settings /> },
     ],
   },
 ]);
