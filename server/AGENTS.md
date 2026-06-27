@@ -19,6 +19,7 @@ Authoritative backend that hosts lossless/downloaded music and streams it to des
 - **Playlists:** create / update / delete.
 - **Offline support:** allow clients to download and archive content for offline use.
 - **Artwork:** automatic album artwork fetching.
+- **Storage accounting:** denormalized library-size stats — a per-entity `storage_bytes` rollup on artists/albums/podcasts plus a singleton `library_storage` breakdown (music / podcast / artwork / other). Recomputed on scan + upload and by a 24h background job ([`STORAGE_REFRESH_SECS`](#environment-variables)); served via `GetLibraryStorage` / `GET /library/storage`. Tracks also carry probed audio-quality detail (`sample_rate_hz` / `bit_depth` / `channels`) for the client's per-song media-info panel. See [`services/storage.rs`](./src/services/storage.rs).
 - **Metadata editing:** optional, manual, opt-in — on upload and after upload completes.
 - **Uploads:** accept new music from clients individually or as archives (archive file, ISO, CD, and other popular music archiving formats).
 - **Ingest folder:** watch a server-side ingest dir. Files placed there (e.g. completed torrents) are **copied — not moved** — out and auto-organised into the library. Never delete or move the source.
@@ -64,6 +65,7 @@ Permission levels (each inherits the level below):
 - `PODCAST_REFRESH_INTERVAL_SECS` — feed refresh poller cadence in seconds (default `1800` / 30 min; `0` disables the poller, leaving on-demand `RefreshPodcast`). Floored at 60 s when the poller runs.
 - `PODCAST_AUTO_DOWNLOAD_DEFAULT` — default per-show newest-N auto-download for a freshly-subscribed feed (default `0` = metadata only; audio downloaded on demand).
 - `PODCASTINDEX_API_KEY` / `PODCASTINDEX_API_SECRET` — optional PodcastIndex API credentials for richer search. **Both required together** (a half-config is a hard error, like `FCM_*` / `GRPC_TLS_*`); absent → iTunes-only search (still fully functional, no key needed).
+- `STORAGE_REFRESH_SECS` — cadence (seconds) of the background library-storage refresh job (default `86400` / 24 h; `0` disables the periodic pass). Each run does a *light* refresh — index new files, prune rows whose file vanished, then recompute every storage stat. A one-shot startup recompute always runs (regardless of this value) so the homepage widget has data immediately. Gated on `LIBRARY_PATH` being set. Floored at 300 s when the periodic job runs.
 - `ENV_FILE` — explicit override for the `.env` file location.
 
 ### `.env` loading & path resolution

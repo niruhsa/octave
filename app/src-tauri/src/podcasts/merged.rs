@@ -26,6 +26,9 @@ pub struct MergedPodcast {
     pub last_refreshed_at: Option<String>,
     pub subscribed: bool,
     pub downloaded_count: i64,
+    /// Sum of the on-disk bytes of every downloaded episode of this show (server-side).
+    #[serde(default)]
+    pub storage_bytes: i64,
 }
 
 /// An episode plus its offline state. `downloaded` (the client has the file)
@@ -74,6 +77,7 @@ impl MergedPodcast {
             last_refreshed_at: p.last_refreshed_at,
             subscribed,
             downloaded_count,
+            storage_bytes: p.storage_bytes,
         }
     }
 
@@ -94,6 +98,7 @@ impl MergedPodcast {
             last_refreshed_at: None,
             subscribed: p.subscribed != 0,
             downloaded_count,
+            storage_bytes: p.storage_bytes,
         }
     }
 }

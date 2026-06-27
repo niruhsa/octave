@@ -178,6 +178,9 @@ async fn handle_path(ingest: &IngestService, path: &Path) {
                 dest = %result.dest.display(),
                 "watch: ingested"
             );
+            // A new track landed via the ingest folder — refresh the cheap
+            // storage aggregates so the stats track it.
+            ingest.scan.recompute_storage_aggregates().await;
         }
         Err(e) => {
             warn!(path = %path.display(), error = %e, "watch: ingest failed");

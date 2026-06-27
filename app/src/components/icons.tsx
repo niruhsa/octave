@@ -51,6 +51,15 @@ export const HomeIcon = (p: IconProps) => (
   </Line>
 );
 
+export const InfoIcon = (p: IconProps) => (
+  <Line sw={1.4} {...p}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M8 7.4v3.2" />
+    {/* zero-length stroke → round dot via strokeLinecap */}
+    <path d="M8 5.1h0.01" />
+  </Line>
+);
+
 export const DiscIcon = (p: IconProps) => (
   <Line {...p}>
     <circle cx="8" cy="8" r="5.5" />

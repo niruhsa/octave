@@ -225,6 +225,7 @@ pub fn run() {
             commands::library_commands::library_search_albums,
             commands::library_commands::library_list_tracks_by_album,
             commands::library_commands::library_search_tracks,
+            commands::library_commands::library_get_storage,
             // metadata edit (Phase 9 — Manager+ gated server-side)
             commands::library_commands::library_edit_track_metadata,
             commands::library_commands::library_upload_album_cover,

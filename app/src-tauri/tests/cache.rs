@@ -29,6 +29,7 @@ async fn cache_roundtrip_persists_downloaded_items() {
         id: "11111111-1111-1111-1111-111111111111".into(),
         name: "Boards of Canada".into(),
         sort_name: Some("Boards of Canada".into()),
+        storage_bytes: 0,
         updated_at: now(),
     };
     repo::upsert_artist(&pool, &artist).await.unwrap();
@@ -38,6 +39,7 @@ async fn cache_roundtrip_persists_downloaded_items() {
         artist_id: artist.id.clone(),
         title: "Music Has the Right to Children".into(),
         release_year: Some(1998),
+        storage_bytes: 0,
         updated_at: now(),
     };
     repo::upsert_album(&pool, &album).await.unwrap();
@@ -60,6 +62,9 @@ async fn cache_roundtrip_persists_downloaded_items() {
         codec: "flac".into(),
         bitrate_kbps: Some(900),
         file_size: Some(15_000_000),
+        sample_rate_hz: Some(44_100),
+        bit_depth: Some(16),
+        channels: Some(2),
         local_file_path: "/tmp/tracks/roygbiv.flac".into(),
         metadata_json: "{}".into(),
         downloaded_at: now(),
@@ -177,6 +182,7 @@ async fn cache_open_is_idempotent_across_reopens() {
             id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
             name: "Aphex Twin".into(),
             sort_name: None,
+            storage_bytes: 0,
             updated_at: now(),
         },
     )

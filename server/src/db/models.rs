@@ -60,6 +60,9 @@ pub struct Artist {
     /// Path to a manager-uploaded artist image under `ARTWORK_PATH`, or
     /// `None` when no image has been set. Served via `GET /artists/:id/image`.
     pub image_path: Option<String>,
+    /// Sum of the on-disk bytes of every track owned by this artist. Kept up
+    /// to date by `StorageService::recompute_aggregates`.
+    pub storage_bytes: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -71,6 +74,8 @@ pub struct Album {
     pub title: String,
     pub release_year: Option<i32>,
     pub cover_path: Option<String>,
+    /// Sum of the on-disk bytes of every track on this album.
+    pub storage_bytes: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -88,6 +93,12 @@ pub struct Track {
     pub bitrate_kbps: Option<i32>,
     pub file_path: String,
     pub file_size: Option<i64>,
+    /// Audio-quality detail probed at ingest/rescan (sample rate in Hz, bit
+    /// depth, channel count). Nullable — unknown until probed, and bit depth in
+    /// particular is often absent for lossy formats.
+    pub sample_rate_hz: Option<i32>,
+    pub bit_depth: Option<i32>,
+    pub channels: Option<i32>,
     /// JSON-as-TEXT; validated at the service layer.
     pub metadata_json: String,
     /// `true` when this track is a "single release" within its album — e.g.
@@ -201,6 +212,38 @@ pub struct Session {
     pub revoked_at: Option<OffsetDateTime>,
 }
 
+/// The singleton library-storage breakdown row (`library_storage`, `id = 1`).
+/// `music_bytes`/`podcast_bytes` are SQL sums of the respective file sizes;
+/// `artwork_bytes`/`other_bytes` come from a filesystem walk. The UI shows
+/// `misc = artwork_bytes + other_bytes`. Recomputed on scan/upload and by the
+/// 24h background job. See [`crate::services::storage::StorageService`].
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct LibraryStorage {
+    pub music_bytes: i64,
+    pub podcast_bytes: i64,
+    pub artwork_bytes: i64,
+    pub other_bytes: i64,
+    pub total_bytes: i64,
+    pub track_count: i64,
+    pub album_count: i64,
+    pub artist_count: i64,
+    pub podcast_count: i64,
+    pub episode_count: i64,
+    pub computed_at: OffsetDateTime,
+}
+
+/// SQL-derived aggregates (no filesystem walk) — the cheap recompute path.
+#[derive(Debug, Clone, Copy, Default, sqlx::FromRow)]
+pub struct StorageAggregates {
+    pub music_bytes: i64,
+    pub podcast_bytes: i64,
+    pub track_count: i64,
+    pub album_count: i64,
+    pub artist_count: i64,
+    pub podcast_count: i64,
+    pub episode_count: i64,
+}
+
 // ---------------------------------------------------------------------------
 // Create payloads (insert-shape DTOs)
 // ---------------------------------------------------------------------------
@@ -238,6 +281,9 @@ pub struct NewTrack {
     pub bitrate_kbps: Option<i32>,
     pub file_path: String,
     pub file_size: Option<i64>,
+    pub sample_rate_hz: Option<i32>,
+    pub bit_depth: Option<i32>,
+    pub channels: Option<i32>,
     pub metadata_json: String,
 }
 
@@ -470,6 +516,8 @@ pub struct Podcast {
     pub itunes_id: Option<i64>,
     pub podcastindex_id: Option<i64>,
     pub auto_download: i32,
+    /// Sum of the on-disk bytes of every downloaded episode of this show.
+    pub storage_bytes: i64,
     pub last_refreshed_at: Option<OffsetDateTime>,
     pub last_etag: Option<String>,
     pub last_modified: Option<String>,

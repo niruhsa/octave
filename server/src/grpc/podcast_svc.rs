@@ -62,6 +62,7 @@ fn podcast_to_pb(p: m::Podcast) -> pb::Podcast {
         last_refreshed_at: p.last_refreshed_at.map(rfc3339).unwrap_or_default(),
         created_at: rfc3339(p.created_at),
         updated_at: rfc3339(p.updated_at),
+        storage_bytes: p.storage_bytes,
     }
 }
 

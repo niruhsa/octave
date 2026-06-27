@@ -171,6 +171,16 @@ impl<'a> LibraryService<'a> {
         Ok(MergedArtist::from_cache(a))
     }
 
+    // ----- storage -------------------------------------------------------
+
+    /// The server's library-storage breakdown (homepage widget). This is a
+    /// live server view — there's no offline mirror, so it surfaces the
+    /// transport error when offline and the UI degrades to "—".
+    pub async fn get_library_storage(&self) -> AppResult<crate::transport::LibraryStorage> {
+        let cred = self.auth.credential().await?;
+        self.auth.server().get_library_storage(&cred).await
+    }
+
     // ----- albums --------------------------------------------------------
 
     pub async fn list_albums_by_artist(
@@ -446,6 +456,9 @@ impl<'a> LibraryService<'a> {
                     codec: updated.codec.clone(),
                     bitrate_kbps: updated.bitrate_kbps,
                     file_size: updated.file_size,
+                    sample_rate_hz: updated.sample_rate_hz,
+                    bit_depth: updated.bit_depth,
+                    channels: updated.channels,
                     // Client-owned — never overwritten by a metadata edit.
                     local_file_path: existing.local_file_path.clone(),
                     metadata_json: updated.metadata_json.clone(),

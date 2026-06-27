@@ -293,6 +293,7 @@ impl<'a> PodcastService<'a> {
             language: p.language.clone(),
             categories: serde_json::to_string(&p.categories).unwrap_or_else(|_| "[]".into()),
             subscribed: if subscribed { 1 } else { 0 },
+            storage_bytes: p.storage_bytes,
             updated_at: now_iso(),
         };
         repo::upsert_podcast(self.pool, &row).await

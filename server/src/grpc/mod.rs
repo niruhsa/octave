@@ -23,7 +23,7 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
     ArtworkService, IngestService, LibraryService, MetadataService, NotificationService,
-    PlaylistService, PodcastService, ScanService, UploadHub, UploadsService,
+    PlaylistService, PodcastService, ScanService, StorageService, UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
@@ -42,6 +42,7 @@ pub async fn serve(
     auth: AuthService,
     library: LibraryService,
     scan: ScanService,
+    storage: StorageService,
     metadata: MetadataService,
     artwork: Option<ArtworkService>,
     playlists: PlaylistService,
@@ -82,6 +83,7 @@ pub async fn serve(
     let library_server = LibraryServer {
         library,
         scan,
+        storage,
         metadata,
         artwork,
         interceptor: interceptor.clone(),

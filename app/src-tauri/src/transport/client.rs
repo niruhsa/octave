@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier, Playlist,
-    PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
+    Album, Artist, ChunkAck, Credential, LibraryStorage, MetadataEdit, NotificationPage,
+    PermissionTier, Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode,
+    RefreshReport, RescanReport,
     ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
     UploadSummary, UploadView,
 };
@@ -337,6 +338,17 @@ impl ServerClient {
             }
         }
         self.rest.get_track(cred, id).await
+    }
+
+    pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_library_storage(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_library_storage", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_library_storage(cred).await
     }
 
     // ----- Delete (Manager+ gated server-side) ----------------------------

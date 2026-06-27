@@ -98,14 +98,18 @@ pub trait TrackRepo: Send + Sync {
     async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>>;
     /// Overwrite the duration of a single track.  Returns the updated row.
     async fn update_duration(&self, id: Uuid, duration_ms: i64) -> Result<Option<Track>>;
-    /// Refresh the file-derived technical fields (codec, bitrate, size)
-    /// during a full library rescan.  Returns the updated row.
+    /// Refresh the file-derived technical fields (codec, bitrate, size, and the
+    /// audio-quality detail: sample rate / bit depth / channels) during a full
+    /// library rescan.  Returns the updated row.
     async fn update_file_props(
         &self,
         id: Uuid,
         codec: &str,
         bitrate_kbps: Option<i32>,
         file_size: Option<i64>,
+        sample_rate_hz: Option<i32>,
+        bit_depth: Option<i32>,
+        channels: Option<i32>,
     ) -> Result<Option<Track>>;
 }
 
@@ -373,6 +377,26 @@ pub trait PodcastEpisodeRepo: Send + Sync {
     /// Clear the on-disk file reference (local delete). Returns the updated row.
     async fn clear_file(&self, id: Uuid) -> Result<Option<PodcastEpisode>>;
     async fn delete(&self, id: Uuid) -> Result<()>;
+}
+
+/// Library storage accounting (the homepage widget + per-entity rollups).
+/// Splits into a cheap SQL path (sums/counts + per-entity rollups, run on every
+/// upload/scan) and disk-derived fields written by the heavier filesystem walk.
+#[async_trait]
+pub trait StorageRepo: Send + Sync {
+    /// Recompute `storage_bytes` on every artist/album/podcast from the SUM of
+    /// their owned files' `file_size`. Pure SQL — no filesystem access.
+    async fn recompute_entity_storage(&self) -> Result<()>;
+    /// SQL sums + counts for the global breakdown (music/podcast bytes, counts).
+    async fn aggregates(&self) -> Result<StorageAggregates>;
+    /// Write the SQL-derived global fields, recomputing `total_bytes` from the
+    /// current (preserved) disk fields. Used by the cheap recompute path.
+    async fn set_library_aggregates(&self, a: StorageAggregates) -> Result<()>;
+    /// Write the filesystem-derived fields (`artwork_bytes`/`other_bytes`),
+    /// recomputing `total_bytes` from the preserved SQL fields.
+    async fn set_library_disk(&self, artwork_bytes: i64, other_bytes: i64) -> Result<()>;
+    /// Read the singleton breakdown row (fast path for the widget).
+    async fn get_library_storage(&self) -> Result<LibraryStorage>;
 }
 
 /// Podcast subscriptions (user → show). Structurally identical to [`FollowRepo`].

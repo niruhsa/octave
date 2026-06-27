@@ -19,6 +19,7 @@ pub mod playlist;
 pub mod podcast;
 pub mod podcast_dir;
 pub mod scan;
+pub mod storage;
 pub mod streaming;
 pub mod tag;
 pub mod uploads;
@@ -37,6 +38,7 @@ pub use playlist::{PlaylistService, PlaylistWithTracks};
 pub use podcast::{PodcastService, RefreshReport};
 pub use podcast_dir::{ItunesDirectory, PodcastCandidate, PodcastDirectory, PodcastIndexDirectory};
 pub use scan::{ScanReport, ScanService};
+pub use storage::StorageService;
 pub use streaming::{ResolvedStream, StreamingService};
 pub use uploads::{
     can_see, ChunkAck, ChunkInit, ChunkView, FileInit, UploadEvent, UploadFileView, UploadHub,

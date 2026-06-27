@@ -20,6 +20,7 @@ async fn seed_one_downloaded(pool: &sqlx::SqlitePool) -> (String, String, String
         id: "a-1".into(),
         name: "Boards of Canada".into(),
         sort_name: None,
+        storage_bytes: 0,
         updated_at: now(),
     };
     let album = Album {
@@ -27,6 +28,7 @@ async fn seed_one_downloaded(pool: &sqlx::SqlitePool) -> (String, String, String
         artist_id: artist.id.clone(),
         title: "Geogaddi".into(),
         release_year: Some(2002),
+        storage_bytes: 0,
         updated_at: now(),
     };
     let track = Track {
@@ -40,6 +42,9 @@ async fn seed_one_downloaded(pool: &sqlx::SqlitePool) -> (String, String, String
         codec: "flac".into(),
         bitrate_kbps: Some(900),
         file_size: Some(20_000_000),
+        sample_rate_hz: Some(44_100),
+        bit_depth: Some(16),
+        channels: Some(2),
         local_file_path: "/tmp/1969.flac".into(),
         metadata_json: "{}".into(),
         downloaded_at: now(),
@@ -72,6 +77,7 @@ async fn downloaded_artist_ids_returns_only_artists_with_tracks() {
             id: "a-2".into(),
             name: "Aphex Twin".into(),
             sort_name: None,
+            storage_bytes: 0,
             updated_at: now(),
         },
     )

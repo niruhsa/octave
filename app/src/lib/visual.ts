@@ -31,13 +31,47 @@ export function gradientFor(id: string | undefined | null): string {
   return `linear-gradient(140deg, ${a}, ${b})`;
 }
 
+/** Codecs whose audio is bit-exact (no perceptual loss). lofty reports the
+ * container as a debug string, e.g. "Flac", "Wav", "Aiff", "WavPack", "Ape". */
+const LOSSLESS_CODECS = new Set([
+  "FLAC",
+  "WAV",
+  "WAVE",
+  "AIFF",
+  "AIF",
+  "APE",
+  "WAVPACK",
+  "WV",
+  "ALAC",
+]);
+
+export function isLossless(codec: string | null | undefined): boolean {
+  return LOSSLESS_CODECS.has((codec || "").toUpperCase());
+}
+
+/** Sample rate in kHz, trimmed (44100 → "44.1", 48000 → "48", 192000 → "192"). */
+export function sampleRateKHz(hz: number | null | undefined): string | null {
+  if (!hz) return null;
+  return (hz / 1000).toFixed(1).replace(/\.0$/, "");
+}
+
 /**
- * Mono quality readout, e.g. "FLAC · 96kHz" → here we only reliably know the
- * codec and (sometimes) bitrate, so render what we have. The design shows
- * "FLAC 96/24"; we approximate with codec + kbps when present.
+ * Mono quality readout. For lossless formats we show the studio-style
+ * bit-depth/sample-rate pair when known (e.g. "Lossless · 24/96"); for lossy
+ * formats we show codec + bitrate (e.g. "MP3 320k"). Falls back gracefully
+ * when the probe didn't report the finer detail.
  */
-export function qualityLabel(track: Pick<MergedTrack, "codec" | "bitrate_kbps">): string {
+export function qualityLabel(
+  track: Pick<MergedTrack, "codec" | "bitrate_kbps"> &
+    Partial<Pick<MergedTrack, "sample_rate_hz" | "bit_depth">>,
+): string {
   const codec = (track.codec || "").toUpperCase();
+  const khz = sampleRateKHz(track.sample_rate_hz);
+  if (isLossless(codec)) {
+    if (track.bit_depth && khz) return `Lossless · ${track.bit_depth}/${khz}`;
+    if (khz) return `Lossless · ${khz}kHz`;
+    return "Lossless";
+  }
   if (track.bitrate_kbps) return `${codec} ${track.bitrate_kbps}k`.trim();
   return codec || "—";
 }

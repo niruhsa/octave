@@ -246,12 +246,17 @@ impl SyncEngine {
         for row in repo::list_artists(&self.pool).await? {
             match server.get_artist(cred, &row.id).await? {
                 Some(srv) => {
-                    let hash = hash_fields(&[&srv.name, srv.sort_name.as_deref().unwrap_or("")]);
+                    let hash = hash_fields(&[
+                        &srv.name,
+                        srv.sort_name.as_deref().unwrap_or(""),
+                        &srv.storage_bytes.to_string(),
+                    ]);
                     if self.changed("artist", &row.id, &hash).await? {
                         let updated = cm::Artist {
                             id: srv.id,
                             name: srv.name,
                             sort_name: srv.sort_name,
+                            storage_bytes: srv.storage_bytes,
                             updated_at: now_iso(),
                         };
                         repo::upsert_artist(&self.pool, &updated).await?;
@@ -306,6 +311,7 @@ impl SyncEngine {
                             &srv.artist_id,
                             &srv.title,
                             &srv.release_year.map(|y| y.to_string()).unwrap_or_default(),
+                            &srv.storage_bytes.to_string(),
                         ]);
                         if self.changed("album", &row.id, &hash).await? {
                             let updated = cm::Album {
@@ -313,6 +319,7 @@ impl SyncEngine {
                                 artist_id: srv.artist_id,
                                 title: srv.title,
                                 release_year: srv.release_year,
+                                storage_bytes: srv.storage_bytes,
                                 updated_at: now_iso(),
                             };
                             repo::upsert_album(&self.pool, &updated).await?;
@@ -364,6 +371,9 @@ impl SyncEngine {
                         &srv.disc_no.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.duration_ms.to_string(),
                         &srv.codec,
+                        &srv.sample_rate_hz.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.bit_depth.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.channels.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.metadata_json,
                     ]);
                     if self.changed("track", &row.id, &hash).await? {
@@ -378,6 +388,9 @@ impl SyncEngine {
                             codec: srv.codec,
                             bitrate_kbps: srv.bitrate_kbps,
                             file_size: srv.file_size,
+                            sample_rate_hz: srv.sample_rate_hz,
+                            bit_depth: srv.bit_depth,
+                            channels: srv.channels,
                             // preserve client-owned fields
                             local_file_path: row.local_file_path.clone(),
                             metadata_json: srv.metadata_json,
@@ -480,6 +493,7 @@ impl SyncEngine {
                         srv.image_url.as_deref().unwrap_or(""),
                         srv.language.as_deref().unwrap_or(""),
                         &cats,
+                        &srv.storage_bytes.to_string(),
                     ]);
                     if self.changed("podcast", &row.id, &hash).await? {
                         let updated = cm::Podcast {
@@ -492,6 +506,7 @@ impl SyncEngine {
                             language: srv.language,
                             categories: cats,
                             subscribed: row.subscribed, // client-owned
+                            storage_bytes: srv.storage_bytes,
                             updated_at: now_iso(),
                         };
                         repo::upsert_podcast(&self.pool, &updated).await?;

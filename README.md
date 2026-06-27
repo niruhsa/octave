@@ -14,6 +14,7 @@ A private, self-hosted music platform. A remote **server** hosts a lossless/down
 - **Ingest folder** — files placed there (e.g. completed torrents) are **copied, not moved**, then auto-organised into the library; sources are never altered.
 - **Follow + notifications** — follow artists and get notified of new releases.
 - **Podcasts** — discover shows via the official iTunes / PodcastIndex APIs, download episodes to disk, stream them like tracks, and get notified of new episodes — full-stack (server + client). See [`PODCASTS.md`](./PODCASTS.md).
+- **Library storage insight** — a homepage widget shows total backend storage split into music / podcasts / misc; artists, albums and podcast shows display their own size; each song has an **Information** panel (file type, size, audio quality like `Lossless · 24/96`, sample rate, bit depth, channels). Stats are stored in the DB, recomputed on scan + upload, and refreshed by a 24h background job.
 - **Audit log + rollback** — every change is logged, viewable by managers/admins, and reversible.
 
 ## Architecture

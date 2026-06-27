@@ -85,6 +85,8 @@ pub struct PodcastDto {
     pub last_refreshed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Sum of the on-disk bytes of every downloaded episode of this show.
+    pub storage_bytes: i64,
 }
 fn podcast_dto(p: m::Podcast) -> PodcastDto {
     PodcastDto {
@@ -103,6 +105,7 @@ fn podcast_dto(p: m::Podcast) -> PodcastDto {
         last_refreshed_at: p.last_refreshed_at.map(rfc3339),
         created_at: rfc3339(p.created_at),
         updated_at: rfc3339(p.updated_at),
+        storage_bytes: p.storage_bytes,
     }
 }
 

@@ -26,17 +26,19 @@ use crate::error::AppResult;
 pub async fn upsert_artist(pool: &SqlitePool, artist: &Artist) -> AppResult<()> {
     sqlx::query(
         r#"
-        INSERT INTO artists (id, name, sort_name, updated_at)
-        VALUES (?1, ?2, ?3, ?4)
+        INSERT INTO artists (id, name, sort_name, storage_bytes, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5)
         ON CONFLICT(id) DO UPDATE SET
-            name       = excluded.name,
-            sort_name  = excluded.sort_name,
-            updated_at = excluded.updated_at
+            name          = excluded.name,
+            sort_name     = excluded.sort_name,
+            storage_bytes = excluded.storage_bytes,
+            updated_at    = excluded.updated_at
         "#,
     )
     .bind(&artist.id)
     .bind(&artist.name)
     .bind(&artist.sort_name)
+    .bind(artist.storage_bytes)
     .bind(&artist.updated_at)
     .execute(pool)
     .await?;
@@ -44,7 +46,7 @@ pub async fn upsert_artist(pool: &SqlitePool, artist: &Artist) -> AppResult<()> 
 }
 
 pub async fn get_artist(pool: &SqlitePool, id: &str) -> AppResult<Option<Artist>> {
-    let row = sqlx::query_as::<_, Artist>("SELECT id, name, sort_name, updated_at FROM artists WHERE id = ?1")
+    let row = sqlx::query_as::<_, Artist>("SELECT id, name, sort_name, storage_bytes, updated_at FROM artists WHERE id = ?1")
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -53,7 +55,7 @@ pub async fn get_artist(pool: &SqlitePool, id: &str) -> AppResult<Option<Artist>
 
 pub async fn list_artists(pool: &SqlitePool) -> AppResult<Vec<Artist>> {
     let rows = sqlx::query_as::<_, Artist>(
-        "SELECT id, name, sort_name, updated_at FROM artists ORDER BY name COLLATE NOCASE",
+        "SELECT id, name, sort_name, storage_bytes, updated_at FROM artists ORDER BY name COLLATE NOCASE",
     )
     .fetch_all(pool)
     .await?;
@@ -93,19 +95,21 @@ pub async fn delete_artist(pool: &SqlitePool, id: &str) -> AppResult<()> {
 pub async fn upsert_album(pool: &SqlitePool, album: &Album) -> AppResult<()> {
     sqlx::query(
         r#"
-        INSERT INTO albums (id, artist_id, title, release_year, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO albums (id, artist_id, title, release_year, storage_bytes, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ON CONFLICT(id) DO UPDATE SET
-            artist_id    = excluded.artist_id,
-            title        = excluded.title,
-            release_year = excluded.release_year,
-            updated_at   = excluded.updated_at
+            artist_id     = excluded.artist_id,
+            title         = excluded.title,
+            release_year  = excluded.release_year,
+            storage_bytes = excluded.storage_bytes,
+            updated_at    = excluded.updated_at
         "#,
     )
     .bind(&album.id)
     .bind(&album.artist_id)
     .bind(&album.title)
     .bind(album.release_year)
+    .bind(album.storage_bytes)
     .bind(&album.updated_at)
     .execute(pool)
     .await?;
@@ -114,7 +118,7 @@ pub async fn upsert_album(pool: &SqlitePool, album: &Album) -> AppResult<()> {
 
 pub async fn get_album(pool: &SqlitePool, id: &str) -> AppResult<Option<Album>> {
     let row = sqlx::query_as::<_, Album>(
-        "SELECT id, artist_id, title, release_year, updated_at FROM albums WHERE id = ?1",
+        "SELECT id, artist_id, title, release_year, storage_bytes, updated_at FROM albums WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -124,7 +128,7 @@ pub async fn get_album(pool: &SqlitePool, id: &str) -> AppResult<Option<Album>> 
 
 pub async fn list_albums_by_artist(pool: &SqlitePool, artist_id: &str) -> AppResult<Vec<Album>> {
     let rows = sqlx::query_as::<_, Album>(
-        "SELECT id, artist_id, title, release_year, updated_at
+        "SELECT id, artist_id, title, release_year, storage_bytes, updated_at
          FROM albums WHERE artist_id = ?1
          ORDER BY release_year, title COLLATE NOCASE",
     )
@@ -203,9 +207,10 @@ pub async fn upsert_track(pool: &SqlitePool, track: &Track) -> AppResult<()> {
         INSERT INTO tracks (
             id, album_id, artist_id, title, track_no, disc_no,
             duration_ms, codec, bitrate_kbps, file_size,
+            sample_rate_hz, bit_depth, channels,
             local_file_path, metadata_json, downloaded_at, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
         ON CONFLICT(id) DO UPDATE SET
             album_id        = excluded.album_id,
             artist_id       = excluded.artist_id,
@@ -216,6 +221,9 @@ pub async fn upsert_track(pool: &SqlitePool, track: &Track) -> AppResult<()> {
             codec           = excluded.codec,
             bitrate_kbps    = excluded.bitrate_kbps,
             file_size       = excluded.file_size,
+            sample_rate_hz  = excluded.sample_rate_hz,
+            bit_depth       = excluded.bit_depth,
+            channels        = excluded.channels,
             local_file_path = excluded.local_file_path,
             metadata_json   = excluded.metadata_json,
             updated_at      = excluded.updated_at
@@ -231,6 +239,9 @@ pub async fn upsert_track(pool: &SqlitePool, track: &Track) -> AppResult<()> {
     .bind(&track.codec)
     .bind(track.bitrate_kbps)
     .bind(track.file_size)
+    .bind(track.sample_rate_hz)
+    .bind(track.bit_depth)
+    .bind(track.channels)
     .bind(&track.local_file_path)
     .bind(&track.metadata_json)
     .bind(&track.downloaded_at)
@@ -244,6 +255,7 @@ pub async fn get_track(pool: &SqlitePool, id: &str) -> AppResult<Option<Track>> 
     let row = sqlx::query_as::<_, Track>(
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
+                 sample_rate_hz, bit_depth, channels,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks WHERE id = ?1"#,
     )
@@ -257,6 +269,7 @@ pub async fn list_tracks_by_album(pool: &SqlitePool, album_id: &str) -> AppResul
     let rows = sqlx::query_as::<_, Track>(
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
+                 sample_rate_hz, bit_depth, channels,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks WHERE album_id = ?1
            ORDER BY disc_no, track_no, title COLLATE NOCASE"#,
@@ -271,6 +284,7 @@ pub async fn list_tracks_by_artist(pool: &SqlitePool, artist_id: &str) -> AppRes
     let rows = sqlx::query_as::<_, Track>(
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
+                 sample_rate_hz, bit_depth, channels,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks WHERE artist_id = ?1
            ORDER BY album_id, disc_no, track_no, title COLLATE NOCASE"#,
@@ -285,6 +299,7 @@ pub async fn list_downloaded_tracks(pool: &SqlitePool) -> AppResult<Vec<Track>> 
     let rows = sqlx::query_as::<_, Track>(
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
+                 sample_rate_hz, bit_depth, channels,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks
            ORDER BY downloaded_at DESC"#,
@@ -572,7 +587,7 @@ pub async fn count_downloaded_tracks_for_album(pool: &SqlitePool, album_id: &str
 // ---------------------------------------------------------------------------
 
 const PODCAST_COLS: &str = "id, feed_url, title, author, description, image_url, \
-     language, categories, subscribed, updated_at";
+     language, categories, subscribed, storage_bytes, updated_at";
 
 /// Upsert a podcast show. `subscribed` is preserved by the caller (the merged
 /// service writes the current flag), so a metadata-only sync doesn't clobber it.
@@ -581,18 +596,19 @@ pub async fn upsert_podcast(pool: &SqlitePool, p: &Podcast) -> AppResult<()> {
         r#"
         INSERT INTO podcasts
             (id, feed_url, title, author, description, image_url, language,
-             categories, subscribed, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             categories, subscribed, storage_bytes, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
         ON CONFLICT(id) DO UPDATE SET
-            feed_url    = excluded.feed_url,
-            title       = excluded.title,
-            author      = excluded.author,
-            description = excluded.description,
-            image_url   = excluded.image_url,
-            language    = excluded.language,
-            categories  = excluded.categories,
-            subscribed  = excluded.subscribed,
-            updated_at  = excluded.updated_at
+            feed_url      = excluded.feed_url,
+            title         = excluded.title,
+            author        = excluded.author,
+            description   = excluded.description,
+            image_url     = excluded.image_url,
+            language      = excluded.language,
+            categories    = excluded.categories,
+            subscribed    = excluded.subscribed,
+            storage_bytes = excluded.storage_bytes,
+            updated_at    = excluded.updated_at
         "#,
     )
     .bind(&p.id)
@@ -604,6 +620,7 @@ pub async fn upsert_podcast(pool: &SqlitePool, p: &Podcast) -> AppResult<()> {
     .bind(&p.language)
     .bind(&p.categories)
     .bind(p.subscribed)
+    .bind(p.storage_bytes)
     .bind(&p.updated_at)
     .execute(pool)
     .await?;

@@ -337,6 +337,9 @@ mod tests {
             _: &str,
             _: Option<i32>,
             _: Option<i64>,
+            _: Option<i32>,
+            _: Option<i32>,
+            _: Option<i32>,
         ) -> crate::error::Result<Option<crate::db::models::Track>> {
             Ok(None)
         }

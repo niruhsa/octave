@@ -10,8 +10,9 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, PermissionTier,
-    Playlist, PlaylistTrack, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, LibraryStorage, MetadataEdit,
+    PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast, PodcastCandidate,
+    PodcastEpisode,
     RefreshReport, RescanReport, ServerConfig, SingleUploadResult, Track, UploadEvent,
     UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
@@ -422,6 +423,13 @@ impl RestClient {
             Some(r) => Ok(Some(r.json::<TrackJson>().await.map_err(rest_err("get_track decode"))?.into())),
             None => Ok(None),
         }
+    }
+
+    pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {
+        let url = format!("{}/library/storage", self.base);
+        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_library_storage"))?;
+        let r = check_status(resp).await?;
+        Ok(r.json::<LibraryStorageJson>().await.map_err(rest_err("get_library_storage decode"))?.into())
     }
 
     // ----- Delete (Manager+ gated server-side) ----------------------------
@@ -1639,6 +1647,8 @@ struct ArtistJson {
     image_path: Option<String>,
     #[serde(default)]
     aliases: Vec<AliasJson>,
+    #[serde(default)]
+    storage_bytes: i64,
 }
 impl From<ArtistJson> for Artist {
     fn from(a: ArtistJson) -> Self {
@@ -1648,6 +1658,7 @@ impl From<ArtistJson> for Artist {
             sort_name: a.sort_name,
             image_path: a.image_path,
             aliases: a.aliases.into_iter().map(Into::into).collect(),
+            storage_bytes: a.storage_bytes,
         }
     }
 }
@@ -1661,6 +1672,8 @@ struct AlbumJson {
     cover_path: Option<String>,
     #[serde(default)]
     aliases: Vec<AliasJson>,
+    #[serde(default)]
+    storage_bytes: i64,
 }
 impl From<AlbumJson> for Album {
     fn from(a: AlbumJson) -> Self {
@@ -1671,6 +1684,7 @@ impl From<AlbumJson> for Album {
             release_year: a.release_year,
             cover_path: a.cover_path,
             aliases: a.aliases.into_iter().map(Into::into).collect(),
+            storage_bytes: a.storage_bytes,
         }
     }
 }
@@ -1688,6 +1702,12 @@ struct TrackJson {
     bitrate_kbps: Option<i64>,
     file_path: String,
     file_size: Option<i64>,
+    #[serde(default)]
+    sample_rate_hz: Option<i64>,
+    #[serde(default)]
+    bit_depth: Option<i64>,
+    #[serde(default)]
+    channels: Option<i64>,
     metadata_json: String,
     #[serde(default)]
     is_single_release: bool,
@@ -1706,8 +1726,54 @@ impl From<TrackJson> for Track {
             bitrate_kbps: t.bitrate_kbps,
             file_path: t.file_path,
             file_size: t.file_size,
+            sample_rate_hz: t.sample_rate_hz,
+            bit_depth: t.bit_depth,
+            channels: t.channels,
             metadata_json: t.metadata_json,
             is_single_release: t.is_single_release,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct LibraryStorageJson {
+    #[serde(default)]
+    music_bytes: i64,
+    #[serde(default)]
+    podcast_bytes: i64,
+    #[serde(default)]
+    artwork_bytes: i64,
+    #[serde(default)]
+    other_bytes: i64,
+    #[serde(default)]
+    total_bytes: i64,
+    #[serde(default)]
+    track_count: i64,
+    #[serde(default)]
+    album_count: i64,
+    #[serde(default)]
+    artist_count: i64,
+    #[serde(default)]
+    podcast_count: i64,
+    #[serde(default)]
+    episode_count: i64,
+    #[serde(default)]
+    computed_at: String,
+}
+impl From<LibraryStorageJson> for LibraryStorage {
+    fn from(s: LibraryStorageJson) -> Self {
+        Self {
+            music_bytes: s.music_bytes,
+            podcast_bytes: s.podcast_bytes,
+            artwork_bytes: s.artwork_bytes,
+            other_bytes: s.other_bytes,
+            total_bytes: s.total_bytes,
+            track_count: s.track_count,
+            album_count: s.album_count,
+            artist_count: s.artist_count,
+            podcast_count: s.podcast_count,
+            episode_count: s.episode_count,
+            computed_at: s.computed_at,
         }
     }
 }
@@ -1760,6 +1826,8 @@ struct PodcastJson {
     auto_download: i32,
     #[serde(default)]
     last_refreshed_at: Option<String>,
+    #[serde(default)]
+    storage_bytes: i64,
 }
 impl From<PodcastJson> for Podcast {
     fn from(p: PodcastJson) -> Self {
@@ -1777,6 +1845,7 @@ impl From<PodcastJson> for Podcast {
             podcastindex_id: p.podcastindex_id,
             auto_download: p.auto_download,
             last_refreshed_at: p.last_refreshed_at,
+            storage_bytes: p.storage_bytes,
         }
     }
 }

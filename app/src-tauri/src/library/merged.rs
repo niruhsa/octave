@@ -30,6 +30,9 @@ pub struct MergedArtist {
     /// Populated on single-entity reads only; empty for list/search/cache rows.
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
+    /// Sum of the on-disk bytes of every track by this artist (server-side).
+    #[serde(default)]
+    pub storage_bytes: i64,
     /// Has at least one track by this artist been downloaded locally? The
     /// service decides how to determine that — see `service.rs`. For
     /// offline-source results it's always `true`.
@@ -49,6 +52,9 @@ pub struct MergedAlbum {
     /// Every known title spelling. See `MergedArtist::aliases`.
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
+    /// Sum of the on-disk bytes of every track on this album (server-side).
+    #[serde(default)]
+    pub storage_bytes: i64,
     pub downloaded: bool,
 }
 
@@ -66,6 +72,13 @@ pub struct MergedTrack {
     /// Server's path (used for streaming). Always present.
     pub file_path: String,
     pub file_size: Option<i64>,
+    /// Audio-quality detail probed server-side. `None` when unknown.
+    #[serde(default)]
+    pub sample_rate_hz: Option<i64>,
+    #[serde(default)]
+    pub bit_depth: Option<i64>,
+    #[serde(default)]
+    pub channels: Option<i64>,
     /// Local file when downloaded; `None` for stream-only items.
     pub local_file_path: Option<String>,
     /// `true` when this track is a single release within its album.
@@ -84,6 +97,7 @@ impl MergedArtist {
             sort_name: a.sort_name,
             image_path: a.image_path,
             aliases: a.aliases,
+            storage_bytes: a.storage_bytes,
             downloaded,
         }
     }
@@ -96,6 +110,7 @@ impl MergedArtist {
             // The offline cache doesn't store artist images.
             image_path: None,
             aliases: Vec::new(),
+            storage_bytes: a.storage_bytes,
             downloaded: true,
         }
     }
@@ -111,6 +126,7 @@ impl MergedAlbum {
             cover_path: a.cover_path,
             local_cover_path,
             aliases: a.aliases,
+            storage_bytes: a.storage_bytes,
             downloaded,
         }
     }
@@ -124,6 +140,7 @@ impl MergedAlbum {
             cover_path: None,
             local_cover_path: art.map(|x| x.local_cover_path),
             aliases: Vec::new(),
+            storage_bytes: a.storage_bytes,
             downloaded: true,
         }
     }
@@ -144,6 +161,9 @@ impl MergedTrack {
             bitrate_kbps: t.bitrate_kbps,
             file_path: t.file_path,
             file_size: t.file_size,
+            sample_rate_hz: t.sample_rate_hz,
+            bit_depth: t.bit_depth,
+            channels: t.channels,
             local_file_path,
             is_single_release: t.is_single_release,
             downloaded,
@@ -166,6 +186,9 @@ impl MergedTrack {
             bitrate_kbps: t.bitrate_kbps,
             file_path: t.local_file_path.clone(),
             file_size: t.file_size,
+            sample_rate_hz: t.sample_rate_hz,
+            bit_depth: t.bit_depth,
+            channels: t.channels,
             local_file_path: Some(t.local_file_path),
             // The offline cache doesn't track the single-release flag.
             is_single_release: false,

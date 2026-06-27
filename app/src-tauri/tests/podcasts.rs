@@ -22,6 +22,7 @@ fn show(id: &str, subscribed: i64) -> Podcast {
         language: Some("en".into()),
         categories: "[\"Tech\"]".into(),
         subscribed,
+        storage_bytes: 0,
         updated_at: now(),
     }
 }

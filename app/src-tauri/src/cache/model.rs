@@ -10,6 +10,9 @@ pub struct Artist {
     pub id: String,
     pub name: String,
     pub sort_name: Option<String>,
+    /// Sum of the on-disk bytes of every track owned by this artist (server-side).
+    #[serde(default)]
+    pub storage_bytes: i64,
     pub updated_at: String,
 }
 
@@ -20,6 +23,9 @@ pub struct Album {
     pub artist_id: String,
     pub title: String,
     pub release_year: Option<i64>,
+    /// Sum of the on-disk bytes of every track on this album (server-side).
+    #[serde(default)]
+    pub storage_bytes: i64,
     pub updated_at: String,
 }
 
@@ -45,6 +51,13 @@ pub struct Track {
     pub codec: String,
     pub bitrate_kbps: Option<i64>,
     pub file_size: Option<i64>,
+    /// Audio-quality detail probed server-side. `None` when unknown.
+    #[serde(default)]
+    pub sample_rate_hz: Option<i64>,
+    #[serde(default)]
+    pub bit_depth: Option<i64>,
+    #[serde(default)]
+    pub channels: Option<i64>,
     pub local_file_path: String,
     pub metadata_json: String,
     pub downloaded_at: String,
@@ -106,6 +119,9 @@ pub struct Podcast {
     pub language: Option<String>,
     pub categories: String,
     pub subscribed: i64,
+    /// Sum of the on-disk bytes of every downloaded episode of this show (server-side).
+    #[serde(default)]
+    pub storage_bytes: i64,
     pub updated_at: String,
 }
 

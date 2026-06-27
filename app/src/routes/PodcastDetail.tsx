@@ -21,7 +21,7 @@ import { EqBars } from "../components/EqBars";
 import { usePlayerStore, episodeToQueueItem } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useAppStore } from "../store";
-import { formatDuration } from "../lib/format";
+import { byteSize, formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
 import { btnGhostSm, btnPrimary, card, errorBox, input, label } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
@@ -215,6 +215,11 @@ export default function PodcastDetail() {
             {show?.title ?? "Podcast"}
           </h1>
           {show?.author && <div className="text-sm text-oct-dim">{show.author}</div>}
+          {show && show.storage_bytes > 0 && (
+            <div className="mt-1 font-mono text-[11px] text-oct-subtle">
+              {byteSize(show.storage_bytes)} downloaded on server
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {/* Subscribe toggle — bearer users only (a SECRET_KEY session can't
                 own a subscription). */}

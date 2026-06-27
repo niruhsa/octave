@@ -719,6 +719,10 @@ impl UploadsService {
         debug!(upload_id = %upload_id, tracks = report.tracks_ingested, "upload finalized");
         let completed = self.load(upload_id).await?;
         self.publish_completed(&completed, &report).await;
+        // New tracks landed — refresh the (cheap, SQL-only) storage aggregates
+        // so per-entity sizes + the music/total totals stay current without a
+        // full rescan. Best-effort; never fails the upload.
+        self.ingest.scan.recompute_storage_aggregates().await;
         Ok(())
     }
 

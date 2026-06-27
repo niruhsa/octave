@@ -15,8 +15,9 @@ use server::services::{
     run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, FcmSender, ImageOptimizer,
     IngestService, ItunesDirectory, LibraryService, MetadataService, NotificationService,
     PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService, PushSender,
-    ScanService, StreamingService, UploadHub, UploadsService,
+    ScanService, StorageService, StreamingService, UploadHub, UploadsService,
 };
+use server::auth::Identity;
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
 use server::{grpc, rest};
@@ -82,7 +83,16 @@ async fn main() -> Result<()> {
     .with_library_root(config.library_path.clone())
     .with_primary_language(config.primary_language.clone())
     .with_notifications(notifications.clone());
-    let scan = ScanService::new(library.clone(), config.library_path.clone());
+    // Library-storage accounting (homepage widget + per-entity rollups). Reads
+    // the same artwork/library/podcast roots the rest of the system uses.
+    let storage = StorageService::new(
+        Arc::new(repos.clone()),
+        config.library_path.clone(),
+        config.artwork_path.clone(),
+        config.podcast.as_ref().map(|pc| pc.path.clone()),
+    );
+    let scan = ScanService::new(library.clone(), config.library_path.clone())
+        .with_storage(storage.clone());
     // Ensure the podcast storage dir exists so the streaming path can canonicalize
     // it (episode files live here). Best-effort — created on demand otherwise.
     if let Some(pc) = &config.podcast
@@ -226,6 +236,19 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Library-storage background job: a one-shot startup recompute (so the
+    // homepage widget has data immediately), then a periodic light refresh
+    // (index new files, prune missing, recompute) every STORAGE_REFRESH_SECS
+    // (0 disables the periodic pass). Gated on a configured library path —
+    // there's nothing to account for without one.
+    if config.library_path.is_some() {
+        storage.spawn_refresh_job(
+            scan.clone(),
+            Identity::SecretKey,
+            config.storage_refresh_interval_secs,
+        );
+    }
+
     // One shutdown signal fans out to both transports and the live streams.
     // A dedicated listener flips it on the first SIGINT/SIGTERM.
     let (shutdown_tx, shutdown_rx) = server::shutdown::channel();
@@ -239,6 +262,7 @@ async fn main() -> Result<()> {
         auth: auth.clone(),
         library: library.clone(),
         scan: scan.clone(),
+        storage: storage.clone(),
         streaming,
         playlists: playlists.clone(),
         notifications: notifications.clone(),
@@ -258,6 +282,7 @@ async fn main() -> Result<()> {
         auth.clone(),
         library,
         scan,
+        storage,
         metadata,
         artwork,
         playlists,

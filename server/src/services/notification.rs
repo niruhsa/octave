@@ -624,6 +624,7 @@ mod tests {
                 name: name.to_string(),
                 sort_name: None,
                 image_path: None,
+                storage_bytes: 0,
                 created_at: now(),
                 updated_at: now(),
             };
@@ -857,6 +858,7 @@ mod tests {
             title: title.to_string(),
             release_year: Some(2026),
             cover_path: None,
+            storage_bytes: 0,
             created_at: now(),
             updated_at: now(),
         }
@@ -877,6 +879,7 @@ mod tests {
             itunes_id: None,
             podcastindex_id: None,
             auto_download: 0,
+            storage_bytes: 0,
             last_refreshed_at: None,
             last_etag: None,
             last_modified: None,

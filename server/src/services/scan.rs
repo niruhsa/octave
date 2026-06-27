@@ -13,6 +13,7 @@ use crate::auth::Identity;
 use crate::db::models::{NewTrack, PermissionLevel};
 use crate::error::{AppError, Result};
 use crate::services::library::LibraryService;
+use crate::services::storage::StorageService;
 use crate::services::tag;
 use super::duration;
 
@@ -36,6 +37,10 @@ pub struct DurationRefreshReport {
 pub struct ScanService {
     pub library: LibraryService,
     pub default_root: Option<PathBuf>,
+    /// Storage accounting. When set, scans recompute the library-storage stats
+    /// at the end, and uploads/the watcher can trigger a cheap aggregate
+    /// refresh. Optional so the service stays constructible without it.
+    pub storage: Option<StorageService>,
 }
 
 impl ScanService {
@@ -43,7 +48,70 @@ impl ScanService {
         Self {
             library,
             default_root,
+            storage: None,
         }
+    }
+
+    /// Wire in the storage accounting service (recompute on scan / upload).
+    pub fn with_storage(mut self, storage: StorageService) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    /// Recompute every storage stat (per-entity rollups + disk walk). No-op
+    /// when storage accounting isn't wired. Logs and swallows errors — storage
+    /// stats are best-effort and must never fail a scan.
+    pub async fn recompute_storage_full(&self) {
+        if let Some(s) = &self.storage {
+            if let Err(e) = s.recompute_all().await {
+                warn!(error = %e, "scan: storage recompute failed");
+            }
+        }
+    }
+
+    /// Cheap aggregate recompute (SQL only) — the per-upload path.
+    pub async fn recompute_storage_aggregates(&self) {
+        if let Some(s) = &self.storage {
+            if let Err(e) = s.recompute_aggregates().await {
+                warn!(error = %e, "scan: storage aggregate recompute failed");
+            }
+        }
+    }
+
+    /// Remove track rows whose backing file no longer exists on disk — the
+    /// "drop missing rows" half of the 24h light refresh. Manager+ only.
+    ///
+    /// Safety guard: if a configured `library_root` is not currently a readable
+    /// directory (e.g. an unmounted volume), pruning is skipped entirely so a
+    /// transient mount failure can't wipe the catalog. Individual deleted
+    /// files/albums are still pruned when the root is healthy.
+    pub async fn prune_missing(&self, caller: &Identity) -> Result<u64> {
+        caller.require(PermissionLevel::Manager)?;
+        if let Some(root) = &self.library.library_root {
+            if !root.is_dir() {
+                warn!(root = %root.display(), "prune_missing: library root unavailable; skipping");
+                return Ok(0);
+            }
+        }
+        let rows = self.library.tracks.list_all_ids_paths().await?;
+        let mut removed: u64 = 0;
+        for row in &rows {
+            let path = Path::new(&row.file_path);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else if let Some(root) = &self.library.library_root {
+                root.join(path)
+            } else {
+                // Relative path with no root to resolve against — can't verify
+                // existence, so leave it alone.
+                continue;
+            };
+            if !resolved.exists() {
+                self.library.tracks.delete(row.id).await?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// Scan `root` (or the configured `LIBRARY_PATH` fallback) and ingest
@@ -89,6 +157,8 @@ impl ScanService {
                 }
             }
         }
+        // Refresh storage stats now that the catalog has changed.
+        self.recompute_storage_full().await;
         Ok(report)
     }
 
@@ -160,6 +230,9 @@ impl ScanService {
             bitrate_kbps: info.bitrate_kbps,
             file_path: file_path,
             file_size: info.file_size,
+            sample_rate_hz: info.sample_rate_hz,
+            bit_depth: info.bit_depth,
+            channels: info.channels,
             metadata_json: "{}".to_string(),
         };
         self.library.create_track(caller, new).await?;
@@ -248,6 +321,9 @@ impl ScanService {
             bitrate_kbps: info.bitrate_kbps,
             file_path,
             file_size: info.file_size,
+            sample_rate_hz: info.sample_rate_hz,
+            bit_depth: info.bit_depth,
+            channels: info.channels,
             metadata_json: "{}".to_string(),
         };
         let track = self.library.create_track(caller, new).await?;
@@ -429,6 +505,9 @@ impl ScanService {
                                 &info.codec,
                                 info.bitrate_kbps,
                                 info.file_size,
+                                info.sample_rate_hz,
+                                info.bit_depth,
+                                info.channels,
                             )
                             .await
                         {
@@ -457,6 +536,9 @@ impl ScanService {
             errors,
         };
         tracing::info!(total, corrected, skipped_missing, errors, "rescan_library: complete");
+        // A rescan can change file sizes (re-tagged/replaced files), so refresh
+        // the storage stats too.
+        self.recompute_storage_full().await;
         Ok(report)
     }
 }

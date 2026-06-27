@@ -46,6 +46,8 @@ pub fn router() -> Router<RestState> {
         .route("/tracks/:id/metadata", patch(edit_track_metadata))
         .route("/tracks/:id/move", post(move_track))
         .route("/tracks/:id/single-release", post(set_track_single_release))
+        // Storage breakdown (homepage widget)
+        .route("/library/storage", get(get_library_storage))
         // Scan
         .route("/library/scan", post(scan_library))
         .route("/library/rescan", post(rescan_library))
@@ -112,6 +114,8 @@ pub struct ArtistDto {
     pub image_path: Option<String>,
     /// Every known spelling. Populated on single-entity reads/mutations only.
     pub aliases: Vec<AliasDto>,
+    /// Sum of the on-disk bytes of every track owned by this artist.
+    pub storage_bytes: i64,
 }
 fn artist_dto(a: m::Artist) -> ArtistDto {
     ArtistDto {
@@ -120,6 +124,7 @@ fn artist_dto(a: m::Artist) -> ArtistDto {
         sort_name: a.sort_name,
         image_path: a.image_path,
         aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
     }
 }
 
@@ -131,6 +136,8 @@ pub struct AlbumDto {
     pub release_year: Option<i32>,
     pub cover_path: Option<String>,
     pub aliases: Vec<AliasDto>,
+    /// Sum of the on-disk bytes of every track on this album.
+    pub storage_bytes: i64,
 }
 fn album_dto(a: m::Album) -> AlbumDto {
     AlbumDto {
@@ -140,6 +147,7 @@ fn album_dto(a: m::Album) -> AlbumDto {
         release_year: a.release_year,
         cover_path: a.cover_path,
         aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
     }
 }
 
@@ -156,6 +164,9 @@ pub struct TrackDto {
     pub bitrate_kbps: Option<i32>,
     pub file_path: String,
     pub file_size: Option<i64>,
+    pub sample_rate_hz: Option<i32>,
+    pub bit_depth: Option<i32>,
+    pub channels: Option<i32>,
     pub metadata_json: String,
     pub is_single_release: bool,
 }
@@ -172,6 +183,9 @@ fn track_dto(t: m::Track) -> TrackDto {
         bitrate_kbps: t.bitrate_kbps,
         file_path: t.file_path,
         file_size: t.file_size,
+        sample_rate_hz: t.sample_rate_hz,
+        bit_depth: t.bit_depth,
+        channels: t.channels,
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
     }
@@ -443,6 +457,9 @@ async fn create_track(
         bitrate_kbps: b.bitrate_kbps,
         file_path: b.file_path,
         file_size: b.file_size,
+        sample_rate_hz: None,
+        bit_depth: None,
+        channels: None,
         metadata_json: b.metadata_json.unwrap_or_else(|| "{}".to_string()),
     };
     let t = state.library.create_track(&caller, new).await?;
@@ -1010,6 +1027,44 @@ pub struct ScanDto {
     pub tracks_added: u64,
     pub tracks_skipped: u64,
     pub errors: u64,
+}
+
+#[derive(Serialize)]
+pub struct LibraryStorageDto {
+    pub music_bytes: i64,
+    pub podcast_bytes: i64,
+    pub artwork_bytes: i64,
+    pub other_bytes: i64,
+    pub total_bytes: i64,
+    pub track_count: i64,
+    pub album_count: i64,
+    pub artist_count: i64,
+    pub podcast_count: i64,
+    pub episode_count: i64,
+    pub computed_at: String,
+}
+
+/// `GET /library/storage` — the homepage storage breakdown. Any authed user.
+async fn get_library_storage(
+    State(state): State<RestState>,
+    req: Request<Body>,
+) -> Result<Json<LibraryStorageDto>, ApiError> {
+    // Resolving the caller enforces a valid token (read open to any user).
+    let _caller = id(&req)?;
+    let s = state.storage.get_stats().await?;
+    Ok(Json(LibraryStorageDto {
+        music_bytes: s.music_bytes,
+        podcast_bytes: s.podcast_bytes,
+        artwork_bytes: s.artwork_bytes,
+        other_bytes: s.other_bytes,
+        total_bytes: s.total_bytes,
+        track_count: s.track_count,
+        album_count: s.album_count,
+        artist_count: s.artist_count,
+        podcast_count: s.podcast_count,
+        episode_count: s.episode_count,
+        computed_at: crate::time_fmt::rfc3339(s.computed_at),
+    }))
 }
 
 async fn scan_library(

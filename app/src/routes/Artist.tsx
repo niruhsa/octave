@@ -11,6 +11,7 @@ import {
   libraryMergeArtists,
   unfollowArtist,
 } from "../ipc";
+import { byteSize } from "../lib/format";
 import { Cover } from "../components/Cover";
 import { BlurUpImage } from "../components/BlurUpImage";
 import { ImageUploader } from "../components/ImageUploader";
@@ -135,6 +136,7 @@ export default function Artist() {
             <span className="font-mono">
               {items.length} album{items.length === 1 ? "" : "s"}
               {downloaded > 0 ? ` · ${downloaded} downloaded` : ""}
+              {artist && artist.storage_bytes > 0 ? ` · ${byteSize(artist.storage_bytes)}` : ""}
             </span>
             {q.data && <SourceBadge source={q.data.source} />}
           </p>

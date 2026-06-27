@@ -29,6 +29,9 @@ service LibraryService {
   rpc ListTracksByAlbum(ListTracksByAlbumRequest) returns (ListTracksResponse);
   rpc SearchTracks(SearchRequest) returns (ListTracksResponse);
 
+  // Library storage breakdown (homepage widget). Any authed user.
+  rpc GetLibraryStorage(GetLibraryStorageRequest) returns (LibraryStorage);
+
   // Library scan: index files on disk into the DB.
   rpc ScanLibrary(ScanRequest) returns (ScanResponse);
   // Rescan all existing tracks: re-read tags + re-measure duration, update DB.
@@ -85,6 +88,8 @@ message Artist {
   // Every known spelling. Populated on single-entity reads/mutations only
   // (empty on list/search rows).
   repeated AliasInfo aliases = 7;
+  // Sum of the on-disk bytes of every track owned by this artist.
+  int64 storage_bytes = 8;
 }
 
 message Album {
@@ -96,6 +101,8 @@ message Album {
   string created_at = 6;
   string updated_at = 7;
   repeated AliasInfo aliases = 8;  // see Artist.aliases
+  // Sum of the on-disk bytes of every track on this album.
+  int64 storage_bytes = 9;
 }
 
 message Track {
@@ -114,7 +121,29 @@ message Track {
   string created_at = 13;
   string updated_at = 14;
   bool is_single_release = 15; // a single release within its album
+  // Audio-quality detail probed at ingest/rescan. 0 = unknown.
+  int32 sample_rate_hz = 16;
+  int32 bit_depth = 17;
+  int32 channels = 18;
 }
+
+// The library-storage breakdown (homepage widget). `misc` shown in the UI is
+// `artwork_bytes + other_bytes`. Byte sums + counts; `computed_at` is RFC3339.
+message LibraryStorage {
+  int64 music_bytes = 1;
+  int64 podcast_bytes = 2;
+  int64 artwork_bytes = 3;
+  int64 other_bytes = 4;
+  int64 total_bytes = 5;
+  int64 track_count = 6;
+  int64 album_count = 7;
+  int64 artist_count = 8;
+  int64 podcast_count = 9;
+  int64 episode_count = 10;
+  string computed_at = 11;
+}
+
+message GetLibraryStorageRequest {}
 
 // ---------------------------------------------------------------------------
 // Common requests/responses

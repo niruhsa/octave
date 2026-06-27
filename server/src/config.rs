@@ -70,6 +70,11 @@ pub struct Config {
     /// How often the background optimize-all pass runs, in seconds.
     /// `IMAGE_OPTIMIZE_INTERVAL_SECS`, default 21600 (6h); 0 disables it.
     pub image_optimize_interval_secs: u64,
+    /// How often the background library-storage refresh job runs, in seconds.
+    /// Each run does a light refresh (index new files, prune missing, recompute
+    /// all storage stats). `STORAGE_REFRESH_SECS`, default 86400 (24h); 0
+    /// disables the periodic job (a one-shot startup recompute still runs).
+    pub storage_refresh_interval_secs: u64,
     /// Language whose spelling is shown as the canonical artist/album name when
     /// merged duplicates carry multiple spellings. `PRIMARY_LANGUAGE`
     /// (normalized to a label like `"English"`); defaults to `"English"`.
@@ -182,6 +187,7 @@ impl Config {
         let image_max_dim = env_u64("IMAGE_MAX_DIM", 800).clamp(64, 8192) as u32;
         let image_quality = env_u64("IMAGE_QUALITY", 82).clamp(1, 100) as u8;
         let image_optimize_interval_secs = env_u64("IMAGE_OPTIMIZE_INTERVAL_SECS", 21_600);
+        let storage_refresh_interval_secs = env_u64("STORAGE_REFRESH_SECS", 86_400);
 
         // Primary display language: normalize a set value to a canonical label
         // (so `en`/`english`/`English` all work); default English.
@@ -214,6 +220,7 @@ impl Config {
             image_max_dim,
             image_quality,
             image_optimize_interval_secs,
+            storage_refresh_interval_secs,
             primary_language,
             fcm,
             podcast,

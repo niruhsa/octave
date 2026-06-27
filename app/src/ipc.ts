@@ -177,6 +177,8 @@ export type MergedArtist = {
   /** Every known spelling (e.g. Korean + English). Populated on single-entity
    * reads (the Artist route); empty for list/search/cache rows. */
   aliases: AliasInfo[];
+  /** Sum of the on-disk bytes of every track by this artist (server-side). */
+  storage_bytes: number;
   downloaded: boolean;
 };
 
@@ -189,6 +191,8 @@ export type MergedAlbum = {
   local_cover_path: string | null;
   /** Every known title spelling. See `MergedArtist.aliases`. */
   aliases: AliasInfo[];
+  /** Sum of the on-disk bytes of every track on this album (server-side). */
+  storage_bytes: number;
   downloaded: boolean;
 };
 
@@ -204,10 +208,30 @@ export type MergedTrack = {
   bitrate_kbps: number | null;
   file_path: string;
   file_size: number | null;
+  /** Audio-quality detail probed server-side; `null` when unknown. */
+  sample_rate_hz: number | null;
+  bit_depth: number | null;
+  channels: number | null;
   local_file_path: string | null;
   /** `true` when this track is a single release within its album. */
   is_single_release: boolean;
   downloaded: boolean;
+};
+
+/** The server's library-storage breakdown (homepage widget). `misc` shown in
+ * the UI is `artwork_bytes + other_bytes`. Online-only read. */
+export type LibraryStorage = {
+  music_bytes: number;
+  podcast_bytes: number;
+  artwork_bytes: number;
+  other_bytes: number;
+  total_bytes: number;
+  track_count: number;
+  album_count: number;
+  artist_count: number;
+  podcast_count: number;
+  episode_count: number;
+  computed_at: string;
 };
 
 export type Page = { limit?: number; offset?: number };
@@ -226,6 +250,11 @@ export const librarySearchAlbums = (query: string, page: Page = {}) =>
 
 export const libraryListTracksByAlbum = (albumId: string) =>
   invoke<LibraryView<MergedTrack>>("library_list_tracks_by_album", { albumId });
+
+/** The server's library-storage breakdown for the homepage widget. Online-only
+ * (a live server view) — rejects when offline so the UI can show "—". */
+export const getLibraryStorage = () =>
+  invoke<LibraryStorage>("library_get_storage");
 
 /** Fetch a single artist/album with its alias set (server-first; cache
  * fallback returns empty `aliases`). Used by the Artist/Album routes. */
@@ -468,6 +497,8 @@ export type MergedPodcast = {
   last_refreshed_at: string | null;
   subscribed: boolean;
   downloaded_count: number;
+  /** Sum of the on-disk bytes of every downloaded episode of this show (server-side). */
+  storage_bytes: number;
 };
 
 /** An episode + its offline state. `downloaded` = the client has the file;

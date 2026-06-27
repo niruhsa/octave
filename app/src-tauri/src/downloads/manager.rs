@@ -314,6 +314,7 @@ impl DownloadManager {
                 id: artist.id.clone(),
                 name: artist.name.clone(),
                 sort_name: artist.sort_name.clone(),
+                storage_bytes: artist.storage_bytes,
                 updated_at: now.clone(),
             },
         )
@@ -325,6 +326,7 @@ impl DownloadManager {
                 artist_id: album.artist_id.clone(),
                 title: album.title.clone(),
                 release_year: album.release_year,
+                storage_bytes: album.storage_bytes,
                 updated_at: now.clone(),
             },
         )
@@ -343,6 +345,9 @@ impl DownloadManager {
                 codec: track.codec.clone(),
                 bitrate_kbps: track.bitrate_kbps,
                 file_size: Some(bytes as i64),
+                sample_rate_hz: track.sample_rate_hz,
+                bit_depth: track.bit_depth,
+                channels: track.channels,
                 local_file_path: local_path.clone(),
                 metadata_json: track.metadata_json.clone(),
                 downloaded_at: now.clone(),
@@ -673,6 +678,7 @@ impl DownloadManager {
                 categories: serde_json::to_string(&podcast.categories)
                     .unwrap_or_else(|_| "[]".into()),
                 subscribed,
+                storage_bytes: podcast.storage_bytes,
                 updated_at: now.clone(),
             },
         )

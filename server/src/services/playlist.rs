@@ -637,6 +637,9 @@ mod tests {
                 bitrate_kbps: None,
                 file_path: format!("/fake/{id}.flac"),
                 file_size: None,
+                sample_rate_hz: None,
+                bit_depth: None,
+                channels: None,
                 metadata_json: "{}".into(),
                 is_single_release: false,
                 created_at: now(),
@@ -692,6 +695,9 @@ mod tests {
             _: &str,
             _: Option<i32>,
             _: Option<i64>,
+            _: Option<i32>,
+            _: Option<i32>,
+            _: Option<i32>,
         ) -> Result<Option<Track>> {
             Ok(None)
         }

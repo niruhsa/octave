@@ -13,7 +13,7 @@ use crate::auth::AuthManager;
 use crate::error::{AppError, AppResult};
 use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::library::service::LibraryService;
-use crate::transport::{MetadataEdit, RescanReport};
+use crate::transport::{LibraryStorage, MetadataEdit, RescanReport};
 use crate::AppStateHandle;
 
 /// Server default page sizes mirror the server's cap (200) / default (50).
@@ -62,6 +62,20 @@ pub async fn library_search_artists(
 ) -> AppResult<LibraryView<MergedArtist>> {
     let svc = service(&state).await?;
     svc.search_artists(&query, normalise_limit(limit), normalise_offset(offset)).await
+}
+
+// ---------------------------------------------------------------------------
+// storage
+// ---------------------------------------------------------------------------
+
+/// The server's library-storage breakdown for the homepage widget. Online-only
+/// (a live server view); errors when offline so the UI can show "—".
+#[tauri::command]
+pub async fn library_get_storage(
+    state: State<'_, AppStateHandle>,
+) -> AppResult<LibraryStorage> {
+    let svc = service(&state).await?;
+    svc.get_library_storage().await
 }
 
 // ---------------------------------------------------------------------------

@@ -46,6 +46,13 @@ pub struct TagInfo {
     pub bitrate_kbps: Option<i32>,
     pub codec: String,
     pub file_size: Option<i64>,
+    /// Audio-quality detail from the probe — used to surface a media-info
+    /// panel client-side (e.g. "24/96", "Lossless"). `None` when the format /
+    /// probe doesn't report the value (bit depth in particular is often absent
+    /// for lossy formats).
+    pub sample_rate_hz: Option<i32>,
+    pub bit_depth: Option<i32>,
+    pub channels: Option<i32>,
 }
 
 /// Read tags from the audio file at `path`.  Returns `Err` only when `lofty`
@@ -89,19 +96,22 @@ pub fn read_tags(path: &Path) -> crate::error::Result<TagInfo> {
     };
 
     let file_size = std::fs::metadata(path).ok().map(|m| m.len() as i64);
-    let (duration_ms, bitrate_kbps, codec) = match &probe {
+    let (duration_ms, bitrate_kbps, codec, sample_rate_hz, bit_depth, channels) = match &probe {
         Some(p) => {
             let props = p.properties();
             (
                 props.duration().as_millis() as i64,
                 props.audio_bitrate().map(|b| b as i32),
                 format!("{:?}", p.file_type()),
+                props.sample_rate().map(|s| s as i32),
+                props.bit_depth().map(|b| b as i32),
+                props.channels().map(|c| c as i32),
             )
         }
         // Even a properties-only read failed — keep going with empty
         // defaults so the file can still be indexed (duration is repaired
         // separately by the Symphonia / MP3-walker cross-validation step).
-        None => (0, None, "Unknown".to_string()),
+        None => (0, None, "Unknown".to_string(), None, None, None),
     };
 
     let tag = probe.as_ref().and_then(|p| p.primary_tag().or_else(|| p.first_tag()));
@@ -149,6 +159,9 @@ pub fn read_tags(path: &Path) -> crate::error::Result<TagInfo> {
         bitrate_kbps,
         codec,
         file_size,
+        sample_rate_hz,
+        bit_depth,
+        channels,
     })
 }
 

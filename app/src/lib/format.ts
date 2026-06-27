@@ -12,3 +12,25 @@ export function formatDuration(ms: number): string {
   if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${ss}`;
   return `${m}:${ss}`;
 }
+
+/**
+ * Human-readable byte size using binary units (KiB-scale, labelled KB/MB/GB/TB
+ * the way storage UIs conventionally do). `0` and nullish render as "0 B".
+ * One decimal place from MB up so totals read e.g. "12.4 GB"; bytes/KB stay
+ * whole.
+ */
+export function byteSize(bytes: number | null | undefined): string {
+  const n = bytes ?? 0;
+  if (n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  // Whole numbers for B/KB; one decimal from MB upward (but trim a trailing .0).
+  const decimals = i >= 2 ? 1 : 0;
+  const s = v.toFixed(decimals).replace(/\.0$/, "");
+  return `${s} ${units[i]}`;
+}

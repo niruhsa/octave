@@ -176,6 +176,9 @@ mod tests {
             bitrate_kbps: None,
             codec: "flac".into(),
             file_size: None,
+            sample_rate_hz: None,
+            bit_depth: None,
+            channels: None,
         }
     }
 

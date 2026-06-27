@@ -39,8 +39,8 @@ use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::time_fmt::rfc3339;
 use crate::services::{
     ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
-    NotificationService, PlaylistService, PodcastService, ScanService, StreamingService, UploadHub,
-    UploadsService,
+    NotificationService, PlaylistService, PodcastService, ScanService, StorageService,
+    StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -49,6 +49,7 @@ pub struct RestState {
     pub auth: AuthService,
     pub library: LibraryService,
     pub scan: ScanService,
+    pub storage: StorageService,
     pub streaming: StreamingService,
     pub playlists: PlaylistService,
     pub notifications: NotificationService,

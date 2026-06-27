@@ -18,6 +18,7 @@ async fn seed(pool: &sqlx::SqlitePool) {
             id: "a1".into(),
             name: "Artist".into(),
             sort_name: None,
+            storage_bytes: 0,
             updated_at: now(),
         },
     )
@@ -30,6 +31,7 @@ async fn seed(pool: &sqlx::SqlitePool) {
             artist_id: "a1".into(),
             title: "Album".into(),
             release_year: Some(2024),
+            storage_bytes: 0,
             updated_at: now(),
         },
     )
@@ -59,6 +61,9 @@ async fn seed(pool: &sqlx::SqlitePool) {
                 codec: "flac".into(),
                 bitrate_kbps: None,
                 file_size: Some(sz),
+                sample_rate_hz: Some(44_100),
+                bit_depth: Some(16),
+                channels: Some(2),
                 local_file_path: format!("/tmp/{id}.flac"),
                 metadata_json: "{}".into(),
                 downloaded_at: now(),

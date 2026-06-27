@@ -55,6 +55,9 @@ pub struct Artist {
     /// single-entity reads/mutations; empty on list/search rows.
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
+    /// Sum of the on-disk bytes of every track owned by this artist.
+    #[serde(default)]
+    pub storage_bytes: i64,
 }
 
 /// Server's view of an album. `cover_path` is server-relative — not yet
@@ -68,6 +71,9 @@ pub struct Album {
     pub cover_path: Option<String>,
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
+    /// Sum of the on-disk bytes of every track on this album.
+    #[serde(default)]
+    pub storage_bytes: i64,
 }
 
 /// Server's view of a track. `file_path` is the server-side path; the
@@ -85,10 +91,45 @@ pub struct Track {
     pub bitrate_kbps: Option<i64>,
     pub file_path: String,
     pub file_size: Option<i64>,
+    /// Audio-quality detail probed server-side. `None` when unknown.
+    #[serde(default)]
+    pub sample_rate_hz: Option<i64>,
+    #[serde(default)]
+    pub bit_depth: Option<i64>,
+    #[serde(default)]
+    pub channels: Option<i64>,
     pub metadata_json: String,
     /// `true` when this track is a single release within its album.
     #[serde(default)]
     pub is_single_release: bool,
+}
+
+/// The server's library-storage breakdown (homepage widget). `misc` shown in
+/// the UI is `artwork_bytes + other_bytes`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryStorage {
+    #[serde(default)]
+    pub music_bytes: i64,
+    #[serde(default)]
+    pub podcast_bytes: i64,
+    #[serde(default)]
+    pub artwork_bytes: i64,
+    #[serde(default)]
+    pub other_bytes: i64,
+    #[serde(default)]
+    pub total_bytes: i64,
+    #[serde(default)]
+    pub track_count: i64,
+    #[serde(default)]
+    pub album_count: i64,
+    #[serde(default)]
+    pub artist_count: i64,
+    #[serde(default)]
+    pub podcast_count: i64,
+    #[serde(default)]
+    pub episode_count: i64,
+    #[serde(default)]
+    pub computed_at: String,
 }
 
 /// Server's view of a playlist (no timestamps in the wire DTO).
@@ -313,6 +354,9 @@ pub struct Podcast {
     pub podcastindex_id: Option<i64>,
     pub auto_download: i32,
     pub last_refreshed_at: Option<String>,
+    /// Sum of the on-disk bytes of every downloaded episode of this show.
+    #[serde(default)]
+    pub storage_bytes: i64,
 }
 
 /// A directory search result (enough to subscribe to a feed + display it).
@@ -539,6 +583,7 @@ mod tests {
                     is_primary: false,
                 },
             ],
+            storage_bytes: 0,
         };
         let json = serde_json::to_string(&artist).unwrap();
         let back: Artist = serde_json::from_str(&json).unwrap();

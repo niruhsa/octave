@@ -187,6 +187,7 @@ async fn artist_and_track_rows_persist_for_reconcile() {
             id: "ar1".into(),
             name: "X".into(),
             sort_name: None,
+            storage_bytes: 0,
             updated_at: now(),
         },
     )
@@ -200,6 +201,7 @@ async fn artist_and_track_rows_persist_for_reconcile() {
             artist_id: "ar1".into(),
             title: "A".into(),
             release_year: None,
+            storage_bytes: 0,
             updated_at: now(),
         },
     )
@@ -218,6 +220,9 @@ async fn artist_and_track_rows_persist_for_reconcile() {
             codec: "flac".into(),
             bitrate_kbps: None,
             file_size: None,
+            sample_rate_hz: None,
+            bit_depth: None,
+            channels: None,
             local_file_path: "/tmp/does-not-exist.flac".into(),
             metadata_json: "{}".into(),
             downloaded_at: now(),

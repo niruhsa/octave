@@ -23,7 +23,7 @@ import { ActionSheet, SheetItem } from "../components/ActionSheet";
 import { Aliases } from "../components/Aliases";
 import { EntityPicker } from "../components/EntityPicker";
 import { EqBars } from "../components/EqBars";
-import { formatDuration } from "../lib/format";
+import { byteSize, formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
 import { formatError } from "../lib/error";
 import { usePlayerStore } from "../player/store";
@@ -37,6 +37,7 @@ import {
   DiscIcon,
   DownloadIcon,
   EditIcon,
+  InfoIcon,
   PlayIcon,
   PlaylistIcon,
   ShuffleIcon,
@@ -44,6 +45,7 @@ import {
 } from "../components/icons";
 import { EditMetaButton, MetadataEditor } from "../components/MetadataEditor";
 import { ImageUploader } from "../components/ImageUploader";
+import { TrackInfoSheet } from "../components/TrackInfoSheet";
 import type { MergedTrack } from "../ipc";
 
 function totalLabel(ms: number): string {
@@ -107,6 +109,7 @@ export default function Album() {
   // Mobile long-press action sheet — a touch device can't reach the hover-only
   // row actions, so a press-and-hold opens them in a bottom sheet instead.
   const [sheetTrack, setSheetTrack] = useState<MergedTrack | null>(null);
+  const [infoTrack, setInfoTrack] = useState<MergedTrack | null>(null);
   // "Add to playlist" picker — long-press → "Add to playlist…" opens it for the
   // chosen track (so you never have to type the title into the playlist search).
   const [addToPlaylist, setAddToPlaylist] = useState<MergedTrack | null>(null);
@@ -250,6 +253,7 @@ export default function Album() {
             <span className="font-mono">
               {items.length} song{items.length === 1 ? "" : "s"}
               {totalMs > 0 ? ` · ${totalLabel(totalMs)}` : ""}
+              {album && album.storage_bytes > 0 ? ` · ${byteSize(album.storage_bytes)}` : ""}
             </span>
             {q.data && <SourceBadge source={q.data.source} />}
           </p>
@@ -395,6 +399,9 @@ export default function Album() {
                             <DownloadIcon size={14} />
                           </button>
                         )}
+                        <button onClick={() => setInfoTrack(t)} title="Media information" className="text-oct-dim hover:text-oct-text">
+                          <InfoIcon size={14} />
+                        </button>
                         {isManager && (
                           <>
                             <EditMetaButton online={online} onClick={() => setEditTracks([t])} />
@@ -511,9 +518,12 @@ export default function Album() {
             toggleSingle: () => { setSheetTrack(null); void toggleSingle(sheetTrack); },
             del: () => { setSheetTrack(null); void delTrack(sheetTrack); },
             addToPlaylist: () => { setSheetTrack(null); setAddToPlaylist(sheetTrack); },
+            info: () => { const t = sheetTrack; setSheetTrack(null); setInfoTrack(t); },
           }}
         />
       )}
+
+      {infoTrack && <TrackInfoSheet track={infoTrack} onClose={() => setInfoTrack(null)} />}
 
       {addToPlaylist && (
         <AddToPlaylistSheet
@@ -535,6 +545,7 @@ type SheetActions = {
   move: () => void;
   del: () => void;
   addToPlaylist: () => void;
+  info: () => void;
 };
 
 /** Mobile press-and-hold action sheet for a single track. */
@@ -564,6 +575,7 @@ function TrackActionSheet({
         <SheetItem icon={<DownloadIcon size={16} />} label="Download" onClick={actions.download} disabled={!online} />
       )}
       <SheetItem icon={<PlaylistIcon size={16} />} label="Add to playlist…" onClick={actions.addToPlaylist} />
+      <SheetItem icon={<InfoIcon size={16} />} label="Information" onClick={actions.info} />
       {isManager && (
         <>
           <div className="my-1.5 h-px bg-oct-border" />

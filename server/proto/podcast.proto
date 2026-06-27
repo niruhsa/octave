@@ -49,6 +49,8 @@ message Podcast {
   string last_refreshed_at = 13; // empty when never refreshed
   string created_at = 14;
   string updated_at = 15;
+  // Sum of the on-disk bytes of every downloaded episode of this show.
+  int64 storage_bytes = 16;
 }
 
 // A directory search result (enough to subscribe + display). Not an episode.

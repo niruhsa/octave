@@ -21,7 +21,8 @@ use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
     AddAlbumAliasRequest, AddArtistAliasRequest, DeleteAlbumRequest, DeleteArtistRequest,
     DeleteTrackRequest, EditTrackMetadataRequest, GetAlbumRequest, GetArtistRequest,
-    GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest, ListTracksByAlbumRequest,
+    GetLibraryStorageRequest, GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest,
+    ListTracksByAlbumRequest,
     MergeRequest, MoveTrackRequest, Pagination, RemoveAliasRequest, SearchRequest,
     SetPrimaryAliasRequest, SetSingleReleaseRequest,
 };
@@ -39,8 +40,9 @@ use super::proto::notification as npb;
 use super::proto::podcast::podcast_service_client::PodcastServiceClient;
 use super::proto::podcast as ppb;
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, MetadataEdit, Notification,
-    NotificationPage, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, LibraryStorage, MetadataEdit,
+    Notification, NotificationPage, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks,
+    Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig,
     SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest,
     UploadListFilter, UploadResult, UploadSummary, UploadView,
@@ -448,6 +450,15 @@ impl GrpcClient {
             Ok(r) => Ok(Some(track_from_proto(r.into_inner()))),
             Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
             Err(s) => Err(AppError::Transport(format!("get_track: {s}"))),
+        }
+    }
+
+    pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {
+        let mut req = Request::new(GetLibraryStorageRequest {});
+        attach_credential(&mut req, cred)?;
+        match self.library().get_library_storage(req).await {
+            Ok(r) => Ok(library_storage_from_proto(r.into_inner())),
+            Err(s) => Err(AppError::Transport(format!("get_library_storage: {s}"))),
         }
     }
 
@@ -1692,6 +1703,7 @@ fn artist_from_proto(a: super::proto::library::Artist) -> Artist {
         sort_name: opt_str(a.sort_name),
         image_path: opt_str(a.image_path),
         aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
+        storage_bytes: a.storage_bytes,
     }
 }
 
@@ -1703,6 +1715,7 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         release_year: opt_i32(a.release_year),
         cover_path: opt_str(a.cover_path),
         aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
+        storage_bytes: a.storage_bytes,
     }
 }
 
@@ -1713,6 +1726,8 @@ fn followed_artist_from_proto(a: npb::FollowedArtist) -> Artist {
         sort_name: opt_str(a.sort_name),
         image_path: opt_str(a.image_path),
         aliases: Vec::new(),
+        // The followed-artist notification payload carries no storage rollup.
+        storage_bytes: 0,
     }
 }
 
@@ -1746,6 +1761,7 @@ fn podcast_from_proto(p: ppb::Podcast) -> Podcast {
         podcastindex_id: opt_i64(p.podcastindex_id),
         auto_download: p.auto_download,
         last_refreshed_at: opt_str(p.last_refreshed_at),
+        storage_bytes: p.storage_bytes,
     }
 }
 
@@ -1799,6 +1815,22 @@ fn playlist_track_from_proto(t: super::proto::playlist::PlaylistTrack) -> Playli
     }
 }
 
+fn library_storage_from_proto(s: super::proto::library::LibraryStorage) -> LibraryStorage {
+    LibraryStorage {
+        music_bytes: s.music_bytes,
+        podcast_bytes: s.podcast_bytes,
+        artwork_bytes: s.artwork_bytes,
+        other_bytes: s.other_bytes,
+        total_bytes: s.total_bytes,
+        track_count: s.track_count,
+        album_count: s.album_count,
+        artist_count: s.artist_count,
+        podcast_count: s.podcast_count,
+        episode_count: s.episode_count,
+        computed_at: s.computed_at,
+    }
+}
+
 fn track_from_proto(t: super::proto::library::Track) -> Track {
     Track {
         id: t.id,
@@ -1812,6 +1844,9 @@ fn track_from_proto(t: super::proto::library::Track) -> Track {
         bitrate_kbps: opt_i32(t.bitrate_kbps),
         file_path: t.file_path,
         file_size: opt_i64(t.file_size),
+        sample_rate_hz: opt_i32(t.sample_rate_hz),
+        bit_depth: opt_i32(t.bit_depth),
+        channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
     }

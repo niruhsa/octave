@@ -976,6 +976,7 @@ mod tests {
                 itunes_id: None,
                 podcastindex_id: None,
                 auto_download: 0,
+                storage_bytes: 0,
                 last_refreshed_at: None,
                 last_etag: None,
                 last_modified: None,

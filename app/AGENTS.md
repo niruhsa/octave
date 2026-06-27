@@ -33,6 +33,7 @@ Cross-platform music player that streams from the remote server when online and 
 - **Uploads:** send new music to the server — individually or as archives (archive file, ISO, CD, other popular formats).
 - **Metadata editing:** optional, manual, opt-in UI for managers/admins.
 - **Follow + notifications:** follow artists; surface new-release notifications.
+- **Storage insight:** the Home dashboard shows a server library-storage widget (total + music/podcasts/misc breakdown, via `library_get_storage` → `getLibraryStorage`; online-only). Artist/Album/Podcast headers show their own `storage_bytes`. Each track row has an **Information** action ([`TrackInfoSheet`](./src/components/TrackInfoSheet.tsx)) showing file type, size, audio quality (e.g. `Lossless · 24/96`, `MP3 320k` via [`qualityLabel`](./src/lib/visual.ts)), sample rate, bit depth, channels, duration, and path — works offline for cached tracks (the new fields mirror into the SQLite cache, migration `0005`).
 - **Admin/manager UI:** expose settings & user management only when the logged-in account has permission.
 - **Audit/rollback views:** managers/admins can view change logs and trigger rollbacks (server-enforced).
 

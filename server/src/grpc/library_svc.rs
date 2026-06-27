@@ -11,13 +11,16 @@ use crate::error::AppError;
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::library as pb;
-use crate::services::{ArtworkService, LibraryService, MetadataEdit, MetadataService, ScanService};
+use crate::services::{
+    ArtworkService, LibraryService, MetadataEdit, MetadataService, ScanService, StorageService,
+};
 use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
 pub struct LibraryServer {
     pub library: LibraryService,
     pub scan: ScanService,
+    pub storage: StorageService,
     pub metadata: MetadataService,
     pub artwork: Option<ArtworkService>,
     pub interceptor: AuthInterceptor,
@@ -96,6 +99,7 @@ fn artist_to_pb(a: m::Artist) -> pb::Artist {
         updated_at: rfc3339(a.updated_at),
         image_path: a.image_path.unwrap_or_default(),
         aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
     }
 }
 fn album_to_pb(a: m::Album) -> pb::Album {
@@ -108,6 +112,7 @@ fn album_to_pb(a: m::Album) -> pb::Album {
         created_at: rfc3339(a.created_at),
         updated_at: rfc3339(a.updated_at),
         aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
     }
 }
 fn track_to_pb(t: m::Track) -> pb::Track {
@@ -127,6 +132,24 @@ fn track_to_pb(t: m::Track) -> pb::Track {
         created_at: rfc3339(t.created_at),
         updated_at: rfc3339(t.updated_at),
         is_single_release: t.is_single_release,
+        sample_rate_hz: t.sample_rate_hz.unwrap_or(0),
+        bit_depth: t.bit_depth.unwrap_or(0),
+        channels: t.channels.unwrap_or(0),
+    }
+}
+fn library_storage_to_pb(s: m::LibraryStorage) -> pb::LibraryStorage {
+    pb::LibraryStorage {
+        music_bytes: s.music_bytes,
+        podcast_bytes: s.podcast_bytes,
+        artwork_bytes: s.artwork_bytes,
+        other_bytes: s.other_bytes,
+        total_bytes: s.total_bytes,
+        track_count: s.track_count,
+        album_count: s.album_count,
+        artist_count: s.artist_count,
+        podcast_count: s.podcast_count,
+        episode_count: s.episode_count,
+        computed_at: rfc3339(s.computed_at),
     }
 }
 fn artist_alias_to_pb(a: m::ArtistAlias) -> pb::AliasInfo {
@@ -359,6 +382,11 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             bitrate_kbps: nz_i32(b.bitrate_kbps),
             file_path: b.file_path,
             file_size: nz_i64(b.file_size),
+            // Manual catalog create carries no probe — quality detail is filled
+            // by a subsequent rescan/probe of the on-disk file.
+            sample_rate_hz: None,
+            bit_depth: None,
+            channels: None,
             metadata_json,
         };
         let t = self.library.create_track(&caller, new).await.map_err(map_err)?;
@@ -668,6 +696,17 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     }
 
     // ---- Scan ----
+    async fn get_library_storage(
+        &self,
+        req: Request<pb::GetLibraryStorageRequest>,
+    ) -> Result<Response<pb::LibraryStorage>, Status> {
+        // Any authed identity may read the breakdown; resolving the caller
+        // enforces a valid token.
+        let _caller = self.caller(&req).await?;
+        let s = self.storage.get_stats().await.map_err(map_err)?;
+        Ok(Response::new(library_storage_to_pb(s)))
+    }
+
     async fn scan_library(
         &self,
         req: Request<pb::ScanRequest>,
