@@ -24,6 +24,11 @@ pub struct ParsedFeed {
     pub language: Option<String>,
     pub categories: Vec<String>,
     pub episodes: Vec<ParsedEpisode>,
+    /// Next (older) page of a paged feed (RFC 5005 `<atom:link rel="next">`).
+    /// `None` for an ordinary single-document feed — the common case. The
+    /// incremental refresh follows this newest→oldest until it reaches episodes
+    /// it already has cached.
+    pub next_page_url: Option<String>,
 }
 
 /// One `<item>` with an audio enclosure.
@@ -60,7 +65,20 @@ pub fn parse_feed(bytes: &[u8]) -> Result<ParsedFeed> {
         .logo
         .or(feed.icon)
         .map(|img| img.uri);
-    let link = feed.links.into_iter().next().map(|l| l.href);
+    // RFC 5005 paged feeds carry a `rel="next"` link to the next (older) page.
+    // Pull it out before we consume `links` for the homepage so the two never
+    // collide (and so the next-page URL isn't mistaken for the show homepage).
+    let next_page_url = feed
+        .links
+        .iter()
+        .find(|l| l.rel.as_deref() == Some("next"))
+        .map(|l| l.href.clone());
+    // Homepage = the first link that isn't a paging/self relation.
+    let link = feed
+        .links
+        .into_iter()
+        .find(|l| !matches!(l.rel.as_deref(), Some("next" | "prev" | "previous" | "self")))
+        .map(|l| l.href);
     let language = feed.language;
     let categories: Vec<String> = feed
         .categories
@@ -85,6 +103,7 @@ pub fn parse_feed(bytes: &[u8]) -> Result<ParsedFeed> {
         language,
         categories,
         episodes,
+        next_page_url,
     })
 }
 
@@ -209,5 +228,39 @@ mod tests {
     fn rejects_non_feed_bytes() {
         let err = parse_feed(b"not a feed at all").unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
+    }
+
+    /// An ordinary (non-paged) feed has no next-page link.
+    #[test]
+    fn single_document_feed_has_no_next_page() {
+        let feed = parse_feed(SAMPLE).expect("parse");
+        assert!(feed.next_page_url.is_none());
+    }
+
+    /// RFC 5005 paged feed: `rel="next"` is surfaced and isn't mistaken for the
+    /// show homepage (`rel="alternate"`).
+    #[test]
+    fn paged_feed_exposes_next_without_clobbering_homepage() {
+        const PAGED: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Paged Show</title>
+    <atom:link rel="alternate" href="https://show.example.com/" />
+    <atom:link rel="self" href="https://feeds.example.com/page/1" />
+    <atom:link rel="next" href="https://feeds.example.com/page/2" />
+    <item>
+      <guid>p1-e1</guid>
+      <title>Page 1 Episode 1</title>
+      <enclosure url="https://cdn.example.com/p1e1.mp3" type="audio/mpeg" length="1" />
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_feed(PAGED).expect("parse");
+        assert_eq!(
+            feed.next_page_url.as_deref(),
+            Some("https://feeds.example.com/page/2")
+        );
+        assert_eq!(feed.link.as_deref(), Some("https://show.example.com/"));
+        assert_eq!(feed.episodes.len(), 1);
     }
 }

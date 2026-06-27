@@ -127,6 +127,7 @@ fn proxy_client() -> crate::error::AppResult<&'static reqwest::Client> {
     }
     let c = reqwest::Client::builder()
         .use_rustls_tls()
+        .user_agent(crate::USER_AGENT)
         .build()
         .map_err(|e| crate::error::AppError::Transport(format!("cover proxy client: {e}")))?;
     Ok(CLIENT.get_or_init(|| c))

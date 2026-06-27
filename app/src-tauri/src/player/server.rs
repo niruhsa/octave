@@ -511,6 +511,7 @@ pub(crate) fn proxy_client() -> AppResult<&'static reqwest::Client> {
     }
     let c = reqwest::Client::builder()
         .use_rustls_tls()
+        .user_agent(crate::USER_AGENT)
         .connect_timeout(Duration::from_secs(15))
         .pool_idle_timeout(Duration::from_secs(20))
         .tcp_keepalive(Duration::from_secs(20))

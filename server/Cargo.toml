@@ -16,6 +16,12 @@ tonic-health = "0.12"
 
 # REST (fallback transport) — `ws` powers the live uploads broadcast.
 axum = { version = "0.7", features = ["multipart", "ws"] }
+# Optional REST TLS (REST_TLS): axum-server terminates rustls, reusing the gRPC
+# cert/key. `tls-rustls-no-provider` keeps the tree on the `ring` crypto
+# provider already pulled in by tonic/sqlx — pulling the default `tls-rustls`
+# would add `aws-lc-rs`, giving rustls two providers and breaking its
+# install-from-crate-features default (which also serves gRPC TLS).
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 tower = "0.5"
 
 # Serde

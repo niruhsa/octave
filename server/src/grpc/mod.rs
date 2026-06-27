@@ -18,7 +18,7 @@ use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tracing::info;
 
 use crate::auth::service::AuthService;
-use crate::config::GrpcTlsConfig;
+use crate::config::TlsConfig;
 use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
@@ -38,7 +38,7 @@ pub use upload_svc::UploadServer;
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     addr: SocketAddr,
-    tls: Option<GrpcTlsConfig>,
+    tls: Option<TlsConfig>,
     auth: AuthService,
     library: LibraryService,
     scan: ScanService,
@@ -148,7 +148,7 @@ pub async fn serve(
 /// HTTP/2 only and, on the TLS handshake, advertises `h2` via ALPN
 /// automatically — so the endpoint satisfies the gRPC-over-TLS contract
 /// (TLS + HTTP/2, `h2` ALPN, `application/grpc` content-type).
-fn server_tls_config(tls: &GrpcTlsConfig) -> Result<ServerTlsConfig> {
+fn server_tls_config(tls: &TlsConfig) -> Result<ServerTlsConfig> {
     let cert = std::fs::read(&tls.cert_path).map_err(|e| {
         AppError::Config(format!("read GRPC_TLS_CERT {}: {e}", tls.cert_path.display()))
     })?;
@@ -184,7 +184,7 @@ mod tls_tests {
     ///   3. **`application/grpc`** — gRPC framing wouldn't decode otherwise.
     #[tokio::test]
     async fn grpc_over_tls_negotiates_h2_and_serves() {
-        let tls = GrpcTlsConfig {
+        let tls = TlsConfig {
             cert_path: fixture("cert.pem"),
             key_path: fixture("key.pem"),
         };

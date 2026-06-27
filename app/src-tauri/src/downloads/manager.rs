@@ -143,6 +143,7 @@ impl DownloadManager {
     ) -> AppResult<Self> {
         let http = reqwest::Client::builder()
             .use_rustls_tls()
+            .user_agent(crate::USER_AGENT)
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .map_err(|e| AppError::Transport(format!("download client: {e}")))?;

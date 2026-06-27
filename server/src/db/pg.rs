@@ -1942,6 +1942,29 @@ impl PodcastEpisodeRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn all_guids(&self, podcast_id: Uuid) -> Result<Vec<String>> {
+        sqlx::query_scalar::<_, String>("SELECT guid FROM podcast_episodes WHERE podcast_id = $1")
+            .bind(podcast_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)
+    }
+
+    async fn delete_stale_metadata(&self, podcast_id: Uuid, keep: &[String]) -> Result<u64> {
+        // Remove only not-yet-downloaded rows; a downloaded episode keeps its
+        // row (and its on-disk audio) even after it falls out of the feed.
+        let res = sqlx::query(
+            "DELETE FROM podcast_episodes \
+             WHERE podcast_id = $1 AND file_path IS NULL AND guid <> ALL($2)",
+        )
+        .bind(podcast_id)
+        .bind(keep)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(res.rows_affected())
+    }
+
     async fn set_file(
         &self,
         id: Uuid,

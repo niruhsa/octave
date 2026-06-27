@@ -49,6 +49,31 @@ fn episode(id: &str, podcast_id: &str, size: i64) -> PodcastEpisode {
     }
 }
 
+/// A metadata-only episode: cached so the list renders, but not downloaded
+/// (`local_file_path` NULL → no audio on disk).
+fn meta(id: &str, podcast_id: &str, guid: &str) -> PodcastEpisode {
+    PodcastEpisode {
+        id: id.into(),
+        podcast_id: podcast_id.into(),
+        guid: guid.into(),
+        title: format!("Episode {id}"),
+        description: None,
+        enclosure_url: format!("https://cdn.example.com/{id}.mp3"),
+        episode_no: Some(1),
+        season_no: None,
+        duration_ms: Some(1_800_000),
+        codec: None,
+        bitrate_kbps: None,
+        file_size: None,
+        local_file_path: None,
+        image_path: None,
+        published_at: Some(now()),
+        metadata_json: "{}".into(),
+        downloaded_at: None,
+        updated_at: now(),
+    }
+}
+
 #[tokio::test]
 async fn subscribe_flag_drives_the_offline_list() {
     let tmp = tempfile::tempdir().unwrap();
@@ -98,6 +123,51 @@ async fn episode_upsert_counts_and_bytes() {
     repo::delete_podcast(&pool, "p1").await.unwrap();
     assert!(repo::get_podcast(&pool, "p1").await.unwrap().is_none());
     assert_eq!(repo::count_downloaded_episodes(&pool).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn metadata_episodes_cached_without_being_downloaded() {
+    use std::collections::HashSet;
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = db::open(&tmp.path().join("c.sqlite")).await.unwrap();
+
+    repo::upsert_podcast(&pool, &show("p1", 1)).await.unwrap();
+
+    // One downloaded episode + two metadata-only ones (the incremental-sync path).
+    repo::upsert_episode(&pool, &episode("e1", "p1", 5_000_000)).await.unwrap();
+    repo::upsert_episode_meta(&pool, &meta("e2", "p1", "guid-e2")).await.unwrap();
+    repo::upsert_episode_meta(&pool, &meta("e3", "p1", "guid-e3")).await.unwrap();
+
+    // The list shows all three; only the downloaded one counts toward storage.
+    assert_eq!(repo::list_episodes_for_podcast(&pool, "p1").await.unwrap().len(), 3);
+    assert_eq!(repo::count_downloaded_episodes_for_podcast(&pool, "p1").await.unwrap(), 1);
+    assert_eq!(repo::count_downloaded_episodes(&pool).await.unwrap(), 1);
+    assert_eq!(repo::downloaded_episode_bytes(&pool).await.unwrap(), 5_000_000);
+    assert_eq!(repo::list_downloaded_episodes(&pool).await.unwrap().len(), 1);
+
+    // The guid snapshot (drives incremental sync) covers every cached episode.
+    let guids: HashSet<String> =
+        repo::list_episode_guids(&pool, "p1").await.unwrap().into_iter().collect();
+    assert_eq!(
+        guids,
+        ["guid-e1", "guid-e2", "guid-e3"].iter().map(|s| s.to_string()).collect()
+    );
+
+    // Re-syncing metadata for the downloaded episode must not drop its file.
+    let mut e1_changed = meta("e1", "p1", "guid-e1");
+    e1_changed.title = "Renamed".into();
+    repo::upsert_episode_meta(&pool, &e1_changed).await.unwrap();
+    let e1 = repo::get_episode(&pool, "e1").await.unwrap().unwrap();
+    assert_eq!(e1.title, "Renamed");
+    assert!(e1.local_file_path.is_some(), "download must survive a metadata re-sync");
+    assert_eq!(repo::count_downloaded_episodes(&pool).await.unwrap(), 1);
+
+    // Full-replace (feed shares nothing): metadata rows go, the download stays.
+    let keep: HashSet<String> = ["guid-new".to_string()].into_iter().collect();
+    let removed = repo::delete_stale_metadata_episodes(&pool, "p1", &keep).await.unwrap();
+    assert_eq!(removed, 2); // e2, e3
+    assert_eq!(repo::count_downloaded_episodes(&pool).await.unwrap(), 1); // e1 preserved
+    assert_eq!(repo::list_episodes_for_podcast(&pool, "p1").await.unwrap().len(), 1);
 }
 
 #[tokio::test]

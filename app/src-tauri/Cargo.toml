@@ -45,7 +45,11 @@ tonic = { version = "0.12", features = ["transport", "tls", "tls-roots"] }
 # answered, not just that a socket opened. The server already serves it.
 tonic-health = "0.12"
 prost = "0.13"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "stream", "multipart"] }
+# `rustls-tls-native-roots` adds the OS trust store on top of the bundled
+# webpki roots so REST-over-`https` trusts the same certs as the gRPC client
+# (tonic's `with_enabled_roots()` / `tls-roots`) — e.g. an internal CA the user
+# installed system-wide. Without it reqwest trusts only the webpki bundle.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "http2", "stream", "multipart"] }
 futures-util = "0.3"
 # Phase 4 — Playback: in-app loopback HTTP server the webview's <audio> element
 # streams media from (replaces the old `media://` custom protocol, which can't

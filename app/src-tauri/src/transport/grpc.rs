@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use tonic::metadata::MetadataValue;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::Request;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
@@ -57,8 +57,7 @@ impl GrpcClient {
     /// the endpoint URL can't be parsed or the TCP/HTTP2 handshake fails
     /// within the connect timeout.
     pub async fn connect(config: &ServerConfig) -> AppResult<Self> {
-        let endpoint: Endpoint = Endpoint::from_shared(config.grpc_endpoint().to_string())
-            .map_err(|e| AppError::Transport(format!("invalid gRPC endpoint: {e}")))?
+        let endpoint = Self::endpoint(config.grpc_endpoint())?
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(20))
             .tcp_nodelay(true);
@@ -68,6 +67,33 @@ impl GrpcClient {
             .await
             .map_err(|e| AppError::Transport(format!("gRPC connect: {e}")))?;
         Ok(Self { channel })
+    }
+
+    /// Build a tonic [`Endpoint`] for the gRPC URL, attaching a TLS config
+    /// when the scheme is `https`.
+    ///
+    /// tonic only speaks TLS when a [`ClientTlsConfig`] is present — an
+    /// `https` URL is **not** enough on its own. The auto-TLS shortcut lives
+    /// in `Endpoint::new` (what the generated `…Client::connect` uses), but we
+    /// build the channel by hand via `Endpoint::from_shared`, which goes
+    /// through `From<Uri>` and leaves TLS off. Without this, an `https`
+    /// endpoint fails the connect with a bare "transport error" (tonic's
+    /// `HttpsUriWithoutTlsSupport`) before any handshake — exactly the symptom
+    /// when the server has `GRPC_TLS` on while the client still tries h2c.
+    ///
+    /// We attach the system trust roots (`with_enabled_roots`, matching
+    /// tonic's own codegen default); the URL host drives cert verification and
+    /// SNI. A cert that doesn't chain to a root in the OS trust store (e.g. a
+    /// bare self-signed cert) still needs an explicit CA via `ca_certificate`.
+    fn endpoint(url: &str) -> AppResult<Endpoint> {
+        let endpoint = Endpoint::from_shared(url.to_string())
+            .map_err(|e| AppError::Transport(format!("invalid gRPC endpoint: {e}")))?;
+        if url.starts_with("https://") {
+            return endpoint
+                .tls_config(ClientTlsConfig::new().with_enabled_roots())
+                .map_err(|e| AppError::Transport(format!("gRPC TLS config: {e}")));
+        }
+        Ok(endpoint)
     }
 
     /// gRPC liveness probe for the connectivity UI / online flag.
@@ -87,7 +113,7 @@ impl GrpcClient {
     /// timeout so a hung/black-holed connection can't keep it alive.
     pub async fn probe(config: &ServerConfig) -> bool {
         let fut = async {
-            let endpoint = match Endpoint::from_shared(config.grpc_endpoint().to_string()) {
+            let endpoint = match Self::endpoint(config.grpc_endpoint()) {
                 Ok(e) => e
                     .connect_timeout(Duration::from_secs(3))
                     .timeout(Duration::from_secs(3))

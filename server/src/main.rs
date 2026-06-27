@@ -28,7 +28,9 @@ async fn main() -> Result<()> {
     let config = Config::from_env()?;
     info!(
         grpc = %config.grpc_addr,
+        grpc_tls = config.grpc_tls.is_some(),
         rest = %config.rest_addr,
+        rest_tls = config.rest_tls.is_some(),
         admin_ui = config.enable_admin_ui,
         "starting music server"
     );
@@ -266,7 +268,7 @@ async fn main() -> Result<()> {
         upload_hub,
         shutdown_rx.clone(),
     ));
-    let mut rest_task = tokio::spawn(rest::serve(config.rest_addr, rest_state));
+    let mut rest_task = tokio::spawn(rest::serve(config.rest_addr, config.rest_tls.clone(), rest_state));
 
     // Run until a transport exits on its own (bind error / panic) or the
     // shutdown signal fans out to both. If one transport dies, stop the other.

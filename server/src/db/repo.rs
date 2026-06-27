@@ -350,6 +350,16 @@ pub trait PodcastEpisodeRepo: Send + Sync {
     ) -> Result<Vec<PodcastEpisode>>;
     /// The newest episodes that have no `file_path` yet (drives auto-download).
     async fn newest_undownloaded(&self, podcast_id: Uuid, limit: i64) -> Result<Vec<PodcastEpisode>>;
+    /// Every cached episode guid for a show. Drives the incremental refresh:
+    /// the walk compares each fetched feed page against this set and stops once
+    /// it reaches episodes already cached.
+    async fn all_guids(&self, podcast_id: Uuid) -> Result<Vec<String>>;
+    /// Delete metadata-only episodes (those NOT yet downloaded — `file_path IS
+    /// NULL`) whose guid is not in `keep`. Used by the full-cache-replace path
+    /// when a refreshed feed shares no episode with the cache; downloaded
+    /// episodes are preserved so their on-disk audio is never orphaned.
+    /// Returns the number of rows removed.
+    async fn delete_stale_metadata(&self, podcast_id: Uuid, keep: &[String]) -> Result<u64>;
     /// Record the on-disk file + probed technical fields after a download.
     async fn set_file(
         &self,

@@ -1,7 +1,7 @@
 //! Podcast service: server-backed reads when online, cache-only fallback when
 //! offline. Mirrors `library::service` — each result carries its offline state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -12,7 +12,7 @@ use crate::cache::model as cache_model;
 use crate::cache::repo;
 use crate::error::{AppError, AppResult};
 use crate::library::LibraryView;
-use crate::transport::{Podcast, PodcastCandidate, RefreshReport};
+use crate::transport::{Podcast, PodcastCandidate, PodcastEpisode, RefreshReport};
 
 /// Same "we have no usable server" signal the library service uses.
 fn is_offline_signal(err: &AppError) -> bool {
@@ -126,36 +126,102 @@ impl<'a> PodcastService<'a> {
         &self,
         podcast_id: &str,
     ) -> AppResult<LibraryView<MergedEpisode>> {
-        // The server caps a single response at 200, so page through the whole
-        // feed — the show detail view wants every episode, not just the newest
-        // page. MAX_PAGES is a safety valve against a misbehaving feed.
+        // The server caps a single response at 200. Rather than re-pull the
+        // whole feed on every open, page newest→oldest and stop as soon as a
+        // page reaches episodes we already cached — after the first full sync
+        // that's just the newest page. The cached metadata is what makes a show
+        // render instantly on reopen (and offline). MAX_PAGES bounds the first
+        // (full) sync of a very large feed.
         const PAGE: i32 = 200;
         const MAX_PAGES: i32 = 200;
-        let mut eps = Vec::new();
+
+        let cached: HashSet<String> = repo::list_episode_guids(self.pool, podcast_id)
+            .await?
+            .into_iter()
+            .collect();
+
+        let mut fetched: HashSet<String> = HashSet::new();
+        // The server's fresh "has it cached" flag, by episode id, for the pages
+        // we actually fetched — drives loopback-vs-origin playback routing for
+        // the newest episodes; older cached rows default to origin.
+        let mut server_dl: HashMap<String, bool> = HashMap::new();
+        let mut hit_cache = false;
+        let mut reached_end = false;
         let mut offset: i32 = 0;
         for _ in 0..MAX_PAGES {
             let page = self.auth.list_episodes(podcast_id, PAGE, offset).await?;
             let full = page.len() == PAGE as usize;
-            eps.extend(page);
+            let mut page_overlaps = false;
+            for e in &page {
+                if cached.contains(&e.guid) {
+                    page_overlaps = true;
+                }
+                fetched.insert(e.guid.clone());
+                server_dl.insert(e.id.clone(), e.downloaded);
+                // Persist metadata so the list survives an app restart / offline.
+                self.cache_upsert_episode_meta(podcast_id, e).await?;
+            }
+            if page_overlaps {
+                hit_cache = true;
+                break;
+            }
             if !full {
+                reached_end = true;
                 break;
             }
             offset += PAGE;
         }
-        // One cache query → id → local_file_path for downloaded episodes.
-        let cached = repo::list_episodes_for_podcast(self.pool, podcast_id).await?;
-        let local: HashMap<String, String> = cached
-            .into_iter()
-            .filter_map(|e| e.local_file_path.map(|p| (e.id, p)))
-            .collect();
-        let items = eps
+
+        // Walked the whole feed with zero overlap → its identity changed; drop
+        // the stale metadata (downloaded episodes are preserved). Guard on a
+        // non-empty fetch so a transient empty response can't wipe the cache.
+        if !cached.is_empty() && !hit_cache && reached_end && !fetched.is_empty() {
+            repo::delete_stale_metadata_episodes(self.pool, podcast_id, &fetched).await?;
+        }
+
+        // Return the full cached list (everything we didn't need to re-fetch is
+        // already here), newest-first, with the freshest download state we have.
+        let rows = repo::list_episodes_for_podcast(self.pool, podcast_id).await?;
+        let items = rows
             .into_iter()
             .map(|e| {
-                let lp = local.get(&e.id).cloned();
-                MergedEpisode::from_server(e, lp)
+                let sd = server_dl.get(&e.id).copied().unwrap_or(false);
+                MergedEpisode::from_cache_row(e, sd)
             })
             .collect();
         Ok(LibraryView::server(items))
+    }
+
+    /// Mirror one server episode's metadata into the cache without touching any
+    /// client-owned download columns (see [`repo::upsert_episode_meta`]).
+    async fn cache_upsert_episode_meta(
+        &self,
+        podcast_id: &str,
+        e: &PodcastEpisode,
+    ) -> AppResult<()> {
+        let row = cache_model::PodcastEpisode {
+            id: e.id.clone(),
+            podcast_id: podcast_id.to_string(),
+            guid: e.guid.clone(),
+            title: e.title.clone(),
+            description: e.description.clone(),
+            enclosure_url: e.enclosure_url.clone(),
+            episode_no: e.episode_no,
+            season_no: e.season_no,
+            duration_ms: e.duration_ms,
+            // Download-only columns: NULL for a fresh metadata row, and left
+            // untouched by `upsert_episode_meta` when the row is already downloaded.
+            codec: None,
+            bitrate_kbps: None,
+            file_size: None,
+            local_file_path: None,
+            image_path: None,
+            published_at: e.published_at.clone(),
+            metadata_json: "{}".to_string(),
+            downloaded_at: None,
+            updated_at: now_iso(),
+        };
+        repo::upsert_episode_meta(self.pool, &row).await
     }
 
     async fn list_episodes_from_cache(

@@ -32,9 +32,14 @@ pub struct Config {
     pub grpc_addr: SocketAddr,
     /// Optional gRPC TLS. `Some` when `GRPC_TLS` is enabled; the server then
     /// presents this identity to clients (which must connect over `https`).
-    pub grpc_tls: Option<GrpcTlsConfig>,
-    /// Address the REST fallback binds to.
+    pub grpc_tls: Option<TlsConfig>,
+    /// Address the REST fallback binds to. When `rest_tls` is set this is the
+    /// HTTPS port (`HTTPS_PORT`, default 8443); otherwise the plaintext
+    /// `REST_ADDR` (default `0.0.0.0:8080`).
     pub rest_addr: SocketAddr,
+    /// Optional REST TLS. `Some` when `REST_TLS` is enabled; reuses the gRPC
+    /// cert/key (`GRPC_TLS_CERT`/`GRPC_TLS_KEY`) and serves REST over `https`.
+    pub rest_tls: Option<TlsConfig>,
     /// Pre-shared secret key for the `SECRET_KEY` auth mechanism.
     pub secret_key: String,
     /// Whether the optional admin UI should be started.
@@ -116,10 +121,11 @@ pub struct FcmConfig {
     pub credentials_path: PathBuf,
 }
 
-/// PEM file paths for gRPC TLS. Paths only — never the key bytes, which must
-/// not end up in `Debug` output or logs.
+/// PEM file paths for TLS. Shared by the gRPC and REST servers (REST reuses the
+/// gRPC cert/key). Paths only — never the key bytes, which must not end up in
+/// `Debug` output or logs.
 #[derive(Debug, Clone)]
-pub struct GrpcTlsConfig {
+pub struct TlsConfig {
     /// PEM-encoded certificate (chain). Absolute (resolved against the anchor).
     pub cert_path: PathBuf,
     /// PEM-encoded private key. Absolute (resolved against the anchor).
@@ -135,7 +141,18 @@ impl Config {
         let grpc_addr = parse_addr("GRPC_ADDR", "0.0.0.0:50051")?;
         let grpc_tls = load_grpc_tls(&anchor)?;
         let fcm = load_fcm(&anchor)?;
-        let rest_addr = parse_addr("REST_ADDR", "0.0.0.0:8080")?;
+        // REST TLS reuses the gRPC cert/key. When on, REST binds the HTTPS port
+        // (`HTTPS_PORT`, default 8443) on `REST_ADDR`'s host instead of the
+        // plaintext `:8080`.
+        let rest_tls = load_rest_tls(&anchor)?;
+        let rest_addr = {
+            let base = parse_addr("REST_ADDR", "0.0.0.0:8080")?;
+            if rest_tls.is_some() {
+                SocketAddr::new(base.ip(), env_port("HTTPS_PORT", 8443)?)
+            } else {
+                base
+            }
+        };
 
         let secret_key = env::var("SECRET_KEY")
             .map_err(|_| AppError::Config("SECRET_KEY is required".into()))?;
@@ -185,6 +202,7 @@ impl Config {
             grpc_addr,
             grpc_tls,
             rest_addr,
+            rest_tls,
             secret_key,
             enable_admin_ui,
             database_url,
@@ -282,24 +300,59 @@ fn env_u64(var: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Parse a `u16` port env var. Absent → `default`; present-but-invalid → a hard
+/// config error (so a typo'd port fails fast instead of silently defaulting).
+fn env_port(var: &str, default: u16) -> Result<u16> {
+    match env::var(var) {
+        Ok(raw) => raw
+            .trim()
+            .parse::<u16>()
+            .map_err(|e| AppError::Config(format!("invalid {var}={raw}: {e}"))),
+        Err(_) => Ok(default),
+    }
+}
+
 /// Optional gRPC TLS, enabled by the `GRPC_TLS` flag. When on, `GRPC_TLS_CERT`
 /// and `GRPC_TLS_KEY` (PEM file paths, resolved against the config anchor) are
 /// both required — a missing one is a hard config error so TLS never silently
 /// falls back to plaintext.
-fn load_grpc_tls(anchor: &Path) -> Result<Option<GrpcTlsConfig>> {
+fn load_grpc_tls(anchor: &Path) -> Result<Option<TlsConfig>> {
     if !env_flag("GRPC_TLS") {
         return Ok(None);
     }
+    Ok(Some(load_tls_paths(anchor, "GRPC_TLS")?))
+}
+
+/// Optional REST TLS, enabled by the `REST_TLS` flag. Reuses the **same**
+/// cert/key as gRPC (`GRPC_TLS_CERT`/`GRPC_TLS_KEY`); both required when on, a
+/// missing one is a hard config error. When enabled the REST server binds the
+/// HTTPS port (`HTTPS_PORT`, default 8443) instead of the plaintext `:8080`.
+fn load_rest_tls(anchor: &Path) -> Result<Option<TlsConfig>> {
+    if !env_flag("REST_TLS") {
+        return Ok(None);
+    }
+    Ok(Some(load_tls_paths(anchor, "REST_TLS")?))
+}
+
+/// Load the shared TLS cert/key PEM paths from `GRPC_TLS_CERT`/`GRPC_TLS_KEY`
+/// (resolved against the anchor). `enabled_by` names the flag that required
+/// them so the error points at the right toggle. Both are mandatory — TLS
+/// never silently degrades to plaintext.
+fn load_tls_paths(anchor: &Path, enabled_by: &str) -> Result<TlsConfig> {
     let cert = env::var("GRPC_TLS_CERT").map_err(|_| {
-        AppError::Config("GRPC_TLS is enabled but GRPC_TLS_CERT (cert PEM path) is not set".into())
+        AppError::Config(format!(
+            "{enabled_by} is enabled but GRPC_TLS_CERT (cert PEM path) is not set"
+        ))
     })?;
     let key = env::var("GRPC_TLS_KEY").map_err(|_| {
-        AppError::Config("GRPC_TLS is enabled but GRPC_TLS_KEY (key PEM path) is not set".into())
+        AppError::Config(format!(
+            "{enabled_by} is enabled but GRPC_TLS_KEY (key PEM path) is not set"
+        ))
     })?;
-    Ok(Some(GrpcTlsConfig {
+    Ok(TlsConfig {
         cert_path: resolve_path(anchor, &cert),
         key_path: resolve_path(anchor, &key),
-    }))
+    })
 }
 
 /// Optional FCM push, enabled by the `FCM_ENABLED` flag. When on,

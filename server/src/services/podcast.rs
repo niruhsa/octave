@@ -15,6 +15,7 @@
 //! - **search / reads / download**: any authed user (downloads are for offline
 //!   use, like the music permission model).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +40,9 @@ const MAX_PAGE_LIMIT: i64 = 200;
 const DEFAULT_PAGE_LIMIT: i64 = 50;
 /// Floor for the refresh poller cadence, regardless of config.
 const MIN_REFRESH_SECS: u64 = 60;
+/// Safety valve on how many `rel="next"` pages a single walk will follow, so a
+/// misbehaving (cyclic / unbounded) paged feed can't loop forever.
+const MAX_FEED_PAGES: u32 = 50;
 
 /// Report of one feed refresh.
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +63,20 @@ enum FetchOutcome {
         etag: Option<String>,
         last_modified: Option<String>,
     },
+}
+
+/// Outcome of walking a feed's pages (see [`PodcastService::walk_feed`]).
+struct WalkResult {
+    /// Episodes inserted this walk (didn't exist in the cache before) — the
+    /// genuinely-new ones to fan out.
+    new_eps: Vec<PodcastEpisode>,
+    /// Every episode guid seen across the fetched pages.
+    fetched: HashSet<String>,
+    /// A fetched page overlapped the pre-walk cache snapshot.
+    hit_cache: bool,
+    /// The walk reached the end of the feed (ran out of `rel="next"` pages or
+    /// hit the page cap) rather than stopping early on a cache hit.
+    reached_end: bool,
 }
 
 #[derive(Clone)]
@@ -206,10 +224,12 @@ impl PodcastService {
             })
             .await?;
 
-        // Best-effort show art + episode seeding. No fan-out on first subscribe
-        // (every episode is "new"; we don't blast a backlog at subscribers).
+        // Best-effort show art, then seed the full back-catalog — following a
+        // paged feed (`rel="next"`) to the end so every episode is cached up
+        // front, not just the newest page. No fan-out on first subscribe (every
+        // episode is "new"; we don't blast a backlog at subscribers).
         self.cache_show_art(&podcast).await;
-        let _ = self.ingest_episodes(&podcast, &parsed, false).await?;
+        self.walk_feed(&podcast, *parsed, &HashSet::new(), false).await?;
         self.podcasts
             .touch_refreshed(podcast.id, etag.as_deref(), last_modified.as_deref())
             .await?;
@@ -429,13 +449,40 @@ impl PodcastService {
                 })
             }
             FetchOutcome::Fetched { parsed, etag, last_modified } => {
-                let new_episodes = self.ingest_episodes(&podcast, &parsed, true).await?;
+                // Snapshot the cache, then walk the feed newest→oldest, stopping
+                // as soon as a page reaches episodes we already have — everything
+                // older is, by construction, already cached.
+                let cached: HashSet<String> =
+                    self.episodes.all_guids(podcast_id).await?.into_iter().collect();
+                let walk = self.walk_feed(&podcast, *parsed, &cached, true).await?;
+
+                // Zero overlap after walking the whole feed → the feed's identity
+                // changed (e.g. it moved hosts and reissued guids). Replace the
+                // stale cached metadata with what we just fetched, and don't fan
+                // out the whole new feed as "new episodes". Guard on a non-empty
+                // fetch so a transient empty/broken feed can never wipe the cache.
+                let full_replace = !cached.is_empty()
+                    && !walk.hit_cache
+                    && walk.reached_end
+                    && !walk.fetched.is_empty();
+
+                if full_replace {
+                    let keep: Vec<String> = walk.fetched.iter().cloned().collect();
+                    let removed = self.episodes.delete_stale_metadata(podcast_id, &keep).await?;
+                    warn!(
+                        podcast = %podcast_id, removed,
+                        "podcast refresh: feed shares nothing with cache; replaced cached episodes"
+                    );
+                } else {
+                    self.fan_out_new(&podcast, &walk.new_eps).await;
+                }
+
                 self.podcasts
                     .touch_refreshed(podcast_id, etag.as_deref(), last_modified.as_deref())
                     .await?;
                 Ok(RefreshReport {
                     podcast_id,
-                    new_episodes,
+                    new_episodes: walk.new_eps.len() as u64,
                     not_modified: false,
                 })
             }
@@ -533,75 +580,124 @@ impl PodcastService {
     // Internals
     // -----------------------------------------------------------------------
 
-    /// Upsert every parsed episode; the newly-**inserted** ones are the new
-    /// episodes. When `fan_out`, alert subscribers + trigger auto-download.
-    /// Returns the count of new episodes.
-    async fn ingest_episodes(
+    /// Walk a feed newest→oldest, upserting every episode. `cached` is the set
+    /// of guids already stored before this walk began. With `stop_at_cache`, the
+    /// walk halts at the first page that overlaps `cached` (the incremental
+    /// refresh — pages older than the overlap are already cached); otherwise it
+    /// follows every `rel="next"` page to the end (the seed-all path used on
+    /// first subscribe). Returns the inserted episodes plus the bookkeeping the
+    /// caller needs to decide on a full-cache replace.
+    async fn walk_feed(
         &self,
         podcast: &Podcast,
-        parsed: &feed::ParsedFeed,
-        fan_out: bool,
-    ) -> Result<u64> {
+        first: feed::ParsedFeed,
+        cached: &HashSet<String>,
+        stop_at_cache: bool,
+    ) -> Result<WalkResult> {
         let mut new_eps: Vec<PodcastEpisode> = Vec::new();
-        for pe in &parsed.episodes {
-            let (ep, inserted) = self
-                .episodes
-                .upsert_by_guid(NewPodcastEpisode {
-                    podcast_id: podcast.id,
-                    guid: pe.guid.clone(),
-                    title: pe.title.clone(),
-                    description: pe.description.clone(),
-                    enclosure_url: pe.enclosure_url.clone(),
-                    enclosure_type: pe.enclosure_type.clone(),
-                    episode_no: pe.episode_no,
-                    season_no: pe.season_no,
-                    duration_ms: pe.duration_ms,
-                    image_path: None,
-                    published_at: pe.published_at,
-                })
-                .await?;
-            if inserted {
-                new_eps.push(ep);
+        let mut fetched: HashSet<String> = HashSet::new();
+        let mut hit_cache = false;
+        let mut reached_end = false;
+        let mut page = first;
+        let mut pages: u32 = 0;
+        loop {
+            pages += 1;
+            let page_overlaps = page.episodes.iter().any(|e| cached.contains(&e.guid));
+            if page_overlaps {
+                hit_cache = true;
             }
-        }
-
-        if fan_out && !new_eps.is_empty() {
-            // Fan out alerts to subscribers (best-effort — never fail a refresh).
-            if let Some(notifications) = &self.notifications {
-                let subs = self
-                    .subscriptions
-                    .subscribers_of(podcast.id)
-                    .await
-                    .unwrap_or_default();
-                if !subs.is_empty() {
-                    for ep in &new_eps {
-                        if let Err(e) = notifications.notify_new_episode(&subs, podcast, ep).await {
-                            warn!(podcast = %podcast.id, error = %e, "new-episode fan-out failed");
+            for pe in &page.episodes {
+                fetched.insert(pe.guid.clone());
+                let (ep, inserted) = self
+                    .episodes
+                    .upsert_by_guid(NewPodcastEpisode {
+                        podcast_id: podcast.id,
+                        guid: pe.guid.clone(),
+                        title: pe.title.clone(),
+                        description: pe.description.clone(),
+                        enclosure_url: pe.enclosure_url.clone(),
+                        enclosure_type: pe.enclosure_type.clone(),
+                        episode_no: pe.episode_no,
+                        season_no: pe.season_no,
+                        duration_ms: pe.duration_ms,
+                        image_path: None,
+                        published_at: pe.published_at,
+                    })
+                    .await?;
+                if inserted {
+                    new_eps.push(ep);
+                }
+            }
+            // Stop once we've reached cached territory (incremental refresh).
+            if stop_at_cache && page_overlaps {
+                break;
+            }
+            // Otherwise follow the feed to its next (older) page, if any.
+            match page.next_page_url.clone() {
+                Some(next) if pages < MAX_FEED_PAGES => {
+                    match self.fetch_and_parse(&next, None).await? {
+                        FetchOutcome::Fetched { parsed, .. } => page = *parsed,
+                        // A `None` conditional never yields NotModified; treat it
+                        // defensively as the end of the walk.
+                        FetchOutcome::NotModified => {
+                            reached_end = true;
+                            break;
                         }
                     }
                 }
-            }
-            // Auto-download newest-N (background — never blocks the refresh).
-            if podcast.auto_download > 0 {
-                let this = self.clone();
-                let pid = podcast.id;
-                let n = podcast.auto_download as i64;
-                tokio::spawn(async move {
-                    let newest = this
-                        .episodes
-                        .newest_undownloaded(pid, n)
-                        .await
-                        .unwrap_or_default();
-                    for ep in newest {
-                        if let Err(e) = this.download_episode_inner(ep.id).await {
-                            warn!(episode = %ep.id, error = %e, "auto-download failed");
-                        }
-                    }
-                });
+                _ => {
+                    reached_end = true;
+                    break;
+                }
             }
         }
+        Ok(WalkResult {
+            new_eps,
+            fetched,
+            hit_cache,
+            reached_end,
+        })
+    }
 
-        Ok(new_eps.len() as u64)
+    /// Best-effort alert + auto-download for genuinely-new episodes. Never fails
+    /// the refresh (same contract as `create_album`'s fan-out).
+    async fn fan_out_new(&self, podcast: &Podcast, new_eps: &[PodcastEpisode]) {
+        if new_eps.is_empty() {
+            return;
+        }
+        // Fan out alerts to subscribers.
+        if let Some(notifications) = &self.notifications {
+            let subs = self
+                .subscriptions
+                .subscribers_of(podcast.id)
+                .await
+                .unwrap_or_default();
+            if !subs.is_empty() {
+                for ep in new_eps {
+                    if let Err(e) = notifications.notify_new_episode(&subs, podcast, ep).await {
+                        warn!(podcast = %podcast.id, error = %e, "new-episode fan-out failed");
+                    }
+                }
+            }
+        }
+        // Auto-download newest-N (background — never blocks the refresh).
+        if podcast.auto_download > 0 {
+            let this = self.clone();
+            let pid = podcast.id;
+            let n = podcast.auto_download as i64;
+            tokio::spawn(async move {
+                let newest = this
+                    .episodes
+                    .newest_undownloaded(pid, n)
+                    .await
+                    .unwrap_or_default();
+                for ep in newest {
+                    if let Err(e) = this.download_episode_inner(ep.id).await {
+                        warn!(episode = %ep.id, error = %e, "auto-download failed");
+                    }
+                }
+            });
+        }
     }
 
     /// Conditional GET + parse a feed. `conditional` carries the stored
@@ -988,6 +1084,24 @@ mod tests {
         async fn newest_undownloaded(&self, _: Uuid, _: i64) -> Result<Vec<PodcastEpisode>> {
             Ok(vec![])
         }
+        async fn all_guids(&self, pid: Uuid) -> Result<Vec<String>> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.podcast_id == pid)
+                .map(|e| e.guid.clone())
+                .collect())
+        }
+        async fn delete_stale_metadata(&self, pid: Uuid, keep: &[String]) -> Result<u64> {
+            let mut g = self.rows.lock().unwrap();
+            let before = g.len();
+            g.retain(|e| {
+                !(e.podcast_id == pid && e.file_path.is_none() && !keep.contains(&e.guid))
+            });
+            Ok((before - g.len()) as u64)
+        }
         async fn set_file(
             &self,
             _: Uuid,
@@ -1184,33 +1298,131 @@ mod tests {
         assert_eq!(hits[0].title, "rust");
     }
 
+    /// Snapshot the fake's cached guids — what the incremental walk compares
+    /// each page against.
+    fn snapshot(eps: &Arc<FakeEpisodes>) -> HashSet<String> {
+        eps.rows.lock().unwrap().iter().map(|e| e.guid.clone()).collect()
+    }
+
     #[tokio::test]
-    async fn ingest_detects_new_episodes_idempotently() {
+    async fn walk_detects_new_episodes_idempotently() {
         let (svc, podcasts, episodes, _a) = make_service();
         let p = podcasts.insert("Show");
 
-        // First ingest: both episodes are new.
-        let n = svc
-            .ingest_episodes(&p, &parsed_with(&["a", "b"]), false)
+        // First walk: both episodes are new.
+        let cached = snapshot(&episodes);
+        let r = svc
+            .walk_feed(&p, parsed_with(&["a", "b"]), &cached, true)
             .await
             .unwrap();
-        assert_eq!(n, 2);
+        assert_eq!(r.new_eps.len(), 2);
         assert_eq!(episodes.rows.lock().unwrap().len(), 2);
 
-        // Re-ingest the same feed → 0 new (upsert-by-guid is idempotent).
-        let n = svc
-            .ingest_episodes(&p, &parsed_with(&["a", "b"]), false)
+        // Re-walk the same feed → 0 new (upsert-by-guid is idempotent); the walk
+        // stops on the cache hit.
+        let cached = snapshot(&episodes);
+        let r = svc
+            .walk_feed(&p, parsed_with(&["a", "b"]), &cached, true)
             .await
             .unwrap();
-        assert_eq!(n, 0);
+        assert_eq!(r.new_eps.len(), 0);
+        assert!(r.hit_cache);
 
-        // A feed that adds one episode → exactly 1 new.
-        let n = svc
-            .ingest_episodes(&p, &parsed_with(&["a", "b", "c"]), false)
+        // The newest episode prepended → exactly 1 new; the rest overlap the
+        // cache so the walk halts there (incremental).
+        let cached = snapshot(&episodes);
+        let r = svc
+            .walk_feed(&p, parsed_with(&["c", "a", "b"]), &cached, true)
             .await
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(r.new_eps.len(), 1);
+        assert!(r.hit_cache);
         assert_eq!(episodes.rows.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn walk_with_no_overlap_signals_full_replace() {
+        let (svc, podcasts, episodes, _a) = make_service();
+        let p = podcasts.insert("Show");
+
+        // Seed two episodes (seed-all path — no early stop).
+        svc.walk_feed(&p, parsed_with(&["a", "b"]), &HashSet::new(), false)
+            .await
+            .unwrap();
+
+        // A feed that shares NOTHING with the cache: the walk runs to the end
+        // without a cache hit — exactly the signal `refresh` uses to replace.
+        let cached = snapshot(&episodes);
+        let r = svc
+            .walk_feed(&p, parsed_with(&["x", "y"]), &cached, true)
+            .await
+            .unwrap();
+        assert!(!r.hit_cache);
+        assert!(r.reached_end);
+        assert_eq!(r.fetched.len(), 2);
+
+        // Replacing keeps only the freshly-fetched guids; the stale (not yet
+        // downloaded) ones are dropped.
+        let keep: Vec<String> = r.fetched.iter().cloned().collect();
+        let removed = episodes.delete_stale_metadata(p.id, &keep).await.unwrap();
+        assert_eq!(removed, 2); // a, b
+        assert_eq!(snapshot(&episodes), ["x", "y"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[tokio::test]
+    async fn delete_stale_metadata_preserves_downloaded() {
+        let (_svc, podcasts, episodes, _a) = make_service();
+        let p = podcasts.insert("Show");
+
+        // One downloaded episode (has a file_path) + one metadata-only.
+        episodes
+            .upsert_by_guid(NewPodcastEpisode {
+                podcast_id: p.id,
+                guid: "kept".into(),
+                title: "Downloaded".into(),
+                description: None,
+                enclosure_url: "https://cdn/kept.mp3".into(),
+                enclosure_type: None,
+                episode_no: None,
+                season_no: None,
+                duration_ms: None,
+                image_path: None,
+                published_at: None,
+            })
+            .await
+            .unwrap();
+        episodes
+            .rows
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .for_each(|e| {
+                if e.guid == "kept" {
+                    e.file_path = Some("/tmp/kept.mp3".into());
+                }
+            });
+        episodes
+            .upsert_by_guid(NewPodcastEpisode {
+                podcast_id: p.id,
+                guid: "stale".into(),
+                title: "Metadata only".into(),
+                description: None,
+                enclosure_url: "https://cdn/stale.mp3".into(),
+                enclosure_type: None,
+                episode_no: None,
+                season_no: None,
+                duration_ms: None,
+                image_path: None,
+                published_at: None,
+            })
+            .await
+            .unwrap();
+
+        // Replace against a brand-new feed that keeps neither guid: the
+        // downloaded one survives (its audio is on disk), the metadata one goes.
+        let removed = episodes.delete_stale_metadata(p.id, &["fresh".to_string()]).await.unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(snapshot(&episodes), ["kept"].iter().map(|s| s.to_string()).collect());
     }
 
     #[test]

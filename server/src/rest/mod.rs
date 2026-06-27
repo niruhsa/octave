@@ -13,6 +13,7 @@ pub mod streaming;
 pub mod upload;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::{
     Json, Router,
@@ -24,12 +25,14 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use axum_server::tls_rustls::RustlsConfig;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::auth::Identity;
 use crate::auth::service::{AuthService, Credential};
+use crate::config::TlsConfig;
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
@@ -66,8 +69,9 @@ pub struct RestState {
     pub shutdown: ShutdownRx,
 }
 
-/// Run the REST server until shutdown.
-pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
+/// Run the REST server until shutdown. Serves plaintext HTTP, or HTTPS when
+/// `tls` is set (rustls via axum-server, reusing the gRPC server's cert/key).
+pub async fn serve(addr: SocketAddr, tls: Option<TlsConfig>, state: RestState) -> Result<()> {
     let public = Router::new()
         .route("/health", get(health))
         .route("/auth/login", post(login))
@@ -97,21 +101,53 @@ pub async fn serve(addr: SocketAddr, state: RestState) -> Result<()> {
     let shutdown = state.shutdown.clone();
     let app = public.merge(protected).with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| AppError::Internal(format!("REST bind {addr} failed: {e}")))?;
-
-    info!(%addr, "REST server listening");
-
     let shutdown_signal = async move {
         wait_for_shutdown(shutdown).await;
         info!("REST server received shutdown signal");
     };
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await
-        .map_err(|e| AppError::Internal(format!("REST server error: {e}")))?;
+    match tls {
+        // TLS: terminate with rustls via axum-server, using the same cert/key
+        // (and rustls `ring` provider) as the gRPC server — so a cert that
+        // works for gRPC works here. The graceful drain is driven off the
+        // shutdown signal through axum-server's `Handle`; the live-uploads WS
+        // still self-closes off the shared `ShutdownRx` held in `RestState`.
+        Some(tls) => {
+            let rustls = RustlsConfig::from_pem_file(&tls.cert_path, &tls.key_path)
+                .await
+                .map_err(|e| {
+                    AppError::Config(format!(
+                        "REST TLS load (cert {}, key {}): {e}",
+                        tls.cert_path.display(),
+                        tls.key_path.display()
+                    ))
+                })?;
+            let handle = axum_server::Handle::new();
+            tokio::spawn({
+                let handle = handle.clone();
+                async move {
+                    shutdown_signal.await;
+                    handle.graceful_shutdown(Some(Duration::from_secs(10)));
+                }
+            });
+            info!(%addr, "REST server listening (TLS enabled)");
+            axum_server::bind_rustls(addr, rustls)
+                .handle(handle)
+                .serve(app.into_make_service())
+                .await
+                .map_err(|e| AppError::Internal(format!("REST server error: {e}")))?;
+        }
+        None => {
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|e| AppError::Internal(format!("REST bind {addr} failed: {e}")))?;
+            info!(%addr, "REST server listening");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal)
+                .await
+                .map_err(|e| AppError::Internal(format!("REST server error: {e}")))?;
+        }
+    }
 
     Ok(())
 }
@@ -388,6 +424,72 @@ impl IntoResponse for ApiError {
             }
         };
         (status, self.0.to_string()).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use std::net::TcpListener;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use axum::{routing::get, Router};
+    use axum_server::tls_rustls::RustlsConfig;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tls")
+            .join(name)
+    }
+
+    /// REST-over-TLS works end to end through the same `axum-server` + rustls
+    /// (`ring`) path [`super::serve`] uses: the self-signed loopback fixture is
+    /// loaded with `RustlsConfig::from_pem_file`, served by `bind_rustls`, and a
+    /// client trusting the fixture CA completes an HTTPS GET. Proves cert
+    /// loading, the crypto provider, and HTTPS termination without a DB-backed
+    /// `RestState`. Mirrors `grpc::tls_tests` and reuses its fixtures, whose SAN
+    /// includes `IP:127.0.0.1` so the client can hit the bound address directly.
+    #[tokio::test]
+    async fn rest_over_tls_serves_https() {
+        let tls = RustlsConfig::from_pem_file(fixture("cert.pem"), fixture("key.pem"))
+            .await
+            .expect("load REST TLS fixture");
+
+        let addr = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let app = Router::new().route("/health", get(|| async { "ok" }));
+        let server = tokio::spawn(async move {
+            axum_server::bind_rustls(addr, tls)
+                .serve(app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        let ca = std::fs::read(fixture("cert.pem")).unwrap();
+        let client = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(&ca).unwrap())
+            .build()
+            .unwrap();
+        let url = format!("https://127.0.0.1:{}/health", addr.port());
+
+        // Retry until the spawned server is accepting.
+        let mut last_err = String::new();
+        for _ in 0..50 {
+            match client.get(&url).send().await {
+                Ok(resp) => {
+                    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+                    assert_eq!(resp.text().await.unwrap(), "ok");
+                    server.abort();
+                    return;
+                }
+                Err(e) => last_err = e.to_string(),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        server.abort();
+        panic!("HTTPS request never succeeded: {last_err}");
     }
 }
 

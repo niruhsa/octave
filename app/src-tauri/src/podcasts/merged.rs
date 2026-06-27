@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cache::model as cache_model;
-use crate::transport::{Podcast, PodcastEpisode};
+use crate::transport::Podcast;
 
 /// A podcast show plus whether the user is subscribed + how many of its
 /// episodes are downloaded locally.
@@ -99,32 +99,19 @@ impl MergedPodcast {
 }
 
 impl MergedEpisode {
-    pub fn from_server(e: PodcastEpisode, local_file_path: Option<String>) -> Self {
-        let downloaded = local_file_path.is_some();
-        let server_downloaded = e.downloaded;
-        Self {
-            id: e.id,
-            podcast_id: e.podcast_id,
-            guid: e.guid,
-            title: e.title,
-            description: e.description,
-            enclosure_url: e.enclosure_url,
-            enclosure_type: e.enclosure_type,
-            episode_no: e.episode_no,
-            season_no: e.season_no,
-            duration_ms: e.duration_ms,
-            codec: e.codec,
-            bitrate_kbps: e.bitrate_kbps,
-            file_size: e.file_size,
-            image_url: e.image_url,
-            published_at: e.published_at,
-            local_file_path,
-            server_downloaded,
-            downloaded,
-        }
+    /// A cached row with no fresh server signal — `server_downloaded` defaults
+    /// to `false` (play direct from the origin enclosure, which always works).
+    /// Used for the offline list and for episodes not re-fetched this sync.
+    pub fn from_cache(e: cache_model::PodcastEpisode) -> Self {
+        Self::from_cache_row(e, false)
     }
 
-    pub fn from_cache(e: cache_model::PodcastEpisode) -> Self {
+    /// A cached row plus the server's freshly-synced "has it cached" flag, so
+    /// the newest episodes route playback through our server while older cached
+    /// ones fall back to the origin. `downloaded` is the presence of the local
+    /// file — a metadata-only row (`local_file_path` NULL) is not downloaded.
+    pub fn from_cache_row(e: cache_model::PodcastEpisode, server_downloaded: bool) -> Self {
+        let downloaded = e.local_file_path.is_some();
         Self {
             id: e.id,
             podcast_id: e.podcast_id,
@@ -142,9 +129,8 @@ impl MergedEpisode {
             image_url: None,
             published_at: e.published_at,
             local_file_path: e.local_file_path,
-            // The server-state isn't known offline; the local file is what matters.
-            server_downloaded: true,
-            downloaded: true,
+            server_downloaded,
+            downloaded,
         }
     }
 }

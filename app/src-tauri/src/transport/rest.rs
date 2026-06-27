@@ -24,8 +24,13 @@ pub struct RestClient {
 
 impl RestClient {
     pub fn new(config: &ServerConfig) -> AppResult<Self> {
+        // rustls over `https`, trusting both the bundled webpki roots and the
+        // OS native trust store (the `rustls-tls-native-roots` feature, on by
+        // default once enabled). This mirrors the gRPC client's
+        // `with_enabled_roots()` so a cert that works for gRPC also works here.
         let http = Client::builder()
             .use_rustls_tls()
+            .user_agent(crate::USER_AGENT)
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(20))
             .build()

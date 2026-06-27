@@ -18,13 +18,10 @@ use reqwest::Client;
 
 use crate::error::AppResult;
 
-/// MusicBrainz wants a real UA + a contact. Hard-coded here so the client
-/// doesn't ship a config knob for it.
-const USER_AGENT: &str = concat!(
-    "octave/",
-    env!("CARGO_PKG_VERSION"),
-    " (https://github.com/drwhite/music-server)"
-);
+/// MusicBrainz wants a real UA + a contact; the crate-wide [`crate::USER_AGENT`]
+/// already carries both (the GitHub URL is the contact), so reuse it rather than
+/// shipping a second string.
+const USER_AGENT: &str = crate::USER_AGENT;
 
 /// Try to fetch a front cover for `artist` / `album` into `dest`.
 ///

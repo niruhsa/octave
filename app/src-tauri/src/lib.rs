@@ -20,12 +20,22 @@ pub mod library;
 pub mod media_session;
 pub mod notify_sync;
 pub mod player;
+pub mod playlists;
 pub mod podcasts;
 pub mod push;
-pub mod playlists;
 pub mod sync;
 pub mod transport;
 pub mod upload_session;
+
+/// User-Agent sent on every outbound HTTP request the native core makes
+/// (server transport, media/cover proxy, episode + track downloads). Podcast
+/// origin CDNs commonly reject requests with no — or a generic library —
+/// User-Agent, so every `reqwest` client identifies itself with this.
+pub const USER_AGENT: &str = concat!(
+    "octave/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/niruhsa/octave)"
+);
 
 use std::sync::Arc;
 

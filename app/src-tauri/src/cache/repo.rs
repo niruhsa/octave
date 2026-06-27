@@ -670,7 +670,11 @@ pub async fn delete_podcast(pool: &SqlitePool, id: &str) -> AppResult<()> {
 }
 
 // ---------------------------------------------------------------------------
-// podcast_episodes (downloaded episodes only)
+// podcast_episodes — cached episode metadata for subscribed shows + the subset
+// that is downloaded for offline use. A row with `local_file_path` set is
+// downloaded (the offline-cache source of truth, like `tracks`); a row with
+// `local_file_path` NULL is metadata only (so a show's episode list renders
+// instantly on reopen without re-paging the whole feed from the server).
 // ---------------------------------------------------------------------------
 
 const EPISODE_COLS: &str = "id, podcast_id, guid, title, description, enclosure_url, \
@@ -738,7 +742,7 @@ pub async fn get_episode(pool: &SqlitePool, id: &str) -> AppResult<Option<Podcas
     Ok(row)
 }
 
-/// Downloaded episodes for one show, newest-first.
+/// All cached episodes for one show (metadata + downloaded), newest-first.
 pub async fn list_episodes_for_podcast(
     pool: &SqlitePool,
     podcast_id: &str,
@@ -753,14 +757,72 @@ pub async fn list_episodes_for_podcast(
     Ok(rows)
 }
 
-/// Every downloaded episode (storage / downloads list).
+/// Every guid cached for one show — the snapshot the incremental sync compares
+/// each fetched server page against to find where it overlaps the cache.
+pub async fn list_episode_guids(pool: &SqlitePool, podcast_id: &str) -> AppResult<Vec<String>> {
+    let guids =
+        sqlx::query_scalar::<_, String>("SELECT guid FROM podcast_episodes WHERE podcast_id = ?1")
+            .bind(podcast_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(guids)
+}
+
+/// Every downloaded episode (storage / downloads list). Metadata-only rows
+/// (`local_file_path` NULL) are excluded.
 pub async fn list_downloaded_episodes(pool: &SqlitePool) -> AppResult<Vec<PodcastEpisode>> {
     let rows = sqlx::query_as::<_, PodcastEpisode>(&format!(
-        "SELECT {EPISODE_COLS} FROM podcast_episodes ORDER BY downloaded_at DESC"
+        "SELECT {EPISODE_COLS} FROM podcast_episodes \
+         WHERE local_file_path IS NOT NULL ORDER BY downloaded_at DESC"
     ))
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Upsert episode **metadata** (the incremental-sync path). Unlike
+/// [`upsert_episode`], this never touches the client-owned download columns
+/// (`local_file_path`, `downloaded_at`, `file_size`, `codec`, `bitrate_kbps`,
+/// `image_path`) — so syncing a show's episode list can't clobber a row the
+/// user has already downloaded. A downloaded episode also keeps its measured
+/// `duration_ms` (the feed value is usually coarser).
+pub async fn upsert_episode_meta(pool: &SqlitePool, e: &PodcastEpisode) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO podcast_episodes
+            (id, podcast_id, guid, title, description, enclosure_url, episode_no,
+             season_no, duration_ms, published_at, metadata_json, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        ON CONFLICT(id) DO UPDATE SET
+            podcast_id    = excluded.podcast_id,
+            guid          = excluded.guid,
+            title         = excluded.title,
+            description   = excluded.description,
+            enclosure_url = excluded.enclosure_url,
+            episode_no    = excluded.episode_no,
+            season_no     = excluded.season_no,
+            duration_ms   = CASE WHEN podcast_episodes.local_file_path IS NOT NULL
+                                 THEN podcast_episodes.duration_ms
+                                 ELSE excluded.duration_ms END,
+            published_at  = excluded.published_at,
+            updated_at    = excluded.updated_at
+        "#,
+    )
+    .bind(&e.id)
+    .bind(&e.podcast_id)
+    .bind(&e.guid)
+    .bind(&e.title)
+    .bind(&e.description)
+    .bind(&e.enclosure_url)
+    .bind(e.episode_no)
+    .bind(e.season_no)
+    .bind(e.duration_ms)
+    .bind(&e.published_at)
+    .bind(&e.metadata_json)
+    .bind(&e.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn delete_episode(pool: &SqlitePool, id: &str) -> AppResult<()> {
@@ -771,22 +833,55 @@ pub async fn delete_episode(pool: &SqlitePool, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Drop metadata-only episodes (not downloaded) whose guid isn't in `keep`.
+/// The full-replace path when a refreshed feed shares no episode with the
+/// cache. Downloaded episodes are preserved (their audio stays playable).
+/// Returns the number of rows removed.
+pub async fn delete_stale_metadata_episodes(
+    pool: &SqlitePool,
+    podcast_id: &str,
+    keep: &std::collections::HashSet<String>,
+) -> AppResult<u64> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, guid FROM podcast_episodes \
+         WHERE podcast_id = ?1 AND local_file_path IS NULL",
+    )
+    .bind(podcast_id)
+    .fetch_all(pool)
+    .await?;
+    let mut removed = 0u64;
+    for (id, guid) in rows {
+        if !keep.contains(&guid) {
+            sqlx::query("DELETE FROM podcast_episodes WHERE id = ?1")
+                .bind(&id)
+                .execute(pool)
+                .await?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 /// Count of downloaded episodes for a show — drives the delete cover/dir prune.
 pub async fn count_downloaded_episodes_for_podcast(
     pool: &SqlitePool,
     podcast_id: &str,
 ) -> AppResult<i64> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM podcast_episodes WHERE podcast_id = ?1")
-        .bind(podcast_id)
-        .fetch_one(pool)
-        .await?;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM podcast_episodes \
+         WHERE podcast_id = ?1 AND local_file_path IS NOT NULL",
+    )
+    .bind(podcast_id)
+    .fetch_one(pool)
+    .await?;
     Ok(n)
 }
 
 /// Total bytes used by downloaded episodes (sum of `file_size` where known).
 pub async fn downloaded_episode_bytes(pool: &SqlitePool) -> AppResult<i64> {
     let total: Option<i64> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(file_size), 0) FROM podcast_episodes WHERE file_size IS NOT NULL",
+        "SELECT COALESCE(SUM(file_size), 0) FROM podcast_episodes \
+         WHERE local_file_path IS NOT NULL",
     )
     .fetch_one(pool)
     .await?;
@@ -795,8 +890,9 @@ pub async fn downloaded_episode_bytes(pool: &SqlitePool) -> AppResult<i64> {
 
 /// Count of downloaded episodes (storage accounting).
 pub async fn count_downloaded_episodes(pool: &SqlitePool) -> AppResult<i64> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM podcast_episodes")
-        .fetch_one(pool)
-        .await?;
+    let n: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM podcast_episodes WHERE local_file_path IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
     Ok(n)
 }
