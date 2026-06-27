@@ -41,11 +41,24 @@ import { useNotificationsScheduler } from "./notifications/useNotifications";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
+      // Every read goes through Tauri `invoke` (local IPC to Rust, which does
+      // its own server→cache fallback), never the browser network. React
+      // Query's default `networkMode: "online"` would *pause* queries whenever
+      // `navigator.onLine` is false, so offline the queryFn never runs and the
+      // Rust cache fallback is never reached — Library / Playlists / Podcasts /
+      // Downloads would render empty even with downloaded content on disk.
+      // `"always"` runs queries regardless of the browser's online status.
+      networkMode: "always",
       // Always refetch on mount so the UI never shows stale data.
       // placeholderData keeps the previous view while fetching.
       staleTime: 0,
       refetchOnWindowFocus: true,
       retry: 1,
+    },
+    // Same reasoning for mutations: offline playlist edits are queued through
+    // `invoke` and must fire while offline rather than sit paused.
+    mutations: {
+      networkMode: "always",
     },
   },
 });
