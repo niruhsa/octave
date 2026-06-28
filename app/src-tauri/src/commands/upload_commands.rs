@@ -19,7 +19,7 @@
 //! enforced server-side.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_fs::{FilePath, FsExt};
 use tauri_plugin_notification::NotificationExt;
+use tokio::sync::Semaphore;
 
 use crate::auth::AuthManager;
 use crate::error::{AppError, AppResult};
@@ -54,12 +55,20 @@ const STALL_THRESHOLD_MS: i64 = 60_000;
 /// How often the stall monitor re-checks the threshold.
 const STALL_CHECK_SECS: u64 = 5;
 
-/// How many chunks to upload concurrently (in flight at once) within a file.
-/// The server accepts concurrent chunks safely (per-chunk verify, atomic
+/// Default number of chunks to upload concurrently (in flight at once) within a
+/// file. The server accepts concurrent chunks safely (per-chunk verify, atomic
 /// received-count, single-finalizer election), so this just trades a little
-/// memory (`CHUNK_CONCURRENCY × CHUNK_SIZE`) for throughput on high-latency
-/// links.
+/// memory (`concurrency × CHUNK_SIZE`) for throughput on high-latency links.
+///
+/// This is only the **default** — the user can override it (Settings →
+/// Networking), and the override takes effect immediately, even mid-upload, via
+/// [`UploadConcurrency`] resizing the live chunk semaphore.
 const CHUNK_CONCURRENCY: usize = 4;
+
+/// Hard upper bound the user-facing concurrency setting is clamped to. Caps peak
+/// memory (`MAX_CHUNK_CONCURRENCY × CHUNK_SIZE`) and is the `buffer_unordered`
+/// width the live semaphore gates against.
+const MAX_CHUNK_CONCURRENCY: usize = 16;
 
 /// Monotonic job id source (also seeds the per-job notification id).
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -150,6 +159,102 @@ impl UploadControl {
     /// Whether an upload job is currently registered (running).
     fn is_active(&self) -> bool {
         self.slot.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+}
+
+// ── Chunk concurrency (user-tunable, live-resizable) ──────────────────────────
+
+/// The active upload's live concurrency limiter: the chunk semaphore plus the
+/// number of permits currently configured on it (so a resize can compute the
+/// delta to add / forget).
+struct LiveConcurrency {
+    sem: Arc<Semaphore>,
+    applied: usize,
+}
+
+/// Managed state holding the user's desired chunk concurrency (the Networking
+/// setting) and a handle to the running upload's semaphore so a change takes
+/// effect **mid-upload**. One upload runs at a time, so a single live slot
+/// suffices. The target persists across uploads (the next upload starts at it);
+/// the client pushes its stored value on startup via [`uploads_set_concurrency`].
+pub struct UploadConcurrency {
+    /// Desired concurrent chunks (the override target, set from Settings).
+    target: AtomicUsize,
+    /// The active upload's live semaphore + its applied permit count.
+    live: Mutex<Option<LiveConcurrency>>,
+}
+
+impl Default for UploadConcurrency {
+    fn default() -> Self {
+        Self {
+            target: AtomicUsize::new(CHUNK_CONCURRENCY),
+            live: Mutex::new(None),
+        }
+    }
+}
+
+impl UploadConcurrency {
+    /// The current target, clamped to the supported range.
+    fn target(&self) -> usize {
+        self.target
+            .load(Ordering::Acquire)
+            .clamp(1, MAX_CHUNK_CONCURRENCY)
+    }
+
+    /// Set the desired concurrency (clamped) and, if an upload is running, resize
+    /// its live semaphore so the change takes effect immediately. Returns the
+    /// clamped value actually applied.
+    fn set_target(&self, n: usize) -> usize {
+        let n = n.clamp(1, MAX_CHUNK_CONCURRENCY);
+        self.target.store(n, Ordering::Release);
+        if let Ok(mut g) = self.live.lock() {
+            if let Some(live) = g.as_mut() {
+                resize_semaphore(live, n);
+            }
+        }
+        n
+    }
+
+    /// Register the running upload's semaphore (sized to `applied`) so a later
+    /// `set_target` can resize it. Replaces any previous slot.
+    fn register(&self, sem: Arc<Semaphore>, applied: usize) {
+        if let Ok(mut g) = self.live.lock() {
+            *g = Some(LiveConcurrency { sem, applied });
+        }
+    }
+
+    /// Drop the live semaphore handle when the upload ends.
+    fn clear(&self) {
+        if let Ok(mut g) = self.live.lock() {
+            *g = None;
+        }
+    }
+}
+
+/// Grow or shrink a live chunk semaphore to `target` permits. Growing adds
+/// permits immediately; shrinking can't revoke permits already held by in-flight
+/// chunks, so it spawns a task that acquires (and permanently forgets) the
+/// surplus as those chunks finish — converging concurrency down without
+/// interrupting any chunk mid-flight. `applied` is updated optimistically so
+/// back-to-back resizes compute the right delta.
+fn resize_semaphore(live: &mut LiveConcurrency, target: usize) {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    match target.cmp(&live.applied) {
+        Greater => {
+            live.sem.add_permits(target - live.applied);
+            live.applied = target;
+        }
+        Less => {
+            let surplus = (live.applied - target) as u32;
+            live.applied = target;
+            let sem = live.sem.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(permit) = sem.acquire_many_owned(surplus).await {
+                    permit.forget();
+                }
+            });
+        }
+        Equal => {}
     }
 }
 
@@ -1101,6 +1206,21 @@ async fn drive_upload(
     };
     spawn_stall_monitor(app.clone(), auth.clone(), ctl.clone());
 
+    // Dynamic chunk-concurrency gate. Sized to the user's current Networking
+    // setting and registered so a Settings change resizes it **mid-upload** (see
+    // [`UploadConcurrency`]). The per-file `buffer_unordered` below polls up to
+    // `MAX_CHUNK_CONCURRENCY` chunk futures, but each acquires a permit here
+    // *before* reading bytes — so the live permit count is the real concurrency
+    // (and peak memory stays `concurrency × CHUNK_SIZE`), adjustable on the fly.
+    // The `JobCtlGuard` clears the registration on every exit path.
+    let chunk_sem = {
+        let conc = app.state::<UploadConcurrency>();
+        let initial = conc.target();
+        let sem = Arc::new(Semaphore::new(initial));
+        conc.register(sem.clone(), initial);
+        sem
+    };
+
     // If we're picking up a session the server already marked `paused` — typically
     // its stall sweeper paused it while this client was force-quit, and we're now
     // resuming — flip it back to `uploading`. A fresh `JobCtl` has `auto_paused =
@@ -1114,7 +1234,8 @@ async fn drive_upload(
         }
     }
 
-    // Phase 3: upload missing chunks (up to CHUNK_CONCURRENCY in flight). A chunk
+    // Phase 3: upload missing chunks (up to the live `chunk_sem` permit count in
+    // flight — the user-tunable concurrency, resizable mid-upload). A chunk
     // send now retries transient failures **indefinitely** (a ≥60s stall
     // auto-pauses instead of failing), parks while manually paused, and only
     // stops on cancel or a terminal session state.
@@ -1153,8 +1274,8 @@ async fn drive_upload(
         // so the progress counters stay single-writer and need no locking. Each
         // chunk future owns its inputs (so the spawned job stays `Send + 'static`):
         // the source path is shared cheaply via an `Arc`, the chunk bytes are read
-        // from disk inside the future (≤ `CHUNK_CONCURRENCY × CHUNK_SIZE` live at
-        // once), and the per-job `JobCtl` is `Arc`-shared.
+        // from disk inside the future (≤ `concurrency × CHUNK_SIZE` live at once,
+        // gated by `chunk_sem`), and the per-job `JobCtl` is `Arc`-shared.
         let path = std::sync::Arc::new(path);
         let missing: Vec<(u32, u64, u64)> = file_view
             .chunks
@@ -1167,8 +1288,16 @@ async fn drive_upload(
                 let auth = auth.clone();
                 let ctl = ctl.clone();
                 let path = path.clone();
+                let sem = chunk_sem.clone();
                 let len = end - start;
                 async move {
+                    // Acquire a permit *before* reading bytes — this is the live
+                    // concurrency gate. At most the configured number of chunks
+                    // read+send at once, and a Settings change resizes the permit
+                    // pool on the fly. The permit is held until the send finishes
+                    // (we never close the semaphore, so an error can't happen —
+                    // fall through ungated rather than dropping the chunk).
+                    let _permit = sem.acquire_owned().await.ok();
                     let res = match read_range(&path, start, end).await {
                         Ok(bytes) => {
                             send_chunk_resilient(&auth, &ctl, fi as u32, index, bytes).await
@@ -1178,7 +1307,7 @@ async fn drive_upload(
                     (len, res)
                 }
             }))
-            .buffer_unordered(CHUNK_CONCURRENCY);
+            .buffer_unordered(MAX_CHUNK_CONCURRENCY);
 
         while let Some((len, res)) = chunks.next().await {
             match res {
@@ -1625,6 +1754,8 @@ impl Drop for JobCtlGuard {
     fn drop(&mut self) {
         self.ctl.active.store(false, Ordering::Release);
         self.app.state::<UploadControl>().clear();
+        // Drop the live chunk-semaphore handle — the next upload makes its own.
+        self.app.state::<UploadConcurrency>().clear();
     }
 }
 
@@ -1836,6 +1967,17 @@ pub async fn uploads_resume(
     auth.resume_upload(id).await
 }
 
+/// Set how many chunks upload concurrently (Settings → Networking). Clamped to
+/// `1..=MAX_CHUNK_CONCURRENCY`; persists as the target for the next upload and —
+/// if an upload is running — resizes its live concurrency **immediately** (the
+/// change takes effect for the in-progress upload). The client owns the
+/// persisted value (localStorage) and pushes it here on startup + on every
+/// change. Returns the clamped value actually applied.
+#[tauri::command]
+pub async fn uploads_set_concurrency(concurrency: usize, app: AppHandle) -> AppResult<usize> {
+    Ok(app.state::<UploadConcurrency>().set_target(concurrency))
+}
+
 /// Resume an upload left in flight by a previous app session, if any. Call once
 /// on startup (after the session is restored). Returns `true` if a resume was
 /// started. No-ops when there's no manifest or an upload is already active, so
@@ -2014,6 +2156,38 @@ mod tests {
         // Each chunk hash is the sha256 of its slice.
         assert_eq!(f.chunks[1].hash, sha256_hex(&data[CHUNK_SIZE as usize..]));
         assert_eq!(f.hash, sha256_hex(&data));
+    }
+
+    #[test]
+    fn concurrency_target_clamps_to_range() {
+        let c = UploadConcurrency::default();
+        assert_eq!(c.target(), CHUNK_CONCURRENCY, "defaults to the constant");
+        assert_eq!(c.set_target(0), 1, "0 clamps up to 1");
+        assert_eq!(c.target(), 1);
+        assert_eq!(
+            c.set_target(9999),
+            MAX_CHUNK_CONCURRENCY,
+            "over-max clamps down"
+        );
+        assert_eq!(c.target(), MAX_CHUNK_CONCURRENCY);
+        assert_eq!(c.set_target(6), 6, "in-range passes through");
+        assert_eq!(c.target(), 6);
+    }
+
+    #[test]
+    fn resize_semaphore_grows_and_shrinks() {
+        // Grow: permits become available immediately.
+        let mut live = LiveConcurrency {
+            sem: Arc::new(Semaphore::new(2)),
+            applied: 2,
+        };
+        resize_semaphore(&mut live, 5);
+        assert_eq!(live.applied, 5);
+        assert_eq!(live.sem.available_permits(), 5);
+        // Shrink: `applied` drops immediately; the forget runs on a spawned task
+        // (no runtime here), but the bookkeeping is what later resizes rely on.
+        resize_semaphore(&mut live, 3);
+        assert_eq!(live.applied, 3);
     }
 
     #[test]

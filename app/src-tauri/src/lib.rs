@@ -121,6 +121,11 @@ pub fn run() {
             // Pause/cancel control for the active upload job (one at a time).
             app.manage(commands::upload_commands::UploadControl::default());
 
+            // User-tunable chunk concurrency (Settings → Networking). The client
+            // pushes its persisted value on startup via `uploads_set_concurrency`;
+            // a change resizes the in-flight upload's concurrency on the fly.
+            app.manage(commands::upload_commands::UploadConcurrency::default());
+
             // Phase 4 — Playback: start the in-app loopback HTTP server the
             // webview's `<audio>` element streams media from (see
             // `player::server`). Bind synchronously so the port is known before
@@ -318,6 +323,7 @@ pub fn run() {
             commands::upload_commands::uploads_cancel,
             commands::upload_commands::uploads_pause,
             commands::upload_commands::uploads_resume,
+            commands::upload_commands::uploads_set_concurrency,
             commands::upload_commands::uploads_resume_pending,
             commands::upload_commands::uploads_subscribe,
             // Android "All files access" (MANAGE_EXTERNAL_STORAGE) check + request.

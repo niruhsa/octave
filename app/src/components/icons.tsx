@@ -125,6 +125,16 @@ export const UploadIcon = (p: IconProps) => (
   </Line>
 );
 
+/** Wi-Fi arcs — networking. */
+export const NetworkIcon = (p: IconProps) => (
+  <Line {...p}>
+    <path d="M2.4 6.2a8 8 0 0 1 11.2 0" />
+    <path d="M4.4 8.6a5 5 0 0 1 7.2 0" />
+    <path d="M6.4 11a2.2 2.2 0 0 1 3.2 0" />
+    <path d="M8 13.4h0.01" />
+  </Line>
+);
+
 export const GearIcon = (p: IconProps) => (
   <Line sw={1.2} {...p}>
     <circle cx="8" cy="8" r="2.2" />

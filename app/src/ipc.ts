@@ -1192,6 +1192,14 @@ export const uploadsResume = (id: string) =>
   invoke<UploadReport>("uploads_resume", { id });
 
 /**
+ * Set how many file chunks upload concurrently (Settings → Networking). Clamped
+ * server-side to `1..=16`; takes effect immediately, resizing an in-flight
+ * upload's concurrency on the fly. Returns the value actually applied.
+ */
+export const uploadsSetConcurrency = (concurrency: number) =>
+  invoke<number>("uploads_set_concurrency", { concurrency });
+
+/**
  * Resume an upload left in flight by a previous app session (after an accidental
  * kill). No-ops if there's nothing to resume or an upload is already running.
  * Returns true if a resume was started; progress arrives over the usual events.

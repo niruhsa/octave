@@ -20,16 +20,23 @@ import {
   type CommandId,
 } from "../settings/keybinds";
 import { btnGhostSm, card, label } from "../lib/ui";
-import { KeyIcon, PodcastIcon, SearchIcon } from "../components/icons";
+import { KeyIcon, NetworkIcon, PodcastIcon, SearchIcon } from "../components/icons";
 import { useQuickSearchStore } from "../quicksearch/store";
 import { usePodcastPrefsStore } from "../podcasts/prefs";
+import {
+  DEFAULT_CHUNK_CONCURRENCY,
+  MAX_CHUNK_CONCURRENCY,
+  MIN_CHUNK_CONCURRENCY,
+  useNetworkPrefsStore,
+} from "../settings/network";
 
-type SectionId = "keybinds" | "quicksearch" | "podcasts";
+type SectionId = "keybinds" | "quicksearch" | "podcasts" | "networking";
 
 const SECTIONS: { id: SectionId; label: string; Icon: typeof KeyIcon }[] = [
   { id: "keybinds", label: "Keybinds & Hotkeys", Icon: KeyIcon },
   { id: "quicksearch", label: "Quick Search", Icon: SearchIcon },
   { id: "podcasts", label: "Podcasts", Icon: PodcastIcon },
+  { id: "networking", label: "Networking", Icon: NetworkIcon },
 ];
 
 export default function Settings() {
@@ -63,6 +70,7 @@ export default function Settings() {
           {section === "keybinds" && <KeybindsSection />}
           {section === "quicksearch" && <QuickSearchSection />}
           {section === "podcasts" && <PodcastsSection />}
+          {section === "networking" && <NetworkingSection />}
         </div>
       </div>
     </section>
@@ -336,6 +344,74 @@ function PodcastsSection() {
             on={openAfterSubscribe}
             onChange={(v) => setPref("openAfterSubscribe", v)}
           />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Networking section
+// ---------------------------------------------------------------------------
+
+function NetworkingSection() {
+  const concurrency = useNetworkPrefsStore((s) => s.prefs.chunkConcurrency);
+  const setPref = useNetworkPrefsStore((s) => s.setPref);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[13px] leading-relaxed text-oct-subtle">
+        Tune how OCTAVE talks to your server while uploading. Changes apply right
+        away — including to an upload that's already in progress.
+      </p>
+
+      <div className="flex flex-col gap-2">
+        <div className={label}>UPLOADS</div>
+        <div className={`${card} divide-y divide-oct-border`}>
+          <div className="flex flex-col gap-3 px-4 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-[13.5px] text-oct-text">
+                  Chunk upload concurrency
+                </div>
+                <div className="text-[11.5px] text-oct-faint">
+                  How many file chunks upload in parallel. Higher can be faster on
+                  high-latency links but uses more memory and bandwidth. Default{" "}
+                  {DEFAULT_CHUNK_CONCURRENCY}.
+                </div>
+              </div>
+              <span className="shrink-0 rounded-lg bg-oct-elevated px-2.5 py-1 font-mono text-[13px] text-oct-text">
+                {concurrency}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={MIN_CHUNK_CONCURRENCY}
+                max={MAX_CHUNK_CONCURRENCY}
+                step={1}
+                value={concurrency}
+                onChange={(e) =>
+                  setPref("chunkConcurrency", Number(e.target.value))
+                }
+                className="oct-range flex-1"
+                aria-label="Chunk upload concurrency"
+              />
+              <button
+                onClick={() =>
+                  setPref("chunkConcurrency", DEFAULT_CHUNK_CONCURRENCY)
+                }
+                disabled={concurrency === DEFAULT_CHUNK_CONCURRENCY}
+                className={`${btnGhostSm} shrink-0`}
+              >
+                Reset
+              </button>
+            </div>
+            <div className="flex justify-between font-mono text-[10.5px] text-oct-faint">
+              <span>{MIN_CHUNK_CONCURRENCY}</span>
+              <span>{MAX_CHUNK_CONCURRENCY}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -34,6 +34,7 @@ import MobileTopBar from "./components/MobileTopBar";
 import PlayerBar from "./components/PlayerBar";
 import QuickSearch from "./components/QuickSearch";
 import { authSession, uploadsResumePending } from "./ipc";
+import { syncNetworkPrefs } from "./settings/network";
 import { useAppStore } from "./store";
 import { useSyncScheduler } from "./sync/useSync";
 import { useDownloadListener } from "./downloads/useDownloads";
@@ -207,6 +208,13 @@ function RootLayout() {
   useEffect(() => {
     if (session) void uploadsResumePending().catch(() => {});
   }, [session]);
+
+  // Push the persisted Networking prefs (chunk upload concurrency) to the
+  // backend on startup, so an upload honours the user's setting from the first
+  // chunk — before they ever open Settings this run.
+  useEffect(() => {
+    syncNetworkPrefs();
+  }, []);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-oct-bg text-oct-text">
