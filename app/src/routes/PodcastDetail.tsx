@@ -14,7 +14,7 @@ import {
   type LibraryView,
   type MergedEpisode,
 } from "../ipc";
-import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
+import { SourceBadge } from "../components/SourceBadge";
 import { DownloadStatus } from "../components/DownloadStatus";
 import { DownloadIcon, PlayIcon, PodcastIcon, SearchIcon, TrashIcon } from "../components/icons";
 import { EqBars } from "../components/EqBars";
@@ -52,6 +52,88 @@ const SORT_OPTIONS: { value: EpisodeSort; label: string }[] = [
 
 /** Episodes shown per page; the first is the default. */
 const PAGE_SIZES = [10, 25, 50, 75, 100] as const;
+
+/**
+ * Trailing watch-state indicator for an episode row:
+ *   • new / unwatched (never started) → solid orange dot
+ *   • started but not finished        → play-progress ring (mirrors the download
+ *                                        ring, with a play glyph + the played arc)
+ *   • finished                        → muted grey dot
+ */
+function EpisodeWatchStatus({
+  completed,
+  positionMs,
+  durationMs,
+}: {
+  completed: boolean;
+  positionMs: number;
+  durationMs: number;
+}) {
+  if (completed) {
+    return (
+      <span
+        className="inline-block h-2 w-2 shrink-0 rounded-full bg-oct-faint"
+        title="Played"
+      />
+    );
+  }
+  const pct = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
+  const partway = positionMs > 0 && pct < 0.999;
+  if (!partway) {
+    return (
+      <span
+        className="inline-block h-2 w-2 shrink-0 rounded-full bg-oct-accent"
+        title="New — not played yet"
+      />
+    );
+  }
+  // Play-progress ring — same geometry as the download ring, play glyph inside.
+  const size = 16;
+  const sw = 2;
+  const r = (size - sw) / 2;
+  const c = 2 * Math.PI * r;
+  const shown = Math.max(0.05, Math.min(1, pct));
+  return (
+    <span
+      className="relative grid shrink-0 place-items-center"
+      style={{ width: size, height: size }}
+      title={`${Math.round(pct * 100)}% played`}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        style={{ transform: "rotate(-90deg)" }}
+      >
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={sw}
+          className="text-oct-line"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={sw}
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - shown)}
+          className="text-oct-accent"
+        />
+      </svg>
+      <PlayIcon
+        size={8}
+        className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-oct-accent"
+      />
+    </span>
+  );
+}
 
 export default function PodcastDetail() {
   const { id = "" } = useParams();
@@ -377,13 +459,11 @@ export default function PodcastDetail() {
               const live = active[ep.id];
               const inProgress = (live && !live.error) || pendingIds[ep.id];
               const playingThis = nowPlayingId === ep.id;
-              // Listened / resume state. `pct` only meaningful with a known
-              // duration; "in progress" means started-but-not-finished.
+              // Watch state for the trailing indicator: started-but-unfinished
+              // shows a play-progress ring; "Resume" tooltip on the play button.
               const dur = ep.duration_ms ?? 0;
               const pos = ep.position_ms ?? 0;
-              const pct = dur > 0 ? Math.min(1, pos / dur) : 0;
-              const partway = !ep.completed && pos > 0 && pct < 0.999;
-              const remainingMs = partway && dur > 0 ? dur - pos : 0;
+              const partway = !ep.completed && pos > 0 && (dur === 0 || pos < dur * 0.999);
               return (
                 <li key={ep.id} className="flex items-center gap-3 p-3">
                   <button
@@ -411,23 +491,12 @@ export default function PodcastDetail() {
                           {formatDuration(ep.duration_ms)}
                         </span>
                       )}
-                      {ep.completed ? (
-                        <span className="text-oct-accent">· Played ✓</span>
-                      ) : partway ? (
-                        <span className="text-oct-accent">
-                          · {formatDuration(remainingMs)} left
-                        </span>
-                      ) : null}
-                      <DownloadedDot downloaded={ep.downloaded} />
+                      <EpisodeWatchStatus
+                        completed={ep.completed}
+                        positionMs={pos}
+                        durationMs={dur}
+                      />
                     </div>
-                    {partway && (
-                      <div className="mt-1.5 h-[3px] w-full max-w-[180px] overflow-hidden rounded-full bg-oct-line">
-                        <div
-                          className="h-full rounded-full bg-oct-accent"
-                          style={{ width: `${Math.round(pct * 100)}%` }}
-                        />
-                      </div>
-                    )}
                   </div>
                   {ep.downloaded ? (
                     <button
