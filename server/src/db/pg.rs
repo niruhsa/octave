@@ -2083,6 +2083,51 @@ impl PodcastSubscriptionRepo for PgRepos {
                 .map_err(db)?;
         Ok(rows.into_iter().map(|(p,)| p).collect())
     }
+
+    async fn upsert_progress(
+        &self,
+        user_id: Uuid,
+        episode_id: Uuid,
+        position_ms: i64,
+        completed: bool,
+    ) -> Result<EpisodeProgress> {
+        let row: EpisodeProgress = sqlx::query_as(
+            "INSERT INTO podcast_episode_progress (user_id, episode_id, position_ms, completed, updated_at) \
+             VALUES ($1, $2, $3, $4, now()) \
+             ON CONFLICT (user_id, episode_id) DO UPDATE SET \
+                 position_ms = EXCLUDED.position_ms, \
+                 completed   = EXCLUDED.completed, \
+                 updated_at  = now() \
+             RETURNING episode_id, position_ms, completed, updated_at",
+        )
+        .bind(user_id)
+        .bind(episode_id)
+        .bind(position_ms.max(0))
+        .bind(completed)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row)
+    }
+
+    async fn progress_for_podcast(
+        &self,
+        user_id: Uuid,
+        podcast_id: Uuid,
+    ) -> Result<Vec<EpisodeProgress>> {
+        let rows: Vec<EpisodeProgress> = sqlx::query_as(
+            "SELECT pr.episode_id, pr.position_ms, pr.completed, pr.updated_at \
+             FROM podcast_episode_progress pr \
+             JOIN podcast_episodes e ON e.id = pr.episode_id \
+             WHERE pr.user_id = $1 AND e.podcast_id = $2",
+        )
+        .bind(user_id)
+        .bind(podcast_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows)
+    }
 }
 
 // ---------------------------------------------------------------------------

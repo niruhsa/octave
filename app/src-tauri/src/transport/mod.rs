@@ -397,6 +397,16 @@ pub struct PodcastEpisode {
     pub downloaded: bool,
 }
 
+/// The caller's playback progress on one episode (server's view). Mirrors the
+/// `EpisodeProgress` proto / REST DTO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodeProgress {
+    pub episode_id: String,
+    pub position_ms: i64,
+    pub completed: bool,
+    pub updated_at: String,
+}
+
 /// Outcome of a feed refresh.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshReport {

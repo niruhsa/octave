@@ -10,11 +10,11 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, LibraryStorage, MetadataEdit,
-    PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast, PodcastCandidate,
-    PodcastEpisode,
-    RefreshReport, RescanReport, ServerConfig, SingleUploadResult, Track, UploadEvent,
-    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, EpisodeProgress, LibraryStorage,
+    MetadataEdit, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
+    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig, SingleUploadResult,
+    Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
+    UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -1217,6 +1217,55 @@ impl RestClient {
         Ok(body.podcasts.into_iter().map(Into::into).collect())
     }
 
+    pub async fn record_episode_progress(
+        &self,
+        cred: &Credential,
+        episode_id: &str,
+        position_ms: i64,
+        completed: bool,
+    ) -> AppResult<EpisodeProgress> {
+        let url = format!("{}/podcasts/episodes/{episode_id}/progress", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "position_ms": position_ms, "completed": completed }))
+            .send()
+            .await
+            .map_err(rest_err("record_episode_progress"))?;
+        let body: ProgressJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("record_episode_progress decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn list_episode_progress(
+        &self,
+        cred: &Credential,
+        podcast_id: &str,
+    ) -> AppResult<Vec<EpisodeProgress>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            progress: Vec<ProgressJson>,
+        }
+        let url = format!("{}/podcasts/{podcast_id}/progress", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_episode_progress"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_episode_progress decode"))?;
+        Ok(body.progress.into_iter().map(Into::into).collect())
+    }
+
     // ----- Image upload (Phase 9; Manager+ gated, REST-only binary blob) ----
 
     /// `POST /albums/:id/cover` — raw `image/*` body. Returns `()`; the caller
@@ -1930,6 +1979,24 @@ impl From<EpisodeJson> for PodcastEpisode {
             image_url: e.image_url,
             published_at: e.published_at,
             downloaded: e.downloaded,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ProgressJson {
+    episode_id: String,
+    position_ms: i64,
+    completed: bool,
+    updated_at: String,
+}
+impl From<ProgressJson> for EpisodeProgress {
+    fn from(p: ProgressJson) -> Self {
+        Self {
+            episode_id: p.episode_id,
+            position_ms: p.position_ms,
+            completed: p.completed,
+            updated_at: p.updated_at,
         }
     }
 }

@@ -522,6 +522,10 @@ export type MergedEpisode = {
   local_file_path: string | null;
   server_downloaded: boolean;
   downloaded: boolean;
+  /** Last playback position in ms (0 = not started). Drives "resume". */
+  position_ms: number;
+  /** Played to (near) the end — shown as "listened". */
+  completed: boolean;
 };
 
 /** Outcome of a feed refresh. */
@@ -548,6 +552,19 @@ export const podcastGet = (id: string) =>
  *  whole feed; the server caps a single response at 200). */
 export const podcastListEpisodes = (podcastId: string) =>
   invoke<LibraryView<MergedEpisode>>("podcast_list_episodes", { podcastId });
+
+/** Record playback progress for an episode (last position + whether finished).
+ *  Writes the local cache immediately and pushes to the server best-effort. */
+export const podcastRecordProgress = (
+  episodeId: string,
+  positionMs: number,
+  completed: boolean,
+) =>
+  invoke<void>("podcast_record_progress", {
+    episodeId,
+    positionMs: Math.max(0, Math.round(positionMs)),
+    completed,
+  });
 
 /** Subscribe a feed to the catalog by feed URL, or by an iTunes id to resolve.
  *  Manager+ server-side. */

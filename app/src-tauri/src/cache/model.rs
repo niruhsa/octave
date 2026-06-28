@@ -149,3 +149,14 @@ pub struct PodcastEpisode {
     pub downloaded_at: Option<String>,
     pub updated_at: String,
 }
+
+/// The single user's playback progress on one episode. Mirrors the server's
+/// per-user `EpisodeProgress`, minus the user_id (the client is one account).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PodcastEpisodeProgress {
+    pub episode_id: String,
+    pub position_ms: i64,
+    /// 1 = played to (near) the end. Stored as INTEGER in SQLite.
+    pub completed: i64,
+    pub updated_at: String,
+}

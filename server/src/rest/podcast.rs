@@ -38,11 +38,13 @@ pub fn router() -> Router<RestState> {
             "/podcasts/episodes/:eid/stream",
             get(stream_episode).head(stream_episode),
         )
+        .route("/podcasts/episodes/:eid/progress", put(record_progress))
         // Per-show
         .route("/podcasts/:id", get(get_podcast).delete(delete_podcast))
         .route("/podcasts/:id/refresh", post(refresh_podcast))
         .route("/podcasts/:id/auto-download", put(set_auto_download))
         .route("/podcasts/:id/episodes", get(list_episodes))
+        .route("/podcasts/:id/progress", get(list_progress))
         .route(
             "/podcasts/:id/subscribe",
             post(subscribe).delete(unsubscribe).get(is_subscribed),
@@ -338,6 +340,58 @@ async fn stream_episode(
     let method = req.method().clone();
     let resolved = state.streaming.resolve_episode(&caller, eid).await?;
     crate::rest::streaming::serve_resolved(resolved, &headers, method).await
+}
+
+// ---------------------------------------------------------------------------
+// Episode playback progress
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct ProgressDto {
+    pub episode_id: String,
+    pub position_ms: i64,
+    pub completed: bool,
+    pub updated_at: String,
+}
+fn progress_dto(p: m::EpisodeProgress) -> ProgressDto {
+    ProgressDto {
+        episode_id: p.episode_id.to_string(),
+        position_ms: p.position_ms,
+        completed: p.completed,
+        updated_at: rfc3339(p.updated_at),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RecordProgressBody {
+    pub position_ms: i64,
+    #[serde(default)]
+    pub completed: bool,
+}
+
+async fn record_progress(
+    State(state): State<RestState>,
+    Path(eid): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<ProgressDto>, ApiError> {
+    let caller = caller_id(&req)?;
+    let body: RecordProgressBody = crate::rest::parse_json(req).await?;
+    let p = svc(&state)?
+        .record_progress(&caller, eid, body.position_ms, body.completed)
+        .await?;
+    Ok(Json(progress_dto(p)))
+}
+
+async fn list_progress(
+    State(state): State<RestState>,
+    Path(id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let caller = caller_id(&req)?;
+    let items = svc(&state)?.list_progress(&caller, id).await?;
+    Ok(Json(serde_json::json!({
+        "progress": items.into_iter().map(progress_dto).collect::<Vec<_>>(),
+    })))
 }
 
 // ---------------------------------------------------------------------------

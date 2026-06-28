@@ -40,12 +40,11 @@ use super::proto::notification as npb;
 use super::proto::podcast::podcast_service_client::PodcastServiceClient;
 use super::proto::podcast as ppb;
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, LibraryStorage, MetadataEdit,
-    Notification, NotificationPage, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks,
-    Podcast,
-    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig,
-    SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView, UploadInitRequest,
-    UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, EpisodeProgress, LibraryStorage,
+    MetadataEdit, Notification, NotificationPage, PermissionTier, Playlist, PlaylistTrack,
+    PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
+    ServerConfig, SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView,
+    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -1090,6 +1089,46 @@ impl GrpcClient {
         Ok(resp.podcasts.into_iter().map(podcast_from_proto).collect())
     }
 
+    pub async fn record_episode_progress(
+        &self,
+        cred: &Credential,
+        episode_id: &str,
+        position_ms: i64,
+        completed: bool,
+    ) -> AppResult<EpisodeProgress> {
+        let mut req = Request::new(ppb::RecordEpisodeProgressRequest {
+            episode_id: episode_id.to_string(),
+            position_ms,
+            completed,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .record_episode_progress(req)
+            .await
+            .map_err(map_mutation_err("record_episode_progress"))?
+            .into_inner();
+        Ok(progress_from_proto(resp))
+    }
+
+    pub async fn list_episode_progress(
+        &self,
+        cred: &Credential,
+        podcast_id: &str,
+    ) -> AppResult<Vec<EpisodeProgress>> {
+        let mut req = Request::new(ppb::ListEpisodeProgressRequest {
+            podcast_id: podcast_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .podcasts()
+            .list_episode_progress(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_episode_progress: {s}")))?
+            .into_inner();
+        Ok(resp.progress.into_iter().map(progress_from_proto).collect())
+    }
+
     // ----- Playlists (sync pull + push) ----------------------------------
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
@@ -1803,6 +1842,15 @@ fn episode_from_proto(e: ppb::Episode) -> PodcastEpisode {
         image_url: opt_str(e.image_url),
         published_at: opt_str(e.published_at),
         downloaded: e.downloaded,
+    }
+}
+
+fn progress_from_proto(p: ppb::EpisodeProgress) -> EpisodeProgress {
+    EpisodeProgress {
+        episode_id: p.episode_id,
+        position_ms: p.position_ms,
+        completed: p.completed,
+        updated_at: p.updated_at,
     }
 }
 

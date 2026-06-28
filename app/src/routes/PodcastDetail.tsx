@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -50,6 +50,9 @@ const SORT_OPTIONS: { value: EpisodeSort; label: string }[] = [
   { value: "shortest", label: "Shortest" },
 ];
 
+/** Episodes shown per page; the first is the default. */
+const PAGE_SIZES = [10, 25, 50, 75, 100] as const;
+
 export default function PodcastDetail() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -83,6 +86,8 @@ export default function PodcastDetail() {
   const downloadStarted = useRef<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<EpisodeSort>("newest");
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]);
+  const [page, setPage] = useState(1);
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["podcasts", "episodes", id] });
@@ -150,8 +155,22 @@ export default function PodcastDetail() {
     });
   }, [episodes, query, sort]);
 
-  // Play from the list as it's currently shown, so the queue order (and what
-  // "next" plays) matches the active search + sort.
+  // Paginate the filtered/sorted list. `page` is 1-based; clamp it so a shrinking
+  // result set (new search) or a larger page size can't strand us past the end.
+  const pageCount = Math.max(1, Math.ceil(visibleEpisodes.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const pagedEpisodes = useMemo(
+    () => visibleEpisodes.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [visibleEpisodes, safePage, pageSize],
+  );
+
+  // Jump back to the first page whenever the result set or page size changes, so
+  // the user isn't left on an empty/stale page.
+  useEffect(() => setPage(1), [query, sort, pageSize]);
+
+  // Play from the full filtered/sorted series (not just the visible page), so the
+  // queue order — and what "next" plays — matches the active search + sort and
+  // continues past the page boundary.
   const play = (ep: MergedEpisode) => {
     const items = visibleEpisodes.map(episodeToQueueItem);
     const start = Math.max(0, items.findIndex((i) => i.id === ep.id));
@@ -331,6 +350,18 @@ export default function PodcastDetail() {
                 </option>
               ))}
             </select>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              aria-label="Episodes per page"
+              className="shrink-0 rounded-lg border border-oct-border-strong bg-oct-card px-2.5 py-2 text-sm text-oct-text focus:border-oct-accent focus:outline-none"
+            >
+              {PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n} / page
+                </option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -342,21 +373,34 @@ export default function PodcastDetail() {
           <p className="text-sm text-oct-dim">No episodes match “{query.trim()}”.</p>
         ) : (
           <ul className={`${card} divide-y divide-oct-border`}>
-            {visibleEpisodes.map((ep) => {
+            {pagedEpisodes.map((ep) => {
               const live = active[ep.id];
               const inProgress = (live && !live.error) || pendingIds[ep.id];
               const playingThis = nowPlayingId === ep.id;
+              // Listened / resume state. `pct` only meaningful with a known
+              // duration; "in progress" means started-but-not-finished.
+              const dur = ep.duration_ms ?? 0;
+              const pos = ep.position_ms ?? 0;
+              const pct = dur > 0 ? Math.min(1, pos / dur) : 0;
+              const partway = !ep.completed && pos > 0 && pct < 0.999;
+              const remainingMs = partway && dur > 0 ? dur - pos : 0;
               return (
                 <li key={ep.id} className="flex items-center gap-3 p-3">
                   <button
                     onClick={() => play(ep)}
                     className="grid h-8 w-8 place-items-center rounded-full bg-oct-panel text-oct-text hover:bg-oct-border-strong shrink-0"
-                    title="Play"
+                    title={partway ? "Resume" : "Play"}
                   >
                     {playingThis && isPlaying ? <EqBars /> : <PlayIcon size={14} />}
                   </button>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{ep.title}</div>
+                    <div
+                      className={`truncate text-sm font-medium ${
+                        ep.completed ? "text-oct-subtle" : ""
+                      }`}
+                    >
+                      {ep.title}
+                    </div>
                     <div className="flex items-center gap-2 text-[11px] text-oct-faint">
                       {ep.published_at && (
                         <span className="text-oct-dim">{fmtDate(ep.published_at)}</span>
@@ -367,8 +411,23 @@ export default function PodcastDetail() {
                           {formatDuration(ep.duration_ms)}
                         </span>
                       )}
+                      {ep.completed ? (
+                        <span className="text-oct-accent">· Played ✓</span>
+                      ) : partway ? (
+                        <span className="text-oct-accent">
+                          · {formatDuration(remainingMs)} left
+                        </span>
+                      ) : null}
                       <DownloadedDot downloaded={ep.downloaded} />
                     </div>
+                    {partway && (
+                      <div className="mt-1.5 h-[3px] w-full max-w-[180px] overflow-hidden rounded-full bg-oct-line">
+                        <div
+                          className="h-full rounded-full bg-oct-accent"
+                          style={{ width: `${Math.round(pct * 100)}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
                   {ep.downloaded ? (
                     <button
@@ -400,6 +459,36 @@ export default function PodcastDetail() {
               );
             })}
           </ul>
+        )}
+
+        {/* pagination — only when the filtered list spills past one page */}
+        {!epQ.isLoading && visibleEpisodes.length > pageSize && (
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <span className="font-mono text-[10.5px] text-oct-faint">
+              {(safePage - 1) * pageSize + 1}–
+              {Math.min(safePage * pageSize, visibleEpisodes.length)} of{" "}
+              {visibleEpisodes.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                className={btnGhostSm}
+                onClick={() => setPage(Math.max(1, safePage - 1))}
+                disabled={safePage <= 1}
+              >
+                Prev
+              </button>
+              <span className="text-[11px] text-oct-subtle">
+                Page {safePage} / {pageCount}
+              </span>
+              <button
+                className={btnGhostSm}
+                onClick={() => setPage(Math.min(pageCount, safePage + 1))}
+                disabled={safePage >= pageCount}
+              >
+                Next
+              </button>
+            </div>
+          </div>
         )}
       </section>
     </div>

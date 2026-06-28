@@ -13,7 +13,7 @@ use sqlx::SqlitePool;
 
 use crate::cache::model::{
     Album, AlbumArt, Artist, PendingOp, Playlist, PlaylistTrack, Podcast, PodcastEpisode,
-    SyncState, Track,
+    PodcastEpisodeProgress, SyncState, Track,
 };
 use crate::error::AppResult;
 
@@ -842,12 +842,125 @@ pub async fn upsert_episode_meta(pool: &SqlitePool, e: &PodcastEpisode) -> AppRe
     Ok(())
 }
 
+/// Batch [`upsert_episode_meta`] in a single transaction — one `BEGIN`/`COMMIT`
+/// for the whole page instead of an autocommit per row, which is what makes the
+/// first sync of a large feed fast (and keeps a steady-state sync cheap). Empty
+/// input is a no-op (no transaction).
+pub async fn upsert_episodes_meta_batch(
+    pool: &SqlitePool,
+    episodes: &[PodcastEpisode],
+) -> AppResult<()> {
+    if episodes.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    for e in episodes {
+        sqlx::query(
+            r#"
+            INSERT INTO podcast_episodes
+                (id, podcast_id, guid, title, description, enclosure_url, episode_no,
+                 season_no, duration_ms, published_at, metadata_json, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(id) DO UPDATE SET
+                podcast_id    = excluded.podcast_id,
+                guid          = excluded.guid,
+                title         = excluded.title,
+                description   = excluded.description,
+                enclosure_url = excluded.enclosure_url,
+                episode_no    = excluded.episode_no,
+                season_no     = excluded.season_no,
+                duration_ms   = CASE WHEN podcast_episodes.local_file_path IS NOT NULL
+                                     THEN podcast_episodes.duration_ms
+                                     ELSE excluded.duration_ms END,
+                published_at  = excluded.published_at,
+                updated_at    = excluded.updated_at
+            "#,
+        )
+        .bind(&e.id)
+        .bind(&e.podcast_id)
+        .bind(&e.guid)
+        .bind(&e.title)
+        .bind(&e.description)
+        .bind(&e.enclosure_url)
+        .bind(e.episode_no)
+        .bind(e.season_no)
+        .bind(e.duration_ms)
+        .bind(&e.published_at)
+        .bind(&e.metadata_json)
+        .bind(&e.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn delete_episode(pool: &SqlitePool, id: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM podcast_episodes WHERE id = ?1")
         .bind(id)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+// ----- episode playback progress ------------------------------------------
+
+/// Upsert the listener's progress on one episode (last position + completed).
+pub async fn upsert_episode_progress(
+    pool: &SqlitePool,
+    episode_id: &str,
+    position_ms: i64,
+    completed: bool,
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO podcast_episode_progress (episode_id, position_ms, completed, updated_at)
+        VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        ON CONFLICT(episode_id) DO UPDATE SET
+            position_ms = excluded.position_ms,
+            completed   = excluded.completed,
+            updated_at  = excluded.updated_at
+        "#,
+    )
+    .bind(episode_id)
+    .bind(position_ms.max(0))
+    .bind(if completed { 1 } else { 0 })
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// One episode's cached progress, if any.
+pub async fn get_episode_progress(
+    pool: &SqlitePool,
+    episode_id: &str,
+) -> AppResult<Option<PodcastEpisodeProgress>> {
+    let row = sqlx::query_as::<_, PodcastEpisodeProgress>(
+        "SELECT episode_id, position_ms, completed, updated_at \
+         FROM podcast_episode_progress WHERE episode_id = ?1",
+    )
+    .bind(episode_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// All cached progress rows for one show's episodes (joined via the episode
+/// table, which carries `podcast_id`). Drives the list's listened/resume markers.
+pub async fn list_episode_progress_for_podcast(
+    pool: &SqlitePool,
+    podcast_id: &str,
+) -> AppResult<Vec<PodcastEpisodeProgress>> {
+    let rows = sqlx::query_as::<_, PodcastEpisodeProgress>(
+        "SELECT pr.episode_id, pr.position_ms, pr.completed, pr.updated_at \
+         FROM podcast_episode_progress pr \
+         JOIN podcast_episodes e ON e.id = pr.episode_id \
+         WHERE e.podcast_id = ?1",
+    )
+    .bind(podcast_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 /// Drop metadata-only episodes (not downloaded) whose guid isn't in `keep`.

@@ -263,6 +263,7 @@ pub fn run() {
             commands::podcast_commands::podcast_list,
             commands::podcast_commands::podcast_get,
             commands::podcast_commands::podcast_list_episodes,
+            commands::podcast_commands::podcast_record_progress,
             commands::podcast_commands::podcast_subscribe_feed,
             commands::podcast_commands::podcast_subscribe,
             commands::podcast_commands::podcast_unsubscribe,

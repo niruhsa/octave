@@ -57,6 +57,12 @@ pub struct MergedEpisode {
     pub server_downloaded: bool,
     /// The client has it downloaded for offline use.
     pub downloaded: bool,
+    /// Last playback position in ms (0 = not started). Drives "resume".
+    #[serde(default)]
+    pub position_ms: i64,
+    /// Played to (near) the end — shown as "listened".
+    #[serde(default)]
+    pub completed: bool,
 }
 
 impl MergedPodcast {
@@ -136,6 +142,8 @@ impl MergedEpisode {
             local_file_path: e.local_file_path,
             server_downloaded,
             downloaded,
+            position_ms: 0,
+            completed: false,
         }
     }
 }

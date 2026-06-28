@@ -399,11 +399,29 @@ pub trait StorageRepo: Send + Sync {
     async fn get_library_storage(&self) -> Result<LibraryStorage>;
 }
 
-/// Podcast subscriptions (user → show). Structurally identical to [`FollowRepo`].
+/// Podcast subscriptions (user → show) plus per-user episode playback progress —
+/// both are per-user podcast state keyed on the caller. Subscriptions are
+/// structurally identical to [`FollowRepo`].
 #[async_trait]
 pub trait PodcastSubscriptionRepo: Send + Sync {
     async fn subscribe(&self, user_id: Uuid, podcast_id: Uuid) -> Result<()>;
     async fn unsubscribe(&self, user_id: Uuid, podcast_id: Uuid) -> Result<()>;
     async fn subscribers_of(&self, podcast_id: Uuid) -> Result<Vec<Uuid>>;
     async fn subscriptions(&self, user_id: Uuid) -> Result<Vec<Uuid>>;
+
+    /// Upsert the caller's playback progress for one episode (last position +
+    /// whether it's been completed). Returns the stored row.
+    async fn upsert_progress(
+        &self,
+        user_id: Uuid,
+        episode_id: Uuid,
+        position_ms: i64,
+        completed: bool,
+    ) -> Result<EpisodeProgress>;
+    /// Every progress row the caller has for one show's episodes.
+    async fn progress_for_podcast(
+        &self,
+        user_id: Uuid,
+        podcast_id: Uuid,
+    ) -> Result<Vec<EpisodeProgress>>;
 }

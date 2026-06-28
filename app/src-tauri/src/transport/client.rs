@@ -11,11 +11,10 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, LibraryStorage, MetadataEdit, NotificationPage,
-    PermissionTier, Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode,
-    RefreshReport, RescanReport,
-    ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
-    UploadSummary, UploadView,
+    Album, Artist, ChunkAck, Credential, EpisodeProgress, LibraryStorage, MetadataEdit,
+    NotificationPage, PermissionTier, Playlist, PlaylistWithTracks, Podcast, PodcastCandidate,
+    PodcastEpisode, RefreshReport, RescanReport, ServerConfig, Track, UploadEvent,
+    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -876,6 +875,43 @@ impl ServerClient {
             }
         }
         self.rest.list_subscriptions(cred).await
+    }
+
+    pub async fn record_episode_progress(
+        &self,
+        cred: &Credential,
+        episode_id: &str,
+        position_ms: i64,
+        completed: bool,
+    ) -> AppResult<EpisodeProgress> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .record_episode_progress(cred, episode_id, position_ms, completed)
+                .await
+            {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("record_episode_progress", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest
+            .record_episode_progress(cred, episode_id, position_ms, completed)
+            .await
+    }
+
+    pub async fn list_episode_progress(
+        &self,
+        cred: &Credential,
+        podcast_id: &str,
+    ) -> AppResult<Vec<EpisodeProgress>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_episode_progress(cred, podcast_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_episode_progress", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_episode_progress(cred, podcast_id).await
     }
 
     // ----- Image upload (Phase 9) ------------------------------------------

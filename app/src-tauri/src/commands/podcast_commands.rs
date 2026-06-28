@@ -70,6 +70,17 @@ pub async fn podcast_list_episodes(
 }
 
 #[tauri::command]
+pub async fn podcast_record_progress(
+    state: State<'_, AppStateHandle>,
+    episode_id: String,
+    position_ms: i64,
+    completed: bool,
+) -> AppResult<()> {
+    let svc = service(&state).await?;
+    svc.record_progress(&episode_id, position_ms, completed).await
+}
+
+#[tauri::command]
 pub async fn podcast_subscribe_feed(
     state: State<'_, AppStateHandle>,
     feed_url: Option<String>,

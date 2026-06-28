@@ -560,6 +560,17 @@ pub struct PodcastSubscription {
     pub created_at: OffsetDateTime,
 }
 
+/// A user's playback progress on one episode: how far in they are (`position_ms`)
+/// and whether they've finished it (`completed`). Drives "continue where you left
+/// off" and the listened/in-progress markers in the episode list.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct EpisodeProgress {
+    pub episode_id: Uuid,
+    pub position_ms: i64,
+    pub completed: bool,
+    pub updated_at: OffsetDateTime,
+}
+
 /// Upsert-shape for a podcast (the feed-derived metadata). `id`/refresh
 /// bookkeeping/`image_path` are owned by the DB / service, not the feed.
 #[derive(Debug, Clone, Default)]

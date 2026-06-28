@@ -11,7 +11,7 @@
 
 import { create } from "zustand";
 import type { MergedEpisode, MergedTrack } from "../ipc";
-import { playerMediaUrl, playerPrefetch } from "../ipc";
+import { playerMediaUrl, playerPrefetch, podcastRecordProgress } from "../ipc";
 
 export type RepeatMode = "off" | "all" | "one";
 
@@ -24,6 +24,8 @@ export type RepeatMode = "off" | "all" | "one";
 export type QueueItem = MergedTrack & {
   mediaKind?: "track" | "episode";
   streamUrl?: string | null;
+  /** Episodes only: position (ms) to resume from on first load. 0 = from start. */
+  resumeMs?: number;
 };
 
 /**
@@ -54,6 +56,9 @@ export function episodeToQueueItem(ep: MergedEpisode): QueueItem {
     downloaded: ep.downloaded,
     mediaKind: "episode",
     streamUrl: useLoopback ? null : ep.enclosure_url,
+    // Resume an in-progress episode where the listener left off; a completed
+    // one starts fresh from 0.
+    resumeMs: ep.completed ? 0 : ep.position_ms ?? 0,
   };
 }
 
@@ -300,11 +305,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       // mid-track (not ended), and end-of-queue sets isPlaying=false in next().
       if (el.ended || (el.duration > 0 && el.currentTime >= el.duration - 0.5)) return;
       set({ isPlaying: false });
+      // A genuine pause is a good moment to checkpoint episode progress.
+      const s = get();
+      recordEpisodeProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
     };
-    const onTime = () =>
+    const onTime = () => {
       set({ positionSec: el.currentTime, durationSec: el.duration || 0 });
+      const s = get();
+      maybeRecordProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
+    };
     const onDuration = () => set({ durationSec: el.duration || 0 });
-    const onEnded = () => get().next();
+    const onEnded = () => {
+      // Mark the finished episode listened before advancing.
+      const s = get();
+      recordEpisodeProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0, true);
+      get().next();
+    };
     const onErr = () => {
       const code = el.error?.code;
       const msg =
@@ -393,6 +409,67 @@ if (typeof window !== "undefined") {
 type Get = () => PlayerState;
 type Set = (partial: Partial<PlayerState>) => void;
 
+// ---------------------------------------------------------------------------
+// podcast progress recording
+//
+// An episode's playback position is persisted server-side (and to the local
+// cache) so "continue where you left off" survives across devices and relaunches.
+// We record on a throttle during playback plus at the meaningful edges (pause,
+// end, switching away). An episode counts as completed once the position is
+// within COMPLETE_TAIL_SEC of the end (or it fires `ended`).
+// ---------------------------------------------------------------------------
+
+const COMPLETE_TAIL_SEC = 15;
+const PROGRESS_THROTTLE_MS = 10_000;
+let _lastProgressAt = 0;
+
+/** Persist one episode's progress (no-op for plain tracks). */
+function recordEpisodeProgress(
+  item: QueueItem | undefined,
+  positionSec: number,
+  durationSec: number,
+  forceCompleted = false,
+) {
+  if (!item || item.mediaKind !== "episode") return;
+  const posMs = Math.max(0, Math.round(positionSec * 1000));
+  const durMs =
+    durationSec > 0 ? Math.round(durationSec * 1000) : item.duration_ms ?? 0;
+  const completed =
+    forceCompleted || (durMs > 0 && posMs >= durMs - COMPLETE_TAIL_SEC * 1000);
+  // A completed episode pins the position at the end so the bar reads "done".
+  const finalMs = completed && durMs > 0 ? durMs : posMs;
+  _lastProgressAt = Date.now();
+  void podcastRecordProgress(item.id, finalMs, completed).catch(() => {});
+}
+
+/** Throttled record from the `timeupdate` firehose (~4 Hz). */
+function maybeRecordProgress(item: QueueItem | undefined, posSec: number, durSec: number) {
+  if (!item || item.mediaKind !== "episode") return;
+  if (Date.now() - _lastProgressAt < PROGRESS_THROTTLE_MS) return;
+  recordEpisodeProgress(item, posSec, durSec);
+}
+
+/** Seek the element to `sec` once it has enough metadata to honor it. */
+function seekOnReady(el: HTMLAudioElement, sec: number) {
+  if (sec <= 0) return;
+  const apply = () => {
+    try {
+      el.currentTime = sec;
+    } catch {
+      /* metadata not ready — leave at 0 */
+    }
+  };
+  if (el.readyState >= 1) {
+    apply();
+  } else {
+    const once = () => {
+      el.removeEventListener("loadedmetadata", once);
+      apply();
+    };
+    el.addEventListener("loadedmetadata", once);
+  }
+}
+
 /**
  * On a cold launch with a restored queue, load the current track's source and
  * seek to the saved position — but stay paused. Autoplay is blocked without a
@@ -429,9 +506,15 @@ function primeRestored(get: Get, el: HTMLAudioElement) {
 
 /** Load the track at `index`, set it as src, and start playback. */
 function loadAndPlay(_get: Get, set: Set, index: number) {
-  const { audio, queue } = _get();
+  const { audio, queue, currentIndex } = _get();
   const track = queue[index];
   if (!track || !audio) return;
+  // Checkpoint the outgoing episode (if any) before we switch away from it, so
+  // its resume position is saved even on a manual skip.
+  const outgoing = queue[currentIndex];
+  if (outgoing && outgoing.id !== track.id) {
+    recordEpisodeProgress(outgoing, audio.currentTime, audio.duration || 0);
+  }
   set({ currentIndex: index, positionSec: 0, durationSec: 0, error: null });
   // Kick off the next track's prefetch in parallel with this one's load, so it's
   // a local file by the time we reach it (screen-off auto-advance — see below).
@@ -442,6 +525,10 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
       if (_get().queue[_get().currentIndex]?.id !== track.id) return;
       audio.src = url;
       audio.currentTime = 0;
+      // Resume an in-progress episode where the listener left off.
+      if (track.mediaKind === "episode" && track.resumeMs && track.resumeMs > 0) {
+        seekOnReady(audio, track.resumeMs / 1000);
+      }
       void audio.play().catch((e: unknown) => reportPlayError(set, e));
     })
     .catch((e) => set({ error: formatErr(e) }));

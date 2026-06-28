@@ -27,6 +27,10 @@ service PodcastService {
   rpc Unsubscribe(PodcastIdRequest) returns (SubscribeResponse);
   rpc IsSubscribed(PodcastIdRequest) returns (SubscribeResponse);
   rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListPodcastsResponse);
+
+  // ----- Episode playback progress (any user; SECRET_KEY rejected) -----
+  rpc RecordEpisodeProgress(RecordEpisodeProgressRequest) returns (EpisodeProgress);
+  rpc ListEpisodeProgress(ListEpisodeProgressRequest) returns (ListEpisodeProgressResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,3 +140,24 @@ message ListEpisodesResponse { repeated Episode episodes = 1; }
 message SubscribeResponse { bool subscribed = 1; }
 
 message ListSubscriptionsRequest {}
+
+// ---------------------------------------------------------------------------
+// Episode playback progress
+// ---------------------------------------------------------------------------
+
+// The caller's playback state on one episode.
+message EpisodeProgress {
+  string episode_id = 1;
+  int64 position_ms = 2;   // last playback position
+  bool completed = 3;      // played to (near) the end
+  string updated_at = 4;
+}
+
+message RecordEpisodeProgressRequest {
+  string episode_id = 1;
+  int64 position_ms = 2;
+  bool completed = 3;
+}
+
+message ListEpisodeProgressRequest { string podcast_id = 1; }
+message ListEpisodeProgressResponse { repeated EpisodeProgress progress = 1; }

@@ -102,6 +102,15 @@ fn episode_to_pb(e: m::PodcastEpisode) -> pb::Episode {
     }
 }
 
+fn progress_to_pb(p: m::EpisodeProgress) -> pb::EpisodeProgress {
+    pb::EpisodeProgress {
+        episode_id: p.episode_id.to_string(),
+        position_ms: p.position_ms,
+        completed: p.completed,
+        updated_at: rfc3339(p.updated_at),
+    }
+}
+
 #[tonic::async_trait]
 impl pb::podcast_service_server::PodcastService for PodcastServer {
     async fn search_podcasts(
@@ -288,6 +297,34 @@ impl pb::podcast_service_server::PodcastService for PodcastServer {
         Ok(Response::new(pb::ListPodcastsResponse {
             podcasts: items.into_iter().map(podcast_to_pb).collect(),
             total,
+        }))
+    }
+
+    async fn record_episode_progress(
+        &self,
+        req: Request<pb::RecordEpisodeProgressRequest>,
+    ) -> Result<Response<pb::EpisodeProgress>, Status> {
+        let caller = self.caller(&req).await?;
+        let svc = self.service()?;
+        let body = req.into_inner();
+        let id = parse_uuid(&body.episode_id, "episode")?;
+        let p = svc
+            .record_progress(&caller, id, body.position_ms, body.completed)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(progress_to_pb(p)))
+    }
+
+    async fn list_episode_progress(
+        &self,
+        req: Request<pb::ListEpisodeProgressRequest>,
+    ) -> Result<Response<pb::ListEpisodeProgressResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let svc = self.service()?;
+        let id = parse_uuid(&req.into_inner().podcast_id, "podcast")?;
+        let items = svc.list_progress(&caller, id).await.map_err(map_err)?;
+        Ok(Response::new(pb::ListEpisodeProgressResponse {
+            progress: items.into_iter().map(progress_to_pb).collect(),
         }))
     }
 }

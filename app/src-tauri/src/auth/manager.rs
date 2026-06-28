@@ -12,9 +12,10 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ChunkAck, Credential, MetadataEdit, NotificationPage, PermissionTier, Podcast,
-    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerClient, ServerConfig,
-    Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
+    Album, Artist, ChunkAck, Credential, EpisodeProgress, MetadataEdit, NotificationPage,
+    PermissionTier, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
+    ServerClient, ServerConfig, Track, TransportHealth, TransportUsed, UploadEvent,
+    UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
 
@@ -460,6 +461,23 @@ impl AuthManager {
     pub async fn list_subscriptions(&self) -> AppResult<Vec<Podcast>> {
         let cred = self.credential().await?;
         self.server.list_subscriptions(&cred).await
+    }
+
+    pub async fn record_episode_progress(
+        &self,
+        episode_id: &str,
+        position_ms: i64,
+        completed: bool,
+    ) -> AppResult<EpisodeProgress> {
+        let cred = self.credential().await?;
+        self.server
+            .record_episode_progress(&cred, episode_id, position_ms, completed)
+            .await
+    }
+
+    pub async fn list_episode_progress(&self, podcast_id: &str) -> AppResult<Vec<EpisodeProgress>> {
+        let cred = self.credential().await?;
+        self.server.list_episode_progress(&cred, podcast_id).await
     }
 
     // ----- Merge + aliases (Phase 10; Manager+ gated server-side) ----------

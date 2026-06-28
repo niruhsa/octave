@@ -28,7 +28,8 @@ use uuid::Uuid;
 
 use crate::auth::Identity;
 use crate::db::models::{
-    NewAuditEntry, NewPodcast, NewPodcastEpisode, PermissionLevel, Podcast, PodcastEpisode,
+    EpisodeProgress, NewAuditEntry, NewPodcast, NewPodcastEpisode, PermissionLevel, Podcast,
+    PodcastEpisode,
 };
 use crate::db::repo::{AuditRepo, PodcastEpisodeRepo, PodcastRepo, PodcastSubscriptionRepo};
 use crate::error::{AppError, Result};
@@ -589,6 +590,43 @@ impl PodcastService {
             }
         }
         Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // Episode playback progress (any user; SECRET_KEY rejected) — per-user
+    // -----------------------------------------------------------------------
+
+    /// Record the caller's playback position on an episode and whether they've
+    /// completed it. Idempotent upsert keyed on (user, episode).
+    pub async fn record_progress(
+        &self,
+        caller: &Identity,
+        episode_id: Uuid,
+        position_ms: i64,
+        completed: bool,
+    ) -> Result<EpisodeProgress> {
+        caller.require(PermissionLevel::User)?;
+        let user_id = self.caller_user_id(caller)?;
+        if self.episodes.get(episode_id).await?.is_none() {
+            return Err(AppError::NotFound(format!("episode {episode_id}")));
+        }
+        self.subscriptions
+            .upsert_progress(user_id, episode_id, position_ms, completed)
+            .await
+    }
+
+    /// The caller's progress across one show's episodes (drives resume +
+    /// listened markers).
+    pub async fn list_progress(
+        &self,
+        caller: &Identity,
+        podcast_id: Uuid,
+    ) -> Result<Vec<EpisodeProgress>> {
+        caller.require(PermissionLevel::User)?;
+        let user_id = self.caller_user_id(caller)?;
+        self.subscriptions
+            .progress_for_podcast(user_id, podcast_id)
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -1176,6 +1214,23 @@ mod tests {
                 .filter(|(u, _)| *u == user_id)
                 .map(|(_, p)| *p)
                 .collect())
+        }
+        async fn upsert_progress(
+            &self,
+            _: Uuid,
+            episode_id: Uuid,
+            position_ms: i64,
+            completed: bool,
+        ) -> Result<EpisodeProgress> {
+            Ok(EpisodeProgress {
+                episode_id,
+                position_ms,
+                completed,
+                updated_at: time::OffsetDateTime::now_utc(),
+            })
+        }
+        async fn progress_for_podcast(&self, _: Uuid, _: Uuid) -> Result<Vec<EpisodeProgress>> {
+            Ok(Vec::new())
         }
     }
 

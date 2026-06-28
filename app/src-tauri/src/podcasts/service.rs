@@ -145,6 +145,10 @@ impl<'a> PodcastService<'a> {
         // we actually fetched — drives loopback-vs-origin playback routing for
         // the newest episodes; older cached rows default to origin.
         let mut server_dl: HashMap<String, bool> = HashMap::new();
+        // Metadata rows to mirror into the cache, accumulated across pages and
+        // written in one batched transaction at the end (cheap on reopen, where
+        // the newest page fully overlaps the cache and there's nothing new).
+        let mut new_meta: Vec<cache_model::PodcastEpisode> = Vec::new();
         let mut hit_cache = false;
         let mut reached_end = false;
         let mut offset: i32 = 0;
@@ -153,13 +157,19 @@ impl<'a> PodcastService<'a> {
             let full = page.len() == PAGE as usize;
             let mut page_overlaps = false;
             for e in &page {
-                if cached.contains(&e.guid) {
+                let is_cached = cached.contains(&e.guid);
+                if is_cached {
                     page_overlaps = true;
                 }
                 fetched.insert(e.guid.clone());
                 server_dl.insert(e.id.clone(), e.downloaded);
-                // Persist metadata so the list survives an app restart / offline.
-                self.cache_upsert_episode_meta(podcast_id, e).await?;
+                // Only mirror episodes we don't already have. Re-upserting rows
+                // that haven't changed is the bulk of the per-open cost on a
+                // large feed; episode metadata is effectively immutable once
+                // published, and a manual "Check for new" still re-syncs.
+                if !is_cached {
+                    new_meta.push(self.episode_meta_row(podcast_id, e));
+                }
             }
             if page_overlaps {
                 hit_cache = true;
@@ -172,6 +182,9 @@ impl<'a> PodcastService<'a> {
             offset += PAGE;
         }
 
+        // Persist new metadata so the list survives an app restart / offline.
+        repo::upsert_episodes_meta_batch(self.pool, &new_meta).await?;
+
         // Walked the whole feed with zero overlap → its identity changed; drop
         // the stale metadata (downloaded episodes are preserved). Guard on a
         // non-empty fetch so a transient empty response can't wipe the cache.
@@ -179,27 +192,90 @@ impl<'a> PodcastService<'a> {
             repo::delete_stale_metadata_episodes(self.pool, podcast_id, &fetched).await?;
         }
 
+        // Pull the caller's playback progress from the server into the cache so
+        // the listened/resume markers are fresh (best-effort — never fail the
+        // list over it; offline falls back to whatever's already cached).
+        self.sync_server_progress(podcast_id).await;
+
         // Return the full cached list (everything we didn't need to re-fetch is
         // already here), newest-first, with the freshest download state we have.
         let rows = repo::list_episodes_for_podcast(self.pool, podcast_id).await?;
-        let items = rows
+        let mut items: Vec<MergedEpisode> = rows
             .into_iter()
             .map(|e| {
                 let sd = server_dl.get(&e.id).copied().unwrap_or(false);
                 MergedEpisode::from_cache_row(e, sd)
             })
             .collect();
+        self.attach_cached_progress(podcast_id, &mut items).await?;
         Ok(LibraryView::server(items))
     }
 
-    /// Mirror one server episode's metadata into the cache without touching any
-    /// client-owned download columns (see [`repo::upsert_episode_meta`]).
-    async fn cache_upsert_episode_meta(
+    /// Overlay each episode's cached playback progress (position + completed)
+    /// onto a merged list. Cheap single query keyed on the show.
+    async fn attach_cached_progress(
         &self,
         podcast_id: &str,
-        e: &PodcastEpisode,
+        items: &mut [MergedEpisode],
     ) -> AppResult<()> {
-        let row = cache_model::PodcastEpisode {
+        let progress: HashMap<String, (i64, bool)> =
+            repo::list_episode_progress_for_podcast(self.pool, podcast_id)
+                .await?
+                .into_iter()
+                .map(|p| (p.episode_id, (p.position_ms, p.completed != 0)))
+                .collect();
+        for it in items.iter_mut() {
+            if let Some(&(pos, done)) = progress.get(&it.id) {
+                it.position_ms = pos;
+                it.completed = done;
+            }
+        }
+        Ok(())
+    }
+
+    /// Best-effort: fetch the caller's progress for one show from the server and
+    /// mirror it into the cache. Swallows errors (offline / not-found).
+    async fn sync_server_progress(&self, podcast_id: &str) {
+        let rows = match self.auth.list_episode_progress(podcast_id).await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        for p in rows {
+            if let Err(e) =
+                repo::upsert_episode_progress(self.pool, &p.episode_id, p.position_ms, p.completed)
+                    .await
+            {
+                tracing::warn!(error = %e, "list_episodes: caching progress row failed");
+            }
+        }
+    }
+
+    /// Record the listener's progress on an episode: write the local cache
+    /// immediately (instant + offline-safe) and push to the server best-effort.
+    pub async fn record_progress(
+        &self,
+        episode_id: &str,
+        position_ms: i64,
+        completed: bool,
+    ) -> AppResult<()> {
+        repo::upsert_episode_progress(self.pool, episode_id, position_ms, completed).await?;
+        if let Err(e) = self
+            .auth
+            .record_episode_progress(episode_id, position_ms, completed)
+            .await
+        {
+            // Offline / transient — the local cache is the source of truth until
+            // the next successful sync pulls the server's view back in.
+            tracing::info!(err = %e, "record_progress: server push failed (cached locally)");
+        }
+        Ok(())
+    }
+
+    /// Build the cache row that mirrors one server episode's metadata, leaving
+    /// every client-owned download column NULL (see [`repo::upsert_episode_meta`],
+    /// which preserves those on an already-downloaded row).
+    fn episode_meta_row(&self, podcast_id: &str, e: &PodcastEpisode) -> cache_model::PodcastEpisode {
+        cache_model::PodcastEpisode {
             id: e.id.clone(),
             podcast_id: podcast_id.to_string(),
             guid: e.guid.clone(),
@@ -220,8 +296,7 @@ impl<'a> PodcastService<'a> {
             metadata_json: "{}".to_string(),
             downloaded_at: None,
             updated_at: now_iso(),
-        };
-        repo::upsert_episode_meta(self.pool, &row).await
+        }
     }
 
     async fn list_episodes_from_cache(
@@ -229,9 +304,10 @@ impl<'a> PodcastService<'a> {
         podcast_id: &str,
     ) -> AppResult<LibraryView<MergedEpisode>> {
         let rows = repo::list_episodes_for_podcast(self.pool, podcast_id).await?;
-        Ok(LibraryView::cache(
-            rows.into_iter().map(MergedEpisode::from_cache).collect(),
-        ))
+        let mut items: Vec<MergedEpisode> =
+            rows.into_iter().map(MergedEpisode::from_cache).collect();
+        self.attach_cached_progress(podcast_id, &mut items).await?;
+        Ok(LibraryView::cache(items))
     }
 
     // ----- catalog add (Manager+ server-side) ----------------------------
@@ -254,16 +330,31 @@ impl<'a> PodcastService<'a> {
 
     pub async fn subscribe(&self, id: &str) -> AppResult<MergedPodcast> {
         self.auth.subscribe_podcast(id).await?;
-        // Refresh the show + mirror the subscribed flag into the cache.
-        self.get_podcast(id).await
+        // The subscribed flag is the only thing that changed, so flip it in the
+        // cache and return the cached row instead of re-fetching the show from
+        // the server — that re-fetch (get + is_subscribed) is what made this lag.
+        repo::set_podcast_subscribed(self.pool, id, true).await?;
+        self.get_podcast_or_refetch(id).await
     }
 
     pub async fn unsubscribe(&self, id: &str) -> AppResult<MergedPodcast> {
         self.auth.unsubscribe_podcast(id).await?;
         // Mirror immediately so an offline view reflects it; the row stays so
-        // any downloaded episodes remain accessible.
+        // any downloaded episodes remain accessible. As with subscribe, return
+        // the cached row rather than paying for two extra server round-trips.
         repo::set_podcast_subscribed(self.pool, id, false).await?;
-        self.get_podcast(id).await
+        self.get_podcast_or_refetch(id).await
+    }
+
+    /// The cached show (fast path after a subscribe/unsubscribe, which only
+    /// changes the locally-mirrored `subscribed` flag), falling back to a server
+    /// fetch only if the row somehow isn't cached — so a successful server
+    /// mutation never surfaces a spurious "not cached" error.
+    async fn get_podcast_or_refetch(&self, id: &str) -> AppResult<MergedPodcast> {
+        match self.get_podcast_from_cache(id).await {
+            Ok(v) => Ok(v),
+            Err(_) => self.get_podcast(id).await,
+        }
     }
 
     // ----- catalog mutations (Manager+ server-side) ----------------------
