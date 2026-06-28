@@ -95,6 +95,57 @@ body {
     transform: translateX(100%);
   }
 }
+/* Quick Search (command palette) entrance. */
+@keyframes qspop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes qsfade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes qssheet {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-qspop {
+  animation: qspop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.animate-qsfade {
+  animation: qsfade 0.18s ease-out;
+}
+.animate-qssheet {
+  animation: qssheet 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* Quick Search results scrollbar (matches the design comp). */
+.qs-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+.qs-scroll::-webkit-scrollbar-thumb {
+  background: #23262b;
+  border-radius: 6px;
+  border: 3px solid var(--color-oct-panel);
+}
+.qs-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
 
 /* Skeleton placeholder block: dark base with a gentle shimmer sweep. */
 .oct-skeleton {

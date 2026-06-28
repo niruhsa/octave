@@ -83,16 +83,23 @@ impl GrpcClient {
     /// `HttpsUriWithoutTlsSupport`) before any handshake — exactly the symptom
     /// when the server has `GRPC_TLS` on while the client still tries h2c.
     ///
-    /// We attach the system trust roots (`with_enabled_roots`, matching
-    /// tonic's own codegen default); the URL host drives cert verification and
-    /// SNI. A cert that doesn't chain to a root in the OS trust store (e.g. a
-    /// bare self-signed cert) still needs an explicit CA via `ca_certificate`.
+    /// We attach trust roots via `with_webpki_roots` — the baked-in Mozilla CA
+    /// bundle — and deliberately NOT `with_enabled_roots()`. The latter also
+    /// turns on tonic's native-roots path, which returns a hard
+    /// `NativeCertsNotFound` error the moment `load_native_certs()` comes back
+    /// empty *before* the webpki roots are added. On Android the OS CA store
+    /// isn't enumerable, so that path always errors and `tls_config` fails to
+    /// build (`gRPC TLS config: transport error` → silent REST fallback). The
+    /// bundled roots need no OS store and behave identically on desktop and
+    /// Android. The URL host drives cert verification and SNI. A cert that
+    /// chains to a public CA works out of the box; an internal/private CA
+    /// (not in the Mozilla bundle) needs an explicit CA via `ca_certificate`.
     fn endpoint(url: &str) -> AppResult<Endpoint> {
         let endpoint = Endpoint::from_shared(url.to_string())
             .map_err(|e| AppError::Transport(format!("invalid gRPC endpoint: {e}")))?;
         if url.starts_with("https://") {
             return endpoint
-                .tls_config(ClientTlsConfig::new().with_enabled_roots())
+                .tls_config(ClientTlsConfig::new().with_webpki_roots())
                 .map_err(|e| AppError::Transport(format!("gRPC TLS config: {e}")));
         }
         Ok(endpoint)

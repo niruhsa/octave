@@ -20,12 +20,16 @@ import {
   type CommandId,
 } from "../settings/keybinds";
 import { btnGhostSm, card, label } from "../lib/ui";
-import { KeyIcon } from "../components/icons";
+import { KeyIcon, PodcastIcon, SearchIcon } from "../components/icons";
+import { useQuickSearchStore } from "../quicksearch/store";
+import { usePodcastPrefsStore } from "../podcasts/prefs";
 
-type SectionId = "keybinds";
+type SectionId = "keybinds" | "quicksearch" | "podcasts";
 
 const SECTIONS: { id: SectionId; label: string; Icon: typeof KeyIcon }[] = [
   { id: "keybinds", label: "Keybinds & Hotkeys", Icon: KeyIcon },
+  { id: "quicksearch", label: "Quick Search", Icon: SearchIcon },
+  { id: "podcasts", label: "Podcasts", Icon: PodcastIcon },
 ];
 
 export default function Settings() {
@@ -57,6 +61,8 @@ export default function Settings() {
         {/* content */}
         <div className="min-w-0 flex-1">
           {section === "keybinds" && <KeybindsSection />}
+          {section === "quicksearch" && <QuickSearchSection />}
+          {section === "podcasts" && <PodcastsSection />}
         </div>
       </div>
     </section>
@@ -205,6 +211,168 @@ function KeybindRow({ cmd }: { cmd: CommandDef }) {
           Reset
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Quick Search section
+// ---------------------------------------------------------------------------
+
+/** In-palette keys that are fixed (not rebindable) while the palette is focused. */
+const PALETTE_KEYS: { label: string; keys: string[] }[] = [
+  { label: "Commit the current text to a filter pill", keys: ["↵", "|"] },
+  { label: "Accept the inline suggestion", keys: ["Tab"] },
+  { label: "Move through results / commands", keys: ["↑", "↓"] },
+  { label: "Play or open the selected result", keys: ["↵"] },
+  { label: "Focus the filter pills", keys: ["←"] },
+  { label: "Edit the focused pill", keys: ["E"] },
+  { label: "Remove the focused pill", keys: ["⌫"] },
+  { label: "Step back / close the palette", keys: ["Esc"] },
+];
+
+function QuickSearchSection() {
+  const prefs = useQuickSearchStore((s) => s.prefs);
+  const setPref = useQuickSearchStore((s) => s.setPref);
+  const recents = useQuickSearchStore((s) => s.recents);
+  const clearRecents = useQuickSearchStore((s) => s.clearRecents);
+
+  const openCmd = COMMANDS.find((c) => c.id === "quickSearch");
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[13px] leading-relaxed text-oct-subtle">
+        Quick Search is the command palette that replaces the old Search tab.
+        Open it from anywhere to search your library, run an action by typing{" "}
+        <span className="font-mono text-oct-muted">&gt;</span>, or jump to a page
+        with <span className="font-mono text-oct-muted">!</span>.
+      </p>
+
+      {/* open shortcut (rebindable — shares the keybind store) */}
+      {openCmd && (
+        <div className="flex flex-col gap-2">
+          <div className={label}>SHORTCUT</div>
+          <div className={`${card} divide-y divide-oct-border`}>
+            <KeybindRow cmd={openCmd} />
+          </div>
+        </div>
+      )}
+
+      {/* behaviour toggles */}
+      <div className="flex flex-col gap-2">
+        <div className={label}>BEHAVIOUR</div>
+        <div className={`${card} divide-y divide-oct-border`}>
+          <ToggleRow
+            title="Keyboard hint footer"
+            desc="Show the shortcut hints along the bottom of the palette."
+            on={prefs.keyboardHints}
+            onChange={(v) => setPref("keyboardHints", v)}
+          />
+          <ToggleRow
+            title="Dim background"
+            desc="Blur and darken the app behind the palette while it's open."
+            on={prefs.dimBackground}
+            onChange={(v) => setPref("dimBackground", v)}
+          />
+        </div>
+      </div>
+
+      {/* fixed in-palette keys reference */}
+      <div className="flex flex-col gap-2">
+        <div className={label}>IN-PALETTE KEYS</div>
+        <div className={`${card} divide-y divide-oct-border`}>
+          {PALETTE_KEYS.map((k) => (
+            <div key={k.label} className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <span className="text-[13px] text-oct-text">{k.label}</span>
+              <span className="flex shrink-0 gap-1">
+                {k.keys.map((kk, i) => (
+                  <kbd key={i} className="rounded bg-oct-elevated px-1.5 py-0.5 font-mono text-[11px] text-oct-text">
+                    {kk}
+                  </kbd>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11.5px] text-oct-faint">
+          These work while the palette is focused and aren't rebindable.
+        </p>
+      </div>
+
+      {/* recents */}
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-[13px] text-oct-subtle">
+          {recents.length} recent search{recents.length === 1 ? "" : "es"} remembered
+        </span>
+        <button onClick={clearRecents} disabled={!recents.length} className={btnGhostSm}>
+          Clear recents
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Podcasts section
+// ---------------------------------------------------------------------------
+
+function PodcastsSection() {
+  const openAfterSubscribe = usePodcastPrefsStore((s) => s.prefs.openAfterSubscribe);
+  const setPref = usePodcastPrefsStore((s) => s.setPref);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[13px] leading-relaxed text-oct-subtle">
+        Subscribing is instant — the show's back-catalogue keeps loading in the
+        background after you're taken to it.
+      </p>
+
+      <div className="flex flex-col gap-2">
+        <div className={label}>BEHAVIOUR</div>
+        <div className={`${card} divide-y divide-oct-border`}>
+          <ToggleRow
+            title="Open the show after subscribing"
+            desc="Jump to the podcast's page when you subscribe. Hold Shift while clicking Subscribe to do the opposite."
+            on={openAfterSubscribe}
+            onChange={(v) => setPref("openAfterSubscribe", v)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ToggleRow({
+  title,
+  desc,
+  on,
+  onChange,
+}: {
+  title: string;
+  desc: string;
+  on: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-4 py-3">
+      <div className="min-w-0">
+        <div className="text-[13.5px] text-oct-text">{title}</div>
+        <div className="text-[11.5px] text-oct-faint">{desc}</div>
+      </div>
+      <button
+        role="switch"
+        aria-checked={on}
+        onClick={() => onChange(!on)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          on ? "bg-oct-accent" : "bg-oct-border-strong"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            on ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </button>
     </div>
   );
 }

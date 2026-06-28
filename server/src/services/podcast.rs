@@ -224,15 +224,30 @@ impl PodcastService {
             })
             .await?;
 
-        // Best-effort show art, then seed the full back-catalog — following a
-        // paged feed (`rel="next"`) to the end so every episode is cached up
-        // front, not just the newest page. No fan-out on first subscribe (every
-        // episode is "new"; we don't blast a backlog at subscribers).
-        self.cache_show_art(&podcast).await;
-        self.walk_feed(&podcast, *parsed, &HashSet::new(), false).await?;
-        self.podcasts
-            .touch_refreshed(podcast.id, etag.as_deref(), last_modified.as_deref())
-            .await?;
+        // Seed the back-catalog in the background. Walking a paged feed to its
+        // end (caching show art + every episode) can take many seconds on large
+        // shows, and the client only needs the show record to navigate to it —
+        // episodes stream in as the walk completes. No fan-out on first
+        // subscribe (every episode is "new"; we don't blast a backlog at
+        // subscribers).
+        {
+            let this = self.clone();
+            let podcast = podcast.clone();
+            tokio::spawn(async move {
+                this.cache_show_art(&podcast).await;
+                if let Err(e) = this.walk_feed(&podcast, *parsed, &HashSet::new(), false).await {
+                    warn!(podcast = %podcast.id, error = %e, "podcast subscribe: back-catalog seed failed");
+                    return;
+                }
+                if let Err(e) = this
+                    .podcasts
+                    .touch_refreshed(podcast.id, etag.as_deref(), last_modified.as_deref())
+                    .await
+                {
+                    warn!(podcast = %podcast.id, error = %e, "podcast subscribe: touch_refreshed failed");
+                }
+            });
+        }
 
         let fresh = self.podcasts.get(podcast.id).await?.unwrap_or(podcast);
         self.audit(

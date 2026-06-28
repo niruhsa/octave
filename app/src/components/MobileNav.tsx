@@ -3,6 +3,7 @@
 
 import { NavLink } from "react-router-dom";
 import { useAppStore } from "../store";
+import { useQuickSearchStore } from "../quicksearch/store";
 import {
   DiscIcon,
   DownloadIcon,
@@ -16,7 +17,6 @@ import {
 const TABS: { to: string; label: string; Icon: (p: IconProps) => React.ReactElement }[] = [
   { to: "/", label: "Home", Icon: HomeIcon },
   { to: "/library", label: "Library", Icon: DiscIcon },
-  { to: "/search", label: "Search", Icon: SearchIcon },
   { to: "/playlists", label: "Playlists", Icon: PlaylistIcon },
   { to: "/podcasts", label: "Podcasts", Icon: PodcastIcon },
   { to: "/downloads", label: "Downloads", Icon: DownloadIcon },
@@ -24,6 +24,7 @@ const TABS: { to: string; label: string; Icon: (p: IconProps) => React.ReactElem
 
 export default function MobileNav() {
   const session = useAppStore((s) => s.session);
+  const openQuickSearch = useQuickSearchStore((s) => s.openPalette);
   if (!session) return null;
 
   return (
@@ -34,11 +35,35 @@ export default function MobileNav() {
       // overlapped (the bar background still fills the inset area).
       style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.375rem)" }}
     >
-      {TABS.map((t) => (
+      <NavLink
+        to="/"
+        end
+        className={({ isActive }) =>
+          `flex flex-1 flex-col items-center gap-1 rounded-lg py-1 ${isActive ? "text-oct-accent" : "text-oct-subtle"}`
+        }
+      >
+        {({ isActive }) => (
+          <>
+            <HomeIcon size={20} sw={1.3} />
+            <span className={`text-[9.5px] ${isActive ? "font-medium" : ""}`}>Home</span>
+          </>
+        )}
+      </NavLink>
+
+      {/* Quick search — opens the palette instead of routing to a tab. */}
+      <button
+        onClick={openQuickSearch}
+        aria-label="Quick search"
+        className="flex flex-1 flex-col items-center gap-1 rounded-lg py-1 text-oct-subtle"
+      >
+        <SearchIcon size={20} sw={1.3} />
+        <span className="text-[9.5px]">Search</span>
+      </button>
+
+      {TABS.slice(1).map((t) => (
         <NavLink
           key={t.to}
           to={t.to}
-          end={t.to === "/"}
           className={({ isActive }) =>
             `flex flex-1 flex-col items-center gap-1 rounded-lg py-1 ${
               isActive ? "text-oct-accent" : "text-oct-subtle"

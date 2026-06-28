@@ -7,6 +7,7 @@ import {
 import {
   RouterProvider,
   createBrowserRouter,
+  Navigate,
   Outlet,
   useLocation,
   useNavigate,
@@ -16,7 +17,6 @@ import Login from "./routes/Login";
 import Library from "./routes/Library";
 import Artist from "./routes/Artist";
 import Album from "./routes/Album";
-import Search from "./routes/Search";
 import Downloads from "./routes/Downloads";
 import Playlists from "./routes/Playlists";
 import PlaylistDetail from "./routes/PlaylistDetail";
@@ -32,6 +32,7 @@ import Sidebar from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
 import MobileTopBar from "./components/MobileTopBar";
 import PlayerBar from "./components/PlayerBar";
+import QuickSearch from "./components/QuickSearch";
 import { authSession, uploadsResumePending } from "./ipc";
 import { useAppStore } from "./store";
 import { useSyncScheduler } from "./sync/useSync";
@@ -218,6 +219,7 @@ function RootLayout() {
       </div>
       <PlayerBar />
       <MobileNav />
+      <QuickSearch />
     </div>
   );
 }
@@ -232,7 +234,9 @@ const router = createBrowserRouter([
       { path: "library", element: <Library /> },
       { path: "artists/:id", element: <Artist /> },
       { path: "albums/:id", element: <Album /> },
-      { path: "search", element: <Search /> },
+      // The standalone Search route was replaced by the Quick Search palette
+      // (⌘K). Redirect any persisted/bookmarked `/search` deep-link home.
+      { path: "search", element: <Navigate to="/" replace /> },
       { path: "downloads", element: <Downloads /> },
       { path: "playlists", element: <Playlists /> },
       { path: "playlists/:id", element: <PlaylistDetail /> },

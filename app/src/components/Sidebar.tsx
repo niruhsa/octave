@@ -11,6 +11,8 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { authLogout, authRefreshTransports, pushUnregister } from "../ipc";
 import type { TransportHealth } from "../ipc";
 import { useAppStore } from "../store";
+import { useQuickSearchStore } from "../quicksearch/store";
+import { useKeybindStore, bindingTokens } from "../settings/keybinds";
 import { useSyncStore } from "../sync/useSync";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useNotificationsStore } from "../notifications/useNotifications";
@@ -53,7 +55,6 @@ type NavItem = {
 const NAV: NavItem[] = [
   { to: "/", label: "Home", Icon: HomeIcon },
   { to: "/library", label: "Library", Icon: DiscIcon },
-  { to: "/search", label: "Search", Icon: SearchIcon },
   { to: "/playlists", label: "Playlists", Icon: PlaylistIcon, badge: "pending" },
   { to: "/podcasts", label: "Podcasts", Icon: PodcastIcon },
   { to: "/notifications", label: "Notifications", Icon: BellIcon, badge: "notifications", userOnly: true },
@@ -73,6 +74,9 @@ export default function Sidebar() {
   const setTransports = useAppStore((s) => s.setTransports);
   const setSession = useAppStore((s) => s.setSession);
   const navigate = useNavigate();
+
+  const openQuickSearch = useQuickSearchStore((s) => s.openPalette);
+  const qsBinding = useKeybindStore((s) => s.bindings.quickSearch);
 
   const syncStatus = useSyncStore((s) => s.status);
   const pending = useSyncStore((s) => s.pending);
@@ -159,14 +163,27 @@ export default function Sidebar() {
         <span className="text-base font-semibold tracking-[0.16em]">OCTAVE</span>
       </div>
 
-      {/* search field → /search */}
-      <NavLink
-        to="/search"
+      {/* quick-search launcher → opens the ⌘K palette */}
+      <button
+        onClick={openQuickSearch}
         className="mb-4 flex items-center gap-2.5 rounded-lg border border-oct-border-strong bg-oct-card px-3 py-2 text-[13px] text-oct-subtle transition-colors hover:text-oct-muted"
+        title="Quick search"
       >
         <SearchIcon size={15} sw={1.4} />
-        <span>Search</span>
-      </NavLink>
+        <span className="flex-1 text-left">Quick search</span>
+        {qsBinding && (
+          <span className="flex shrink-0 gap-1">
+            {bindingTokens(qsBinding).map((t, i) => (
+              <kbd
+                key={i}
+                className="rounded border border-oct-border-strong bg-oct-elevated px-1.5 py-0.5 font-mono text-[10px] text-oct-faint"
+              >
+                {t}
+              </kbd>
+            ))}
+          </span>
+        )}
+      </button>
 
       {/* nav (scrolls if it overflows) */}
       <div className="oct-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">

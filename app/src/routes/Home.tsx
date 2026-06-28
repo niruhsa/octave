@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { appInfo, authRefreshOnline, cacheListDownloadedTracks, getLibraryStorage } from "../ipc";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
+import { useQuickSearchStore } from "../quicksearch/store";
 import { btnPrimary, card } from "../lib/ui";
 import { byteSize } from "../lib/format";
 import { Skeleton } from "../components/Skeleton";
@@ -26,6 +27,7 @@ export default function Home() {
   const tier = useAppStore((s) => s.tier);
   const session = useAppStore((s) => s.session);
   const setOnline = useAppStore((s) => s.setOnline);
+  const openQuickSearch = useQuickSearchStore((s) => s.openPalette);
 
   const syncStatus = useSyncStore((s) => s.status);
   const pending = useSyncStore((s) => s.pending);
@@ -140,7 +142,7 @@ export default function Home() {
         <h2 className="mb-3 font-mono text-[11px] tracking-[0.14em] text-oct-faint">JUMP TO</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QuickTile to="/library" Icon={DiscIcon} title="Library" sub="Browse artists & albums" />
-          <QuickTile to="/search" Icon={SearchIcon} title="Search" sub="Find anything" />
+          <QuickTile onClick={openQuickSearch} Icon={SearchIcon} title="Search" sub="Find anything" />
           <QuickTile to="/playlists" Icon={PlaylistIcon} title="Playlists" sub="Your collections" />
           <QuickTile to="/downloads" Icon={DownloadIcon} title="Downloads" sub="Offline content" />
           {(tier === "admin" || tier === "manager") && (
@@ -236,20 +238,21 @@ function StatCard({ label, children }: { label: string; children: React.ReactNod
 
 function QuickTile({
   to,
+  onClick,
   Icon,
   title,
   sub,
 }: {
-  to: string;
+  to?: string;
+  onClick?: () => void;
   Icon: (p: IconProps) => React.ReactElement;
   title: string;
   sub: string;
 }) {
-  return (
-    <Link
-      to={to}
-      className="group flex items-center gap-3 rounded-xl border border-oct-border-strong bg-oct-panel p-4 transition-colors hover:border-oct-line hover:bg-oct-elevated/40"
-    >
+  const cls =
+    "group flex items-center gap-3 rounded-xl border border-oct-border-strong bg-oct-panel p-4 text-left transition-colors hover:border-oct-line hover:bg-oct-elevated/40";
+  const inner = (
+    <>
       <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-oct-accent" style={{ background: "rgba(224,168,75,0.12)" }}>
         <Icon size={20} />
       </span>
@@ -257,6 +260,18 @@ function QuickTile({
         <span className="block text-[15px] font-medium group-hover:text-white">{title}</span>
         <span className="block truncate font-mono text-[11px] text-oct-subtle">{sub}</span>
       </span>
-    </Link>
+    </>
+  );
+  if (to) {
+    return (
+      <Link to={to} className={cls}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <button onClick={onClick} className={cls}>
+      {inner}
+    </button>
   );
 }

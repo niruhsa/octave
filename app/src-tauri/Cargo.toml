@@ -39,7 +39,18 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 walkdir = "2"
 
 # Transport: gRPC primary, REST fallback (mirrors server).
-tonic = { version = "0.12", features = ["transport", "tls", "tls-roots"] }
+# We use `tls-webpki-roots` (the baked-in Mozilla CA bundle) and NOT `tls-roots`
+# (the OS trust store) on purpose. tonic's native-roots path returns a hard
+# `NativeCertsNotFound` error whenever `rustls_native_certs::load_native_certs()`
+# comes back empty — which it always does on Android, where CAs live as hashed
+# files / behind the Java KeyStore and aren't enumerable. With `with_enabled_roots()`
+# that error fires *before* the webpki roots are ever added, so the gRPC TLS
+# config fails to build and every call silently falls back to REST. The bundled
+# webpki roots need no OS store and work identically on desktop and Android. The
+# server cert chains to a public CA (REST-over-https already validates it on
+# Android using reqwest's bundled webpki roots), so this set is sufficient; an
+# internal/private CA would need an explicit `ClientTlsConfig::ca_certificate`.
+tonic = { version = "0.12", features = ["transport", "tls", "tls-webpki-roots"] }
 # Standard gRPC health-checking client (`grpc.health.v1.Health`) — the
 # connectivity probe calls `Check` so "gRPC online" means the service really
 # answered, not just that a socket opened. The server already serves it.
@@ -63,6 +74,17 @@ url = "2"
 async-trait = "0.1"
 tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"
+
+
+# Secure credential storage. `keyring` covers macOS/Windows/Linux; Android
+# falls back to a file in app-private storage (encrypted by the platform).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+[target.'cfg(target_os="windows")'.dependencies]
+sha2 = { version = "0.10" }
+
+[target.'cfg(not(target_os="windows"))'.dependencies]
 # Upload hashing (per-chunk + whole-file SHA-256). The `asm` feature pulls in
 # the crate's hardware-accelerated backends: ARMv8 crypto extensions on aarch64
 # (Android phones, Apple Silicon) and the SHA-NI fallback on x86. Without it,
@@ -71,11 +93,6 @@ tauri-plugin-fs = "2"
 # CPU detection (cpufeatures) and falls back to software, so it's safe on any
 # device. Pure SHA-256, so no upload-protocol change vs. the server.
 sha2 = { version = "0.10", features = ["asm"] }
-
-# Secure credential storage. `keyring` covers macOS/Windows/Linux; Android
-# falls back to a file in app-private storage (encrypted by the platform).
-[target.'cfg(not(target_os = "android"))'.dependencies]
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

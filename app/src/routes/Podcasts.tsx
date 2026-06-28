@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   podcastList,
   podcastSearch,
@@ -15,6 +15,7 @@ import { useAppStore } from "../store";
 import { btnGhostSm, btnPrimary, card, errorBox, input, label } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
 import { formatError } from "../lib/error";
+import { usePodcastPrefsStore } from "../podcasts/prefs";
 
 /** Square show cover from a remote art URL, falling back to the mic icon. */
 function ShowArt({ url, size = 56 }: { url: string | null; size?: number }) {
@@ -44,9 +45,11 @@ function ShowArt({ url, size = 56 }: { url: string | null; size?: number }) {
 
 export default function Podcasts() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const online = useAppStore((s) => s.online);
   const tier = useAppStore((s) => s.tier);
   const isManager = tier === "admin" || tier === "manager";
+  const openAfterSubscribe = usePodcastPrefsStore((s) => s.prefs.openAfterSubscribe);
 
   const subs = useQuery({
     queryKey: ["podcasts", "subscriptions"],
@@ -68,12 +71,20 @@ export default function Podcasts() {
 
   const add = useMutation({
     // Add the feed to the catalog (Manager+), then subscribe the current user.
-    mutationFn: async (c: PodcastCandidate) => {
-      const show = await podcastSubscribeFeed(c.feed_url ?? undefined, c.itunes_id ?? undefined);
+    // `open` decides whether to jump to the new show's page afterward (the
+    // pref, inverted by a Shift+Click — resolved at click time).
+    mutationFn: async ({ candidate }: { candidate: PodcastCandidate; open: boolean }) => {
+      const show = await podcastSubscribeFeed(
+        candidate.feed_url ?? undefined,
+        candidate.itunes_id ?? undefined,
+      );
       await podcastSubscribe(show.id).catch(() => {});
       return show;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["podcasts", "subscriptions"] }),
+    onSuccess: (show, { open }) => {
+      void qc.invalidateQueries({ queryKey: ["podcasts", "subscriptions"] });
+      if (open) navigate(`/podcasts/${show.id}`);
+    },
   });
 
   const subscribedFeeds = new Set((subs.data?.items ?? []).map((p) => p.feed_url));
@@ -115,6 +126,10 @@ export default function Podcasts() {
           <ul className={`${card} divide-y divide-oct-border`}>
             {results.map((c) => {
               const already = subscribedFeeds.has(c.feed_url);
+              // `add` is one mutation shared by every row, so scope the pending
+              // state to the candidate actually being added.
+              const adding =
+                add.isPending && add.variables?.candidate.feed_url === c.feed_url;
               return (
                 <li key={c.feed_url} className="flex items-center gap-3 p-3">
                   <ShowArt url={c.image_url} size={48} />
@@ -129,15 +144,23 @@ export default function Podcasts() {
                   ) : (
                     <button
                       className={btnGhostSm}
-                      onClick={() => add.mutate(c)}
-                      disabled={!isManager || add.isPending}
+                      onClick={(e) =>
+                        add.mutate({
+                          candidate: c,
+                          // Shift inverts the "open after subscribing" pref.
+                          open: openAfterSubscribe !== e.shiftKey,
+                        })
+                      }
+                      disabled={!isManager || adding}
                       title={
                         isManager
-                          ? "Add to the library + subscribe"
+                          ? openAfterSubscribe
+                            ? "Add + subscribe (Shift+Click to stay here)"
+                            : "Add + subscribe (Shift+Click to open the show)"
                           : "Only managers can add new podcasts"
                       }
                     >
-                      {add.isPending ? "Adding…" : "Subscribe"}
+                      {adding ? "Adding…" : "Subscribe"}
                     </button>
                   )}
                 </li>

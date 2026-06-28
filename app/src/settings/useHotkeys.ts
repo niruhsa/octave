@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "../player/store";
 import { useSyncStore } from "../sync/useSync";
+import { useQuickSearchStore } from "../quicksearch/store";
 import { useKeybindStore, eventMatches, type CommandId } from "./keybinds";
 
 const VOLUME_STEP = 0.05;
@@ -57,8 +58,8 @@ export function useHotkeys() {
         case "sync":
           void useSyncStore.getState().run();
           break;
-        case "search":
-          navigate("/search");
+        case "quickSearch":
+          useQuickSearchStore.getState().toggle();
           break;
         case "home":
           navigate("/");

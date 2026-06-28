@@ -23,7 +23,7 @@ export type CommandId =
   | "toggleShuffle"
   | "toggleRepeat"
   // navigation / app
-  | "search"
+  | "quickSearch"
   | "home"
   | "library"
   | "sync"
@@ -49,7 +49,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "volumeDown", label: "Volume down", description: "Lower volume", group: "Playback" },
   { id: "toggleShuffle", label: "Toggle shuffle", description: "Shuffle on / off", group: "Playback" },
   { id: "toggleRepeat", label: "Toggle repeat", description: "Cycle repeat mode", group: "Playback" },
-  { id: "search", label: "Search", description: "Open the Search tab", group: "Navigation" },
+  { id: "quickSearch", label: "Quick search", description: "Open the quick-search palette", group: "Navigation" },
   { id: "home", label: "Home tab", description: "Open the Home tab", group: "Navigation" },
   { id: "library", label: "Library tab", description: "Open the Library tab", group: "Navigation" },
   { id: "sync", label: "Sync now", description: "Reconcile with the server", group: "Navigation" },
@@ -93,7 +93,7 @@ export const DEFAULT_BINDINGS: Bindings = {
   volumeDown: b("ArrowDown"),
   toggleShuffle: b("KeyS", { shift: true }),
   toggleRepeat: b("KeyR", { shift: true }),
-  search: b("Space", { ctrl: true }),
+  quickSearch: b("KeyK", { ctrl: true }),
   upload: b("KeyU", { shift: true }),
   uploadReports: b("KeyU", { ctrl: true }),
   account: b("KeyA", { shift: true }),

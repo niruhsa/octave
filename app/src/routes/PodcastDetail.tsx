@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   podcastDeleteEpisode,
   podcastDownloadEpisode,
@@ -52,6 +52,7 @@ const SORT_OPTIONS: { value: EpisodeSort; label: string }[] = [
 
 export default function PodcastDetail() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const online = useAppStore((s) => s.online);
   const tier = useAppStore((s) => s.tier);
@@ -94,9 +95,20 @@ export default function PodcastDetail() {
     onError: (e) => setActionErr(formatError(e)),
   });
   const toggleSub = useMutation({
-    mutationFn: () =>
-      showQ.data?.subscribed ? podcastUnsubscribe(id) : podcastSubscribe(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["podcasts", "show", id] }),
+    mutationFn: () => {
+      const wasSubscribed = !!showQ.data?.subscribed;
+      return (wasSubscribed ? podcastUnsubscribe(id) : podcastSubscribe(id)).then(
+        () => wasSubscribed,
+      );
+    },
+    onSuccess: (wasSubscribed) => {
+      void qc.invalidateQueries({ queryKey: ["podcasts", "show", id] });
+      // Refresh the subscription list so the unsubscribed show drops out of it.
+      void qc.invalidateQueries({ queryKey: ["podcasts", "subscriptions"] });
+      // After unsubscribing, return to the podcast tab so the user isn't left
+      // staring at a show they no longer follow.
+      if (wasSubscribed) navigate("/podcasts");
+    },
     onError: (e) => setActionErr(formatError(e)),
   });
   const setAuto = useMutation({
