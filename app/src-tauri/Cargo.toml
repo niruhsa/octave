@@ -82,6 +82,6 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = 3
+opt-level = "z"
 panic = "abort"
 strip = true

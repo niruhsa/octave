@@ -2122,15 +2122,17 @@ impl StorageRepo for PgRepos {
     }
 
     async fn aggregates(&self) -> Result<StorageAggregates> {
+        // `SUM()` over a BIGINT column yields NUMERIC in Postgres — cast back to
+        // BIGINT so it decodes into `i64` (COUNT already returns BIGINT).
         sqlx::query_as::<_, StorageAggregates>(
             r#"SELECT
-                 (SELECT COALESCE(SUM(file_size), 0) FROM tracks)            AS music_bytes,
-                 (SELECT COALESCE(SUM(file_size), 0) FROM podcast_episodes)  AS podcast_bytes,
-                 (SELECT COUNT(*) FROM tracks)                              AS track_count,
-                 (SELECT COUNT(*) FROM albums)                              AS album_count,
-                 (SELECT COUNT(*) FROM artists)                             AS artist_count,
-                 (SELECT COUNT(*) FROM podcasts)                            AS podcast_count,
-                 (SELECT COUNT(*) FROM podcast_episodes)                    AS episode_count"#,
+                 (SELECT COALESCE(SUM(file_size), 0)::BIGINT FROM tracks)            AS music_bytes,
+                 (SELECT COALESCE(SUM(file_size), 0)::BIGINT FROM podcast_episodes)  AS podcast_bytes,
+                 (SELECT COUNT(*) FROM tracks)                                      AS track_count,
+                 (SELECT COUNT(*) FROM albums)                                      AS album_count,
+                 (SELECT COUNT(*) FROM artists)                                     AS artist_count,
+                 (SELECT COUNT(*) FROM podcasts)                                    AS podcast_count,
+                 (SELECT COUNT(*) FROM podcast_episodes)                            AS episode_count"#,
         )
         .fetch_one(&self.pool)
         .await
