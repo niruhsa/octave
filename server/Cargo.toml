@@ -66,21 +66,23 @@ walkdir = "2"
 # Decode jpeg/png/gif/webp uploads; encode optimized JPEG. Pure-Rust (no C dep).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
-# Audio duration measurement — cross-validates tag-reported duration
-# against actual frame count (critical for VBR files without a seek index).
-# The default feature set only enables flac/ogg/vorbis/wav/pcm/mkv, so
-# `measure_duration` returned `None` for m4a/mp4/aac/aiff/alac and silently
-# fell back to the (often wrong) tag-reported duration. Enable every codec
-# + container demuxer that ships in the 0.6.0 release line.
-# NOTE: mp3/mp1/mp2 are intentionally omitted — symphonia 0.6.0 pins
-# `symphonia-bundle-mp3 = 0.6.0`, which was never published (only alpha), so
-# the `all`/`mpa` feature sets fail to resolve. MP3 duration therefore still
-# relies on lofty's header read.
+# Audio decode — duration measurement (cross-validates tag-reported duration
+# against actual frame count, critical for VBR without a seek index) and the
+# Phase-12 fingerprint feature extractor (decodes to PCM samples). The default
+# feature set only enables flac/ogg/vorbis/wav/pcm/mkv, so enable every codec +
+# container demuxer in the 0.6.0 line, including `mpa` (mp1/mp2/mp3).
+#
+# NOTE: `mpa` pulls in `symphonia-bundle-mp3 0.6.0`, which was unpublished (only
+# alpha) when this was first written — hence the historical "MP3 omitted" note.
+# It is now published, so MP3 decodes natively (pure Rust, no C dep). Duration
+# still routes MP3 through our own frame-walker (`services/mp3.rs`) for VBR
+# accuracy, but the fingerprint extractor uses Symphonia's MP3 decoder.
 symphonia = { version = "0.6", default-features = true, features = [
     "aac",
     "alac",
     "isomp4",
     "aiff",
+    "mpa",
 ] }
 
 # Streaming (Phase 4): byte-range responses, async file IO

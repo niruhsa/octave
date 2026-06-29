@@ -5,12 +5,11 @@
 //! only walks packets for a frame count). The DSP extractor then resamples +
 //! frames this.
 //!
-//! ⚠️ **MP3 is unsupported** here: the project intentionally omits
-//! `symphonia-bundle-mp3` (never published past alpha — see `duration.rs`), so
-//! MP3 can't be decoded to samples. [`decode_mono`] returns
-//! [`DecodeError::UnsupportedCodec`] for MP3 (and any other codec the build
-//! can't decode); the analysis pass treats that as *skipped*, not failed, and
-//! the track simply has no embedding (radio falls back behaviorally for it).
+//! Every codec the build enables decodes here, **including MP3** (the `mpa`
+//! Symphonia feature pulls in `symphonia-bundle-mp3`). [`decode_mono`] only
+//! returns [`DecodeError::UnsupportedCodec`] for a codec the build genuinely
+//! can't decode; the analysis pass treats that as *skipped*, not failed, so the
+//! track simply has no embedding (radio falls back behaviorally for it).
 
 use std::path::Path;
 
@@ -51,22 +50,8 @@ pub struct MonoPcm {
     pub sample_rate: u32,
 }
 
-/// File extensions Symphonia can't decode in this build (no MP3 bundle). Caught
-/// early so we don't even open the file — and so the error is the clean
-/// `UnsupportedCodec` (skip) rather than a probe failure.
-const UNSUPPORTED_EXTS: &[&str] = &["mp3", "mp2", "mp1"];
-
 /// Decode `path` to a single mono `f32` channel at the file's native rate.
 pub fn decode_mono(path: &Path) -> Result<MonoPcm, DecodeError> {
-    if let Some(ext) = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase())
-        && UNSUPPORTED_EXTS.contains(&ext.as_str())
-    {
-        return Err(DecodeError::UnsupportedCodec);
-    }
-
     let file = std::fs::File::open(path).map_err(|e| DecodeError::Decode(e.to_string()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 

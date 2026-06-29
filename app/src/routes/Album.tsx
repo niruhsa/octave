@@ -220,6 +220,17 @@ export default function Album() {
     }
   }
 
+  // Start an acoustic "sounds like" radio seeded by a track (falls back to
+  // behavioral artist radio server-side when the track has no embedding yet).
+  async function startTrackRadio(t: MergedTrack) {
+    try {
+      const tracks = await discoverRadio(undefined, undefined, t.id);
+      if (tracks.length > 0) playQueue(tracks.map(serverTrackToQueueItem), 0);
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+
   return (
     <section className="flex flex-col gap-6 p-6 md:p-8">
       <Link to="/library" className="font-mono text-[11px] tracking-wide text-oct-subtle hover:text-oct-muted">
@@ -411,15 +422,7 @@ export default function Album() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
-                          onClick={async () => {
-                            try {
-                              const tracks = await discoverRadio(undefined, undefined, t.id);
-                              if (tracks.length > 0)
-                                playQueue(tracks.map(serverTrackToQueueItem), 0);
-                            } catch (e) {
-                              alert(formatError(e));
-                            }
-                          }}
+                          onClick={() => void startTrackRadio(t)}
                           {...offlineAttrs(online, false, "Start a radio that sounds like this track")}
                           className="text-oct-dim hover:text-oct-text disabled:opacity-30"
                         >
@@ -552,6 +555,7 @@ export default function Album() {
           onClose={() => setSheetTrack(null)}
           actions={{
             play: () => { setSheetTrack(null); playTrack(sheetTrack, items); },
+            radio: () => { const t = sheetTrack; setSheetTrack(null); void startTrackRadio(t); },
             download: () => { setSheetTrack(null); void dlTrack(sheetTrack); },
             removeDownload: () => { setSheetTrack(null); void removeTrack(sheetTrack); },
             edit: () => { setSheetTrack(null); setEditTracks([sheetTrack]); },
@@ -579,6 +583,7 @@ export default function Album() {
 
 type SheetActions = {
   play: () => void;
+  radio: () => void;
   download: () => void;
   removeDownload: () => void;
   edit: () => void;
@@ -610,6 +615,12 @@ function TrackActionSheet({
       onClose={onClose}
     >
       <SheetItem icon={<PlayIcon size={13} />} label="Play" onClick={actions.play} />
+      <SheetItem
+        icon={<RadioIcon size={15} />}
+        label="Start radio"
+        onClick={actions.radio}
+        disabled={!online}
+      />
       {track.downloaded ? (
         <SheetItem icon={<DownloadIcon size={16} />} label="Remove download" onClick={actions.removeDownload} />
       ) : (

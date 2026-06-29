@@ -14,12 +14,13 @@ use crate::auth::Identity;
 use crate::db::models::{self as m, PermissionLevel};
 use crate::error::AppError;
 use crate::rest::{ApiError, RestState};
-use crate::services::recommendation::SIMILAR_DEFAULT;
+use crate::services::recommendation::{PLAYLIST_REC_DEFAULT, SIMILAR_DEFAULT};
 
 pub fn router() -> Router<RestState> {
     Router::new()
         .route("/discover", get(home))
         .route("/discover/radio", get(radio))
+        .route("/discover/recommendations", post(recommendations))
         .route("/tracks/:id/similar", get(similar))
         .route("/fingerprint/status", get(fingerprint_status))
         .route("/fingerprint/scan", post(fingerprint_scan))
@@ -167,6 +168,34 @@ async fn similar(
 ) -> Result<Json<RadioDto>, ApiError> {
     let limit = q.limit.filter(|n| *n > 0).unwrap_or(SIMILAR_DEFAULT);
     let tracks = s.discover.similar_tracks(&c, id, limit).await?;
+    Ok(Json(RadioDto {
+        tracks: tracks.into_iter().map(track_dto).collect(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct RecommendationsBody {
+    #[serde(default)]
+    pub seed_track_ids: Vec<String>,
+    pub limit: Option<usize>,
+}
+
+/// `POST /discover/recommendations` — Spotify-style playlist recommendations
+/// (Phase 12). Body: `{ seed_track_ids: [...], limit? }`. The client passes the
+/// playlist's current track ids; results are based on + exclude them.
+async fn recommendations(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Json(body): Json<RecommendationsBody>,
+) -> Result<Json<RadioDto>, ApiError> {
+    let mut seeds = Vec::with_capacity(body.seed_track_ids.len());
+    for raw in &body.seed_track_ids {
+        if let Some(id) = parse_opt_uuid(Some(raw.clone()), "seed track")? {
+            seeds.push(id);
+        }
+    }
+    let limit = body.limit.filter(|n| *n > 0).unwrap_or(PLAYLIST_REC_DEFAULT);
+    let tracks = s.discover.recommend_for_playlist(&c, &seeds, limit).await?;
     Ok(Json(RadioDto {
         tracks: tracks.into_iter().map(track_dto).collect(),
     }))

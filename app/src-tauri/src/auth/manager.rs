@@ -457,6 +457,19 @@ impl AuthManager {
         self.server.discover_similar(&cred, track_id, limit).await
     }
 
+    /// Spotify-style playlist recommendations (Phase 12). `seed_track_ids` is the
+    /// playlist's current songs; results are based on + exclude them.
+    pub async fn discover_playlist_recommendations(
+        &self,
+        seed_track_ids: &[String],
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        let cred = self.credential().await?;
+        self.server
+            .discover_playlist_recommendations(&cred, seed_track_ids, limit)
+            .await
+    }
+
     /// Fingerprint analysis coverage (Phase 12).
     pub async fn fingerprint_status(&self) -> AppResult<FingerprintStatus> {
         let cred = self.credential().await?;

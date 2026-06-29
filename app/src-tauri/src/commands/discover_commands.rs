@@ -60,6 +60,20 @@ pub async fn discover_similar(
         .await
 }
 
+/// Spotify-style playlist recommendations (Phase 12). Pass the playlist's
+/// current track ids as seeds; results are based on + exclude them.
+#[tauri::command]
+pub async fn discover_playlist_recommendations(
+    state: State<'_, AppStateHandle>,
+    seed_track_ids: Vec<String>,
+    limit: Option<i32>,
+) -> AppResult<Vec<Track>> {
+    manager(&state)
+        .await?
+        .discover_playlist_recommendations(&seed_track_ids, limit.unwrap_or(0))
+        .await
+}
+
 /// Fingerprint analysis coverage (Phase 12) — drives the discovery settings
 /// readout + whether to surface "sounds like" affordances.
 #[tauri::command]

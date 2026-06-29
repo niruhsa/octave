@@ -648,6 +648,19 @@ export const discoverSimilar = (trackId: string, limit?: number) =>
     limit: limit ?? null,
   });
 
+/** Spotify-style playlist recommendations (Phase 12). Pass the playlist's
+ *  current track ids as seeds; results are based on + exclude them — so the more
+ *  songs the playlist has, the better the recommendations. Falls back to
+ *  same-artist suggestions when no seed has an embedding yet. */
+export const discoverPlaylistRecommendations = (
+  seedTrackIds: string[],
+  limit?: number,
+) =>
+  invoke<FavoriteTrack[]>("discover_playlist_recommendations", {
+    seedTrackIds,
+    limit: limit ?? null,
+  });
+
 /** Acoustic-fingerprint analysis coverage (Phase 12). `enabled` is false when
  *  the server has `FINGERPRINT_ENABLED` off. */
 export type FingerprintStatus = {

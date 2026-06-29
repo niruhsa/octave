@@ -218,7 +218,7 @@ impl FingerprintService {
                 Ok(())
             }
             AnalyzeOutcome::Unanalyzable => Err(AppError::InvalidArgument(
-                "track codec is not analyzable (e.g. MP3)".into(),
+                "track codec is not analyzable by this build".into(),
             )),
             AnalyzeOutcome::Failed => {
                 Err(AppError::Internal(format!("failed to analyze track {track_id}")))
@@ -350,8 +350,10 @@ mod tests {
         }
     }
 
-    // A fake extractor that returns a fixed embedding for any path ending in a
-    // decodable extension, and signals "unanalyzable" for ".mp3".
+    // A fake extractor that returns a fixed embedding for decodable files, and
+    // signals "unanalyzable" (InvalidArgument) for a `.raw` extension — standing
+    // in for any codec the real build can't decode, so we can test the pass's
+    // skip-classification without depending on a specific codec.
     struct FakeExtractor;
     #[async_trait]
     impl FeatureExtractor for FakeExtractor {
@@ -362,7 +364,7 @@ mod tests {
             3
         }
         async fn extract(&self, path: &Path) -> Result<Vec<f32>> {
-            if path.extension().and_then(|e| e.to_str()) == Some("mp3") {
+            if path.extension().and_then(|e| e.to_str()) == Some("raw") {
                 return Err(AppError::InvalidArgument("unanalyzable".into()));
             }
             Ok(vec![1.0, 0.0, 0.0])
@@ -550,10 +552,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pass_analyzes_decodable_and_skips_mp3() {
+    async fn pass_analyzes_decodable_and_skips_unanalyzable() {
         let (svc, tracks, features) = make();
         tracks.insert(&touch("fp_a.flac"));
-        tracks.insert(&touch("fp_b.mp3"));
+        tracks.insert(&touch("fp_b.raw")); // fake "undecodable" codec
 
         let r = svc.run_pass().await;
         assert_eq!(r.total, 2);

@@ -27,8 +27,9 @@ pub trait FeatureExtractor: Send + Sync {
     /// Embedding length (every row this extractor writes has this `dims`).
     fn dims(&self) -> usize;
     /// Decode `path` and return a unit-normalized embedding. Returns
-    /// [`AppError::InvalidArgument`] for a codec this build can't decode (MP3) —
-    /// the pass treats that as "skip", not "fail".
+    /// [`AppError::InvalidArgument`] for a codec this build can't decode — the
+    /// pass treats that as "skip", not "fail". (MP3, FLAC, AAC/ALAC, OGG/Vorbis,
+    /// WAV/AIFF all decode.)
     async fn extract(&self, path: &Path) -> Result<Vec<f32>>;
 }
 

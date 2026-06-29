@@ -13,6 +13,9 @@ service DiscoverService {
   rpc GetRadio(GetRadioRequest) returns (GetRadioResponse);
   // Acoustic "sounds like this" — the seed track's nearest neighbors (Phase 12).
   rpc GetSimilarTracks(GetSimilarRequest) returns (GetRadioResponse);
+  // Spotify-style playlist recommendations: tracks similar to the whole
+  // playlist (aggregated over its current songs), excluding the seeds.
+  rpc RecommendForPlaylist(RecommendForPlaylistRequest) returns (GetRadioResponse);
   // Fingerprint analysis status (any authed user, read-only).
   rpc FingerprintStatus(FingerprintStatusRequest) returns (FingerprintStatusResponse);
   // Trigger an analysis pass on demand (Manager+).
@@ -44,6 +47,13 @@ message GetRadioResponse { repeated DiscTrack tracks = 1; }
 message GetSimilarRequest {
   string track_id = 1;
   int32 limit = 2; // 0 = server default
+}
+
+// Playlist recommendations (Phase 12). The client passes the playlist's current
+// track ids as seeds; recommendations are based on (and exclude) them.
+message RecommendForPlaylistRequest {
+  repeated string seed_track_ids = 1;
+  int32 limit = 2; // 0 = server default pool size
 }
 
 message FingerprintStatusRequest {}

@@ -1245,6 +1245,40 @@ impl RestClient {
         Ok(body.tracks.into_iter().map(Into::into).collect())
     }
 
+    /// Spotify-style playlist recommendations — tracks similar to the whole
+    /// playlist (aggregated over `seed_track_ids`), excluding the seeds (Phase 12).
+    pub async fn discover_playlist_recommendations(
+        &self,
+        cred: &Credential,
+        seed_track_ids: &[String],
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            seed_track_ids: &'a [String],
+            limit: i32,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            tracks: Vec<TrackJson>,
+        }
+        let url = format!("{}/discover/recommendations", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&Body { seed_track_ids, limit })
+            .send()
+            .await
+            .map_err(rest_err("discover_playlist_recommendations"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discover_playlist_recommendations decode"))?;
+        Ok(body.tracks.into_iter().map(Into::into).collect())
+    }
+
     /// Fingerprint analysis coverage (Phase 12).
     pub async fn fingerprint_status(&self, cred: &Credential) -> AppResult<FingerprintStatus> {
         let url = format!("{}/fingerprint/status", self.base);

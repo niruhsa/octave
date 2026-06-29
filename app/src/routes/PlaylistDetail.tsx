@@ -1,7 +1,9 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import {
+  discoverPlaylistRecommendations,
+  discoverRadio,
   downloadDelete,
   downloadPlaylist,
   downloadTrack,
@@ -12,6 +14,7 @@ import {
   playlistRemoveTrack,
   playlistRename,
   playlistReorderTrack,
+  type FavoriteTrack,
   type MergedPlaylistEntry,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
@@ -24,12 +27,14 @@ import {
   PlaylistIcon,
   PlayIcon,
   PlusIcon,
+  RadioIcon,
   ShuffleIcon,
+  SyncIcon,
 } from "../components/icons";
 import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
 import { gradientFor } from "../lib/visual";
-import { usePlayerStore } from "../player/store";
+import { serverTrackToQueueItem, usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
@@ -184,6 +189,39 @@ export default function PlaylistDetail() {
     [entries, online],
   );
 
+  // ----- Recommended songs (Spotify-style; Phase 12 acoustic recs) -------
+  // A pool (~30) of suggestions similar to the *whole* playlist. We show up to
+  // 10; adding one drops it from the pool so the next slides in (no refetch).
+  // "Refresh" recomputes from whatever is *now* in the playlist.
+  const [recs, setRecs] = useState<FavoriteTrack[] | null>(null);
+  const [recsLoading, setRecsLoading] = useState(false);
+  const entryIds = useMemo(() => new Set(entries.map((e) => e.track.id)), [entries]);
+  const recVisible = useMemo(
+    () => (recs ?? []).filter((r) => !entryIds.has(r.id)).slice(0, 10),
+    [recs, entryIds],
+  );
+
+  async function loadRecs() {
+    const seedIds = entries.map((e) => e.track.id);
+    if (seedIds.length === 0) { setRecs([]); return; }
+    setRecsLoading(true);
+    const pool = await guard(() => discoverPlaylistRecommendations(seedIds, 30));
+    setRecs(pool ?? []);
+    setRecsLoading(false);
+  }
+  // Load once the playlist has tracks (re-runs only if the pool is reset to null).
+  useEffect(() => {
+    if (recs === null && online && canEdit && entries.length > 0) void loadRecs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recs, online, canEdit, entries.length]);
+
+  async function addRec(t: FavoriteTrack) {
+    // Optimistically drop it from the pool so the next recommendation slides in;
+    // `addTrack` adds it to the playlist + refreshes (it's then a future seed).
+    setRecs((prev) => (prev ? prev.filter((r) => r.id !== t.id) : prev));
+    await addTrack(t.id);
+  }
+
   if (q.isLoading)
     return (
       <section className="flex flex-col gap-6 p-6 md:p-8">
@@ -327,6 +365,77 @@ export default function PlaylistDetail() {
         )}
       </div>
 
+      {/* Recommended songs — similar to the whole playlist; preview or add.
+          Each add is replaced from the pool; Refresh recomputes from the
+          current playlist (so it improves as the playlist grows). */}
+      {canEdit && online && entries.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-2 font-mono text-[11px] tracking-[0.14em] text-oct-faint">
+              <RadioIcon size={13} /> RECOMMENDED
+            </h2>
+            <button
+              onClick={() => void loadRecs()}
+              disabled={recsLoading}
+              className="flex items-center gap-1.5 font-mono text-[11px] text-oct-subtle hover:text-oct-text disabled:opacity-40"
+              title="Recalculate from the current playlist"
+            >
+              <SyncIcon size={13} className={recsLoading ? "animate-octspin" : ""} /> Refresh
+            </button>
+          </div>
+          {recs === null && recsLoading ? (
+            <SkeletonTracks rows={4} cols={3} />
+          ) : recVisible.length === 0 ? (
+            <p className="text-[13px] text-oct-subtle">
+              No recommendations right now — add more songs to improve them.
+            </p>
+          ) : (
+            <div className="flex flex-col divide-y divide-oct-border/60">
+              {recVisible.map((t, i) => {
+                const active = t.id === currentId;
+                return (
+                  <div
+                    key={t.id}
+                    className="group grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg px-2 py-2 hover:bg-oct-elevated/40"
+                  >
+                    <button
+                      onClick={() => playQueue(recVisible.map(serverTrackToQueueItem), i)}
+                      className="flex min-w-0 items-center gap-3 text-left"
+                      title={`Preview "${t.title}"`}
+                    >
+                      <span
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-md"
+                        style={{ background: gradientFor(t.album_id) }}
+                      >
+                        {active && isPlaying ? (
+                          <EqBars playing />
+                        ) : (
+                          <PlayIcon size={12} className="text-white/85 opacity-70 group-hover:opacity-100" />
+                        )}
+                      </span>
+                      <span className={`truncate text-[13.5px] ${active ? "text-oct-accent" : ""}`}>
+                        {t.title}
+                      </span>
+                    </button>
+                    <span className="font-mono text-[11px] text-oct-subtle">
+                      {formatDuration(t.duration_ms)}
+                    </span>
+                    <button
+                      onClick={() => void addRec(t)}
+                      disabled={busy}
+                      className={btnGhostSm}
+                      title="Add to playlist"
+                    >
+                      <PlusIcon size={12} /> Add
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {sheetEntry && (
         <PlaylistEntryActionSheet
           entry={sheetEntry}
@@ -338,6 +447,18 @@ export default function PlaylistDetail() {
             const i = entries.findIndex((x) => x.position === sheetEntry.position);
             setSheetEntry(null);
             if (i >= 0) playQueue(entries.map((x) => x.track), i);
+          }}
+          onRadio={() => {
+            const tid = sheetEntry.track.id;
+            setSheetEntry(null);
+            void (async () => {
+              try {
+                const tracks = await discoverRadio(undefined, undefined, tid);
+                if (tracks.length > 0) playQueue(tracks.map(serverTrackToQueueItem), 0);
+              } catch (e) {
+                setErr(formatError(e));
+              }
+            })();
           }}
           onAddToPlaylist={() => {
             const tr = sheetEntry.track;
@@ -472,6 +593,7 @@ function PlaylistEntryActionSheet({
   online,
   onClose,
   onPlay,
+  onRadio,
   onAddToPlaylist,
   onDownload,
   onRemoveDownload,
@@ -485,6 +607,7 @@ function PlaylistEntryActionSheet({
   online: boolean;
   onClose: () => void;
   onPlay: () => void;
+  onRadio: () => void;
   onAddToPlaylist: () => void;
   onDownload: () => void;
   onRemoveDownload: () => void;
@@ -502,6 +625,7 @@ function PlaylistEntryActionSheet({
       onClose={onClose}
     >
       <SheetItem icon={<PlayIcon size={13} />} label="Play" onClick={onPlay} />
+      <SheetItem icon={<RadioIcon size={15} />} label="Start radio" onClick={onRadio} disabled={!online} />
       <SheetItem icon={<PlaylistIcon size={16} />} label="Add to playlist…" onClick={onAddToPlaylist} />
       {t.downloaded ? (
         <SheetItem icon={<DownloadIcon size={16} />} label="Remove download" onClick={onRemoveDownload} />

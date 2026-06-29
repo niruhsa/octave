@@ -1117,6 +1117,28 @@ impl GrpcClient {
         Ok(resp.tracks.into_iter().map(track_from_disc).collect())
     }
 
+    /// Spotify-style playlist recommendations — tracks similar to the whole
+    /// playlist (aggregated over `seed_track_ids`), excluding the seeds (Phase 12).
+    pub async fn discover_playlist_recommendations(
+        &self,
+        cred: &Credential,
+        seed_track_ids: &[String],
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        let mut req = Request::new(dpb::RecommendForPlaylistRequest {
+            seed_track_ids: seed_track_ids.to_vec(),
+            limit,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .discover()
+            .recommend_for_playlist(req)
+            .await
+            .map_err(map_mutation_err("discover_playlist_recommendations"))?
+            .into_inner();
+        Ok(resp.tracks.into_iter().map(track_from_disc).collect())
+    }
+
     /// Fingerprint analysis coverage (Phase 12).
     pub async fn fingerprint_status(&self, cred: &Credential) -> AppResult<FingerprintStatus> {
         let mut req = Request::new(dpb::FingerprintStatusRequest {});

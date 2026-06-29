@@ -8,7 +8,7 @@ use crate::db::models::{self as m, PermissionLevel};
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::discover as pb;
-use crate::services::recommendation::SIMILAR_DEFAULT;
+use crate::services::recommendation::{PLAYLIST_REC_DEFAULT, SIMILAR_DEFAULT};
 use crate::services::{FingerprintService, RecommendationService};
 
 #[derive(Clone)]
@@ -127,6 +127,33 @@ impl pb::discover_service_server::DiscoverService for DiscoverServer {
         let tracks = self
             .discover
             .similar_tracks(&caller, track_id, limit)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::GetRadioResponse {
+            tracks: tracks.into_iter().map(track_to_pb).collect(),
+        }))
+    }
+
+    async fn recommend_for_playlist(
+        &self,
+        req: Request<pb::RecommendForPlaylistRequest>,
+    ) -> Result<Response<pb::GetRadioResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let mut seeds = Vec::with_capacity(body.seed_track_ids.len());
+        for s in &body.seed_track_ids {
+            if let Some(id) = opt_uuid(s, "seed track")? {
+                seeds.push(id);
+            }
+        }
+        let limit = if body.limit <= 0 {
+            PLAYLIST_REC_DEFAULT
+        } else {
+            body.limit as usize
+        };
+        let tracks = self
+            .discover
+            .recommend_for_playlist(&caller, &seeds, limit)
             .await
             .map_err(map_err)?;
         Ok(Response::new(pb::GetRadioResponse {

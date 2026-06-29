@@ -280,6 +280,7 @@ pub fn run() {
             commands::discover_commands::discover_home,
             commands::discover_commands::discover_radio,
             commands::discover_commands::discover_similar,
+            commands::discover_commands::discover_playlist_recommendations,
             commands::discover_commands::fingerprint_status,
             // podcasts
             commands::podcast_commands::podcast_search,

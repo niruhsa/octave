@@ -42,6 +42,15 @@ const ARTIST_CAP: usize = 3;
 const ALBUM_CAP: usize = 2;
 /// Default neighbor count for the "Sounds like this" shelf.
 pub const SIMILAR_DEFAULT: usize = 20;
+/// Default size of a playlist-recommendation pool (the client shows ~10 and
+/// keeps the rest as a buffer to backfill as songs are added).
+pub const PLAYLIST_REC_DEFAULT: usize = 30;
+/// Cap on how many playlist seeds we actually run through the index — bounds the
+/// per-request cost (each seed is a full index scan) for very large playlists.
+/// The most-recently-passed seeds beyond this are sampled out.
+const REC_MAX_SEEDS: usize = 100;
+/// Neighbors pulled per seed before aggregation.
+const REC_NEIGHBORS_PER_SEED: usize = 200;
 
 /// One home shelf: a titled list of albums.
 #[derive(Debug, Clone)]
@@ -215,6 +224,102 @@ impl RecommendationService {
         }
         // Behavioral fallback: other tracks by the same artist.
         self.artist_tracks_excluding(seed.artist_id, track_id, limit).await
+    }
+
+    /// Spotify-style **playlist recommendations**: aggregate the acoustic
+    /// neighbors of every seed track (the playlist's current songs), exclude the
+    /// seeds, and return a diversified ranked pool. A candidate similar to *many*
+    /// playlist songs scores higher (similarities are summed across seeds), so
+    /// the more analyzed songs the playlist has, the stronger the signal.
+    ///
+    /// The client passes the playlist's **current** track ids each call, so a
+    /// refresh after adding songs naturally re-bases the recommendations on the
+    /// updated playlist. Falls back to same-artist suggestions (weighted by how
+    /// often each artist appears in the playlist) when no seed has an embedding
+    /// yet — so it always returns something useful. Any authed user.
+    pub async fn recommend_for_playlist(
+        &self,
+        caller: &Identity,
+        seed_track_ids: &[Uuid],
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        caller.require(PermissionLevel::User)?;
+        let limit = limit.clamp(1, RADIO_LIMIT);
+        if seed_track_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let exclude: HashSet<Uuid> = seed_track_ids.iter().copied().collect();
+
+        // Acoustic path: sum neighbor similarities across the (analyzed) seeds.
+        if let Some(index) = &self.index {
+            let mut scores: std::collections::HashMap<Uuid, f32> = Default::default();
+            for &seed in seed_track_ids.iter().take(REC_MAX_SEEDS) {
+                if !index.has(seed).await {
+                    continue;
+                }
+                for (id, sim) in index.nearest(seed, REC_NEIGHBORS_PER_SEED).await? {
+                    if !exclude.contains(&id) {
+                        *scores.entry(id).or_insert(0.0) += sim;
+                    }
+                }
+            }
+            if !scores.is_empty() {
+                let mut ranked: Vec<(Uuid, f32)> = scores.into_iter().collect();
+                ranked.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let mut candidates = Vec::with_capacity(ranked.len());
+                for (id, _) in ranked {
+                    if let Some(t) = self.tracks.get(id).await? {
+                        candidates.push(t);
+                    }
+                }
+                let mut out = Vec::new();
+                diversify_into(&mut out, candidates, limit);
+                return Ok(out);
+            }
+        }
+
+        // Behavioral fallback: the playlist's artists, weighted by frequency.
+        self.recommend_behavioral(seed_track_ids, &exclude, limit).await
+    }
+
+    /// Behavioral playlist recommendations: pull tracks from the playlist's
+    /// artists (most-represented first), excluding what's already in it.
+    async fn recommend_behavioral(
+        &self,
+        seed_track_ids: &[Uuid],
+        exclude: &HashSet<Uuid>,
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        let mut artist_counts: std::collections::HashMap<Uuid, usize> = Default::default();
+        let mut order: Vec<Uuid> = Vec::new();
+        for &seed in seed_track_ids.iter().take(REC_MAX_SEEDS) {
+            if let Some(t) = self.tracks.get(seed).await? {
+                let c = artist_counts.entry(t.artist_id).or_insert(0);
+                if *c == 0 {
+                    order.push(t.artist_id);
+                }
+                *c += 1;
+            }
+        }
+        // Most-represented artists first (stable on first-seen order otherwise).
+        order.sort_by(|a, b| artist_counts[b].cmp(&artist_counts[a]));
+
+        let mut candidates: Vec<Track> = Vec::new();
+        let mut seen: HashSet<Uuid> = exclude.clone();
+        for artist_id in order {
+            for al in self.albums.list_by_artist(artist_id).await? {
+                for t in self.tracks.list_by_album(al.id).await? {
+                    if seen.insert(t.id) {
+                        candidates.push(t);
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        diversify_into(&mut out, candidates, limit);
+        Ok(out)
     }
 
     // -----------------------------------------------------------------------
@@ -969,5 +1074,68 @@ mod tests {
         let other = f.tracks.insert(artist.id, alb.id, "other");
         let fb = svc.similar_tracks(&user(), other.id, 5).await.unwrap();
         assert!(fb.iter().any(|t| t.id == seed.id));
+    }
+
+    #[tokio::test]
+    async fn playlist_recs_aggregate_neighbors_and_exclude_seeds() {
+        let f = make();
+        let idx = Arc::new(FakeIndex::default());
+        let svc = f.svc.clone().with_similarity(idx.clone());
+
+        // Two playlist seeds, each by a different artist.
+        let ar1 = f.artists.insert("S1");
+        let ar2 = f.artists.insert("S2");
+        let al1 = f.albums.insert(ar1.id, "A1");
+        let al2 = f.albums.insert(ar2.id, "A2");
+        let seed1 = f.tracks.insert(ar1.id, al1.id, "seed1");
+        let seed2 = f.tracks.insert(ar2.id, al2.id, "seed2");
+
+        // A "shared" candidate is a neighbor of BOTH seeds (summed score wins);
+        // a "single" candidate neighbors only one. Each from its own artist so
+        // the per-artist diversity cap doesn't drop them.
+        let arc = f.artists.insert("Cand");
+        let alc = f.albums.insert(arc.id, "C");
+        let shared = f.tracks.insert(f.artists.insert("Shared").id, f.albums.insert(Uuid::new_v4(), "sh").id, "shared");
+        let single = f.tracks.insert(arc.id, alc.id, "single");
+
+        idx.ranks.lock().unwrap().insert(seed1.id, vec![(shared.id, 0.6), (single.id, 0.5)]);
+        idx.ranks.lock().unwrap().insert(seed2.id, vec![(shared.id, 0.6)]);
+
+        let recs = svc
+            .recommend_for_playlist(&user(), &[seed1.id, seed2.id], 10)
+            .await
+            .unwrap();
+
+        // Seeds are excluded; the doubly-neighbored "shared" ranks first.
+        assert!(!recs.iter().any(|t| t.id == seed1.id || t.id == seed2.id));
+        assert_eq!(recs[0].id, shared.id, "summed-score candidate first");
+        assert!(recs.iter().any(|t| t.id == single.id));
+    }
+
+    #[tokio::test]
+    async fn playlist_recs_fall_back_to_playlist_artists() {
+        let f = make();
+        let idx = Arc::new(FakeIndex::default()); // empty → no embeddings
+        let svc = f.svc.clone().with_similarity(idx);
+
+        let artist = f.artists.insert("A");
+        let alb = f.albums.insert(artist.id, "Alb");
+        let seed = f.tracks.insert(artist.id, alb.id, "seed");
+        let sibling = f.tracks.insert(artist.id, alb.id, "sibling");
+
+        let recs = svc
+            .recommend_for_playlist(&user(), &[seed.id], 10)
+            .await
+            .unwrap();
+        // Behavioral fallback surfaces the artist's other track, never the seed.
+        assert!(recs.iter().any(|t| t.id == sibling.id));
+        assert!(!recs.iter().any(|t| t.id == seed.id));
+    }
+
+    #[tokio::test]
+    async fn playlist_recs_empty_for_no_seeds() {
+        let f = make();
+        let svc = f.svc.clone().with_similarity(Arc::new(FakeIndex::default()));
+        assert!(svc.recommend_for_playlist(&user(), &[], 10).await.unwrap().is_empty());
     }
 }

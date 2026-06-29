@@ -33,11 +33,11 @@ const MAX_PACKET_WALK: u64 = 200_000;
 /// duration or frame count, the result is instant; otherwise it walks
 /// packets to EOF (capped at `MAX_PACKET_WALK`).
 pub fn measure_duration(path: &Path) -> Option<StdDuration> {
-    // MP3 is handled by our own frame-walker: Symphonia 0.6.0 can't enable
-    // the `mp3` feature (its `symphonia-bundle-mp3` 0.6.0 dep was never
-    // published), so the probe below would return `None` for MP3 and the
-    // caller would fall back to lofty's wrong VBR estimate. Walking the
-    // frames is correct for CBR and VBR alike.
+    // MP3 duration is handled by our own frame-walker for VBR accuracy: even
+    // though Symphonia now decodes MP3 (the `mpa` feature is enabled for the
+    // fingerprint extractor), its demuxer reports the header-estimated duration
+    // for a VBR file without a Xing/VBRI index, which can be off by minutes.
+    // Counting frames is correct for CBR and VBR alike.
     if matches!(
         path.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()).as_deref(),
         Some("mp3" | "mp2" | "mp1")

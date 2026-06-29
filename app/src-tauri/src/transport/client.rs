@@ -876,6 +876,29 @@ impl ServerClient {
         self.rest.discover_similar(cred, track_id, limit).await
     }
 
+    pub async fn discover_playlist_recommendations(
+        &self,
+        cred: &Credential,
+        seed_track_ids: &[String],
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .discover_playlist_recommendations(cred, seed_track_ids, limit)
+                .await
+            {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => {
+                    fallback_log("discover_playlist_recommendations", &e)
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest
+            .discover_playlist_recommendations(cred, seed_track_ids, limit)
+            .await
+    }
+
     pub async fn fingerprint_status(&self, cred: &Credential) -> AppResult<FingerprintStatus> {
         if let Some(grpc) = self.try_grpc().await {
             match grpc.fingerprint_status(cred).await {

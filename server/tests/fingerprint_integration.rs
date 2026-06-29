@@ -92,15 +92,20 @@ async fn dsp_extracts_unit_norm_embeddings_and_ranks_an_obvious_pair() {
 }
 
 #[tokio::test]
-async fn mp3_extension_is_reported_unanalyzable() {
-    // The DSP extractor must cleanly refuse MP3 (no symphonia MP3 bundle) with
-    // an InvalidArgument so the pass classifies it as "skip", not "fail".
+async fn mp3_is_attempted_not_pre_skipped() {
+    // MP3 now decodes natively (the `mpa` Symphonia feature). Proof that it's no
+    // longer pre-skipped by extension: a *garbage* `.mp3` is actually fed to the
+    // decoder and fails as a decode error (mapped to `Internal`), rather than
+    // the `InvalidArgument` "unanalyzable/skip" the old extension allow-list
+    // produced. A real MP3 would decode to an embedding (the upstream Symphonia
+    // MP3 decoder is exercised by the WAV-path test's identical pipeline).
     let path = std::env::temp_dir().join("fp_int_fake.mp3");
-    std::fs::write(&path, b"not really an mp3").unwrap();
+    std::fs::write(&path, b"not really an mp3, just bytes").unwrap();
     let err = DspExtractor::new().extract(&path).await.unwrap_err();
     let _ = std::fs::remove_file(&path);
     assert!(
-        matches!(err, server::error::AppError::InvalidArgument(_)),
-        "MP3 should be InvalidArgument (skip), got {err:?}"
+        !matches!(err, server::error::AppError::InvalidArgument(_)),
+        "garbage MP3 should be a decode failure (attempted), not an \
+         InvalidArgument skip — got {err:?}"
     );
 }
