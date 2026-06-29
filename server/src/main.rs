@@ -197,12 +197,17 @@ async fn main() -> Result<()> {
     let ingest = match config.library_path.clone() {
         Some(ref root) => {
             let organizer = Organizer::new(root.clone());
-            Some(IngestService::new(
-                scan.clone(),
-                organizer,
-                config.ingest_path.clone(),
-                artwork.clone().map(Arc::new),
-            ))
+            Some(
+                IngestService::new(
+                    scan.clone(),
+                    organizer,
+                    config.ingest_path.clone(),
+                    artwork.clone().map(Arc::new),
+                )
+                // Analyze newly-uploaded tracks on ingest (Phase 12) so "sounds
+                // like" works promptly; no-op when fingerprinting is disabled.
+                .with_fingerprint(fingerprint.clone()),
+            )
         }
         None => None,
     };

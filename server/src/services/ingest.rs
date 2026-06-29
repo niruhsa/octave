@@ -37,6 +37,11 @@ pub struct IngestService {
     /// albums. When set, every new album created during ingest triggers a
     /// background cover lookup + embed into all track files.
     pub artwork: Option<Arc<ArtworkService>>,
+    /// Optional acoustic fingerprinting (Phase 12). When set, every
+    /// newly-indexed track is analyzed in the background on ingest so "sounds
+    /// like" radio works promptly for fresh uploads (the periodic pass is the
+    /// catch-all). `None` when `FINGERPRINT_ENABLED` is off.
+    pub fingerprint: Option<crate::services::FingerprintService>,
 }
 
 impl IngestService {
@@ -51,7 +56,17 @@ impl IngestService {
             organizer,
             ingest_root,
             artwork,
+            fingerprint: None,
         }
+    }
+
+    /// Attach the fingerprint service so new uploads are analyzed on ingest.
+    pub fn with_fingerprint(
+        mut self,
+        fingerprint: Option<crate::services::FingerprintService>,
+    ) -> Self {
+        self.fingerprint = fingerprint;
+        self
     }
 
     // ------------------------------------------------------------------
@@ -176,6 +191,26 @@ impl IngestService {
                     }
                 });
             }
+        }
+
+        // Fingerprint a genuinely-new track in the background (Phase 12) so
+        // acoustic "sounds like" works promptly without blocking the upload.
+        // Re-ingests (`already_indexed`) are left to the periodic freshness
+        // pass, which re-analyzes only when the file signature actually changed.
+        if !already_indexed
+            && let Some(fp) = &self.fingerprint
+        {
+            let fp = fp.clone();
+            tokio::spawn(async move {
+                match fp.analyze_track(track_id).await {
+                    Ok(()) => tracing::debug!(track_id = %track_id, "ingest: fingerprint analyzed"),
+                    Err(e) => tracing::debug!(
+                        track_id = %track_id,
+                        error = %e,
+                        "ingest: fingerprint analyze skipped/failed"
+                    ),
+                }
+            });
         }
 
         debug!(
