@@ -104,30 +104,32 @@ export default function PlayerBar() {
 
       {/* ───────── desktop / wide bar ───────── */}
       <div className="hidden h-[90px] grid-cols-[1fr_auto_1fr] items-center gap-6 px-5 md:grid">
-        {/* now-playing */}
-        <button
-          onClick={openPlayer}
-          title="Open player"
-          className="group flex min-w-0 items-center gap-3 text-left"
-        >
-          <Thumb album={current ? { id: current.album_id } : null} size={52} tryCover />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-[13.5px] font-medium">{current?.title ?? "—"}</span>
-              {current?.downloaded && <SavedPill />}
+        {/* now-playing (+ like) — a single grid column so the transport stays centered */}
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            onClick={openPlayer}
+            title="Open player"
+            className="group flex min-w-0 items-center gap-3 text-left"
+          >
+            <Thumb album={current ? { id: current.album_id } : null} size={52} tryCover />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13.5px] font-medium">{current?.title ?? "—"}</span>
+                {current?.downloaded && <SavedPill />}
+              </div>
+              <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
+                {meta.artistName ?? (current ? qualityLabel(current) : "")}
+              </div>
             </div>
-            <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
-              {meta.artistName ?? (current ? qualityLabel(current) : "")}
-            </div>
-          </div>
-          <span className="text-oct-faint opacity-0 transition-opacity group-hover:opacity-100">
-            <ChevronDownIcon size={15} className="rotate-180" />
-          </span>
-        </button>
-        {/* like the current track (sibling, not nested in the button above) */}
-        {current && current.mediaKind !== "episode" && (
-          <FavoriteButton kind="track" id={current.id} size={18} />
-        )}
+            <span className="text-oct-faint opacity-0 transition-opacity group-hover:opacity-100">
+              <ChevronDownIcon size={15} className="rotate-180" />
+            </span>
+          </button>
+          {/* like the current track (sibling, not nested in the button above) */}
+          {current && current.mediaKind !== "episode" && (
+            <FavoriteButton kind="track" id={current.id} size={18} />
+          )}
+        </div>
 
         {/* transport + progress */}
         <div className="flex w-[440px] flex-col items-center gap-2">

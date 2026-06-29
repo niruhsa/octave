@@ -75,6 +75,8 @@ const TABS: Tab[] = [
   { id: "library", label: "Library", desc: "Artists, albums & tracks", to: "/library" },
   { id: "playlists", label: "Playlists", desc: "Your playlists", to: "/playlists" },
   { id: "podcasts", label: "Podcasts", desc: "Subscribed shows", to: "/podcasts" },
+  { id: "favorites", label: "Favorites", desc: "Liked tracks, albums & artists", to: "/favorites" },
+  { id: "listening", label: "Listening", desc: "Your stats & top music", to: "/stats" },
   { id: "downloads", label: "Downloads", desc: "Saved on this device", to: "/downloads" },
   { id: "notifications", label: "Notifications", desc: "New releases", to: "/notifications" },
   { id: "account", label: "Account", desc: "Server, audio & account", to: "/account" },

@@ -163,15 +163,6 @@ export default function Home() {
         unavailable={!online || storage.isError}
       />
 
-      {/* recently played */}
-      {isUser && online && <RecentlyPlayed events={recent.data?.events ?? []} />}
-
-      {/* discover shelves */}
-      {isUser && online &&
-        (discover.data ?? []).map((section) => (
-          <DiscoverShelf key={section.id} section={section} />
-        ))}
-
       {/* quick links */}
       <div>
         <h2 className="mb-3 font-mono text-[11px] tracking-[0.14em] text-oct-faint">JUMP TO</h2>
@@ -185,6 +176,15 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* recently played */}
+      {isUser && online && <RecentlyPlayed events={recent.data?.events ?? []} />}
+
+      {/* discover shelves */}
+      {isUser && online &&
+        (discover.data ?? []).map((section) => (
+          <DiscoverShelf key={section.id} section={section} />
+        ))}
     </section>
   );
 }

@@ -14,11 +14,13 @@ import { TransportStatus } from "./TransportStatus";
 import {
   ArtistIcon,
   BellIcon,
+  HeartIcon,
   HomeIcon,
   MenuIcon,
   PlusIcon,
   PowerIcon,
   SlidersIcon,
+  SongIcon,
   SyncIcon,
   UploadIcon,
   type IconProps,
@@ -102,6 +104,13 @@ export default function MobileTopBar() {
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-3 top-full z-40 mt-1 w-56 overflow-hidden rounded-xl border border-oct-border-strong bg-oct-surface shadow-[0_20px_50px_-18px_rgba(0,0,0,0.6)]">
             <MenuItem Icon={HomeIcon} label="Home" onClick={() => go("/")} />
+            {/* Favorites + Listening are per-user (bearer) features. */}
+            {session?.kind === "bearer" && (
+              <>
+                <MenuItem Icon={HeartIcon} label="Favorites" onClick={() => go("/favorites")} />
+                <MenuItem Icon={SongIcon} label="Listening" onClick={() => go("/stats")} />
+              </>
+            )}
             {isManager && <MenuItem Icon={UploadIcon} label="Upload" onClick={() => go("/upload")} />}
             <MenuItem Icon={ArtistIcon} label="Account" onClick={() => go("/account")} />
             {isAdmin && <MenuItem Icon={PlusIcon} label="Create account" onClick={() => go("/register")} />}
