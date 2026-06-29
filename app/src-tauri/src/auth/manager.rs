@@ -12,8 +12,9 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, ListeningStats,
-    MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput, Podcast,
+    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, FingerprintStatus,
+    ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
+    Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerClient, ServerConfig,
     Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
@@ -442,9 +443,24 @@ impl AuthManager {
         &self,
         seed_artist_id: Option<&str>,
         seed_album_id: Option<&str>,
+        seed_track_id: Option<&str>,
     ) -> AppResult<Vec<Track>> {
         let cred = self.credential().await?;
-        self.server.discover_radio(&cred, seed_artist_id, seed_album_id).await
+        self.server
+            .discover_radio(&cred, seed_artist_id, seed_album_id, seed_track_id)
+            .await
+    }
+
+    /// Acoustic "sounds like this" — the seed track's nearest neighbors (Phase 12).
+    pub async fn discover_similar(&self, track_id: &str, limit: i32) -> AppResult<Vec<Track>> {
+        let cred = self.credential().await?;
+        self.server.discover_similar(&cred, track_id, limit).await
+    }
+
+    /// Fingerprint analysis coverage (Phase 12).
+    pub async fn fingerprint_status(&self) -> AppResult<FingerprintStatus> {
+        let cred = self.credential().await?;
+        self.server.fingerprint_status(&cred).await
     }
 
     pub async fn unregister_device(&self, token: &str) -> AppResult<()> {

@@ -4,21 +4,25 @@
 
 use axum::{
     Extension, Json, Router,
-    extract::{Query, State},
-    routing::get,
+    extract::{Path, Query, State},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::Identity;
-use crate::db::models as m;
+use crate::db::models::{self as m, PermissionLevel};
 use crate::error::AppError;
 use crate::rest::{ApiError, RestState};
+use crate::services::recommendation::SIMILAR_DEFAULT;
 
 pub fn router() -> Router<RestState> {
     Router::new()
         .route("/discover", get(home))
         .route("/discover/radio", get(radio))
+        .route("/tracks/:id/similar", get(similar))
+        .route("/fingerprint/status", get(fingerprint_status))
+        .route("/fingerprint/scan", post(fingerprint_scan))
 }
 
 #[derive(Serialize)]
@@ -114,6 +118,7 @@ async fn home(
 pub struct RadioQuery {
     pub seed_artist_id: Option<String>,
     pub seed_album_id: Option<String>,
+    pub seed_track_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -138,8 +143,84 @@ async fn radio(
 ) -> Result<Json<RadioDto>, ApiError> {
     let seed_artist = parse_opt_uuid(q.seed_artist_id, "artist")?;
     let seed_album = parse_opt_uuid(q.seed_album_id, "album")?;
-    let tracks = s.discover.get_radio(&c, seed_artist, seed_album).await?;
+    let seed_track = parse_opt_uuid(q.seed_track_id, "track")?;
+    let tracks = s
+        .discover
+        .get_radio(&c, seed_artist, seed_album, seed_track)
+        .await?;
     Ok(Json(RadioDto {
         tracks: tracks.into_iter().map(track_dto).collect(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct SimilarQuery {
+    pub limit: Option<usize>,
+}
+
+/// `GET /tracks/:id/similar?limit=` — the "Sounds like this" shelf (Phase 12).
+async fn similar(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<SimilarQuery>,
+) -> Result<Json<RadioDto>, ApiError> {
+    let limit = q.limit.filter(|n| *n > 0).unwrap_or(SIMILAR_DEFAULT);
+    let tracks = s.discover.similar_tracks(&c, id, limit).await?;
+    Ok(Json(RadioDto {
+        tracks: tracks.into_iter().map(track_dto).collect(),
+    }))
+}
+
+#[derive(Serialize)]
+pub struct FingerprintStatusDto {
+    pub analyzed: i64,
+    pub total: i64,
+    pub model_version: String,
+    pub enabled: bool,
+}
+
+/// `GET /fingerprint/status` — analysis coverage (any authed user, read-only).
+async fn fingerprint_status(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+) -> Result<Json<FingerprintStatusDto>, ApiError> {
+    c.require(PermissionLevel::User)?;
+    let dto = match &s.fingerprint {
+        Some(fp) => {
+            let st = fp.status().await;
+            FingerprintStatusDto {
+                analyzed: st.analyzed,
+                total: st.total,
+                model_version: st.model_version,
+                enabled: true,
+            }
+        }
+        None => FingerprintStatusDto {
+            analyzed: 0,
+            total: 0,
+            model_version: String::new(),
+            enabled: false,
+        },
+    };
+    Ok(Json(dto))
+}
+
+/// `POST /fingerprint/scan` — trigger an analysis pass on demand (Manager+).
+async fn fingerprint_scan(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+) -> Result<Json<FingerprintStatusDto>, ApiError> {
+    c.require(PermissionLevel::Manager)?;
+    let fp = s.fingerprint.as_ref().ok_or_else(|| {
+        AppError::InvalidArgument("fingerprinting is disabled (FINGERPRINT_ENABLED off)".into())
+    })?;
+    fp.run_pass().await;
+    let st = fp.status().await;
+    Ok(Json(FingerprintStatusDto {
+        analyzed: st.analyzed,
+        total: st.total,
+        model_version: st.model_version,
+        enabled: true,
     }))
 }

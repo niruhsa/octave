@@ -25,9 +25,9 @@ use crate::config::TlsConfig;
 use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
-    ArtworkService, FavoritesService, IngestService, LibraryService, MetadataService,
-    NotificationService, PlayHistoryService, PlaylistService, PodcastService, RecommendationService,
-    ScanService, StorageService, UploadHub, UploadsService,
+    ArtworkService, FavoritesService, FingerprintService, IngestService, LibraryService,
+    MetadataService, NotificationService, PlayHistoryService, PlaylistService, PodcastService,
+    RecommendationService, ScanService, StorageService, UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
@@ -57,6 +57,7 @@ pub async fn serve(
     play_history: PlayHistoryService,
     favorites: FavoritesService,
     discover: RecommendationService,
+    fingerprint: Option<FingerprintService>,
     podcasts: Option<PodcastService>,
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
@@ -135,6 +136,7 @@ pub async fn serve(
     .into_service();
     let discover_server = DiscoverServer {
         discover,
+        fingerprint,
         interceptor: interceptor.clone(),
     }
     .into_service();

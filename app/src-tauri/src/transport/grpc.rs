@@ -47,7 +47,8 @@ use super::proto::discover::discover_service_client::DiscoverServiceClient;
 use super::proto::discover as dpb;
 use super::{
     Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
-    EpisodeProgress, LibraryStorage, ListeningStats, MetadataEdit, Notification, NotificationPage,
+    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, Notification,
+    NotificationPage,
     PermissionTier, PlayEvent, PlayHistoryPage, PlayInput, Playlist, PlaylistTrack,
     PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
     ServerConfig, SingleUploadResult, Track, TrackStat, UploadEvent, UploadFileInit,
@@ -1078,10 +1079,12 @@ impl GrpcClient {
         cred: &Credential,
         seed_artist_id: Option<&str>,
         seed_album_id: Option<&str>,
+        seed_track_id: Option<&str>,
     ) -> AppResult<Vec<Track>> {
         let mut req = Request::new(dpb::GetRadioRequest {
             seed_artist_id: seed_artist_id.unwrap_or_default().to_string(),
             seed_album_id: seed_album_id.unwrap_or_default().to_string(),
+            seed_track_id: seed_track_id.unwrap_or_default().to_string(),
         });
         attach_credential(&mut req, cred)?;
         let resp = self
@@ -1091,6 +1094,45 @@ impl GrpcClient {
             .map_err(map_mutation_err("discover_radio"))?
             .into_inner();
         Ok(resp.tracks.into_iter().map(track_from_disc).collect())
+    }
+
+    /// Acoustic "sounds like this" — the seed track's nearest neighbors (Phase 12).
+    pub async fn discover_similar(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        let mut req = Request::new(dpb::GetSimilarRequest {
+            track_id: track_id.to_string(),
+            limit,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .discover()
+            .get_similar_tracks(req)
+            .await
+            .map_err(map_mutation_err("discover_similar"))?
+            .into_inner();
+        Ok(resp.tracks.into_iter().map(track_from_disc).collect())
+    }
+
+    /// Fingerprint analysis coverage (Phase 12).
+    pub async fn fingerprint_status(&self, cred: &Credential) -> AppResult<FingerprintStatus> {
+        let mut req = Request::new(dpb::FingerprintStatusRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .discover()
+            .fingerprint_status(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("fingerprint_status: {s}")))?
+            .into_inner();
+        Ok(FingerprintStatus {
+            analyzed: resp.analyzed,
+            total: resp.total,
+            model_version: resp.model_version,
+            enabled: resp.enabled,
+        })
     }
 
     pub async fn unregister_device(&self, cred: &Credential, token: &str) -> AppResult<()> {

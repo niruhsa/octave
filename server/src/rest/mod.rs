@@ -41,9 +41,10 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::time_fmt::rfc3339;
 use crate::services::{
-    ArtworkService, FavoritesService, ImageOptimizer, IngestService, LibraryService,
-    MetadataService, NotificationService, PlayHistoryService, PlaylistService, PodcastService,
-    RecommendationService, ScanService, StorageService, StreamingService, UploadHub, UploadsService,
+    ArtworkService, FavoritesService, FingerprintService, ImageOptimizer, IngestService,
+    LibraryService, MetadataService, NotificationService, PlayHistoryService, PlaylistService,
+    PodcastService, RecommendationService, ScanService, StorageService, StreamingService,
+    UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -59,6 +60,9 @@ pub struct RestState {
     pub play_history: PlayHistoryService,
     pub favorites: FavoritesService,
     pub discover: RecommendationService,
+    /// Acoustic fingerprinting (Phase 12). `None` when `FINGERPRINT_ENABLED` is
+    /// off — `/fingerprint/status` then reports `enabled = false`.
+    pub fingerprint: Option<FingerprintService>,
     /// Podcast subsystem (None when no `PODCAST_PATH` is configured).
     pub podcasts: Option<PodcastService>,
     pub ingest: Option<IngestService>,

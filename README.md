@@ -5,7 +5,7 @@ A private, self-hosted music platform. A remote **server** hosts a lossless/down
 ## Features
 - **Streaming** of lossless/downloaded music from server to client.
 - **Online/offline authority** — server is source of truth when reachable; client uses its offline cache otherwise.
-- **Fingerprint-based recommendations.**
+- **Recommendations** — behavioral discovery shelves + seeded radio (artist / album / track), plus opt-in **acoustic "sounds like" radio** that analyzes each track into a similarity embedding for true content-based neighbors.
 - **Playlists** — create / update / delete.
 - **Offline use** — download and archive content for playback without the server.
 - **Automatic album artwork.**

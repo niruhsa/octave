@@ -228,6 +228,45 @@ pub struct PlayEvent {
     pub played_at: OffsetDateTime,
 }
 
+/// An acoustic similarity embedding for one track (Phase 12 — "sounds like"
+/// radio). Server-only — deliberately **not** mirrored into the client SQLite
+/// cache (embeddings are large and irrelevant offline). The vector is stored as
+/// a raw little-endian f32 `BYTEA` blob and decoded to `Vec<f32>` at the repo
+/// boundary; `dims` + `model_version` make a row self-describing so a model bump
+/// can re-analyze only what's stale. `source_sig` is the file-content signature
+/// (size+mtime) at analysis time so a re-encoded file is re-analyzed.
+#[derive(Debug, Clone)]
+pub struct TrackFeature {
+    pub track_id: Uuid,
+    pub embedding: Vec<f32>,
+    pub dims: i32,
+    pub model_version: String,
+    pub source_sig: String,
+    pub chromaprint: Option<String>,
+    pub analyzed_at: OffsetDateTime,
+}
+
+/// Insert/upsert shape for a [`TrackFeature`]. `analyzed_at` is DB-defaulted.
+#[derive(Debug, Clone)]
+pub struct NewTrackFeature {
+    pub track_id: Uuid,
+    pub embedding: Vec<f32>,
+    pub dims: i32,
+    pub model_version: String,
+    pub source_sig: String,
+    pub chromaprint: Option<String>,
+}
+
+/// Lightweight `(track_id, source_sig, model_version)` row for the "needs
+/// analysis?" scan — avoids loading every embedding blob just to decide
+/// freshness.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TrackFeatureStatus {
+    pub track_id: Uuid,
+    pub source_sig: String,
+    pub model_version: String,
+}
+
 /// A registered device push token (Phase 10 — FCM). `token` is the FCM
 /// registration token; `platform` is `"android"` today. Owned by a user; the
 /// new-release fan-out pushes to every token of each follower.

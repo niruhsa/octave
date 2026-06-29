@@ -3,13 +3,13 @@
 A private, self-hosted music platform: a remote server hosts a lossless/downloaded music library and streams it to a cross-platform client app. The experience targets parity with apps like [Poweramp](https://powerampapp.com/) and Spotify, but self-owned — the server is the authority when online, and the client falls back to its offline cache when the server is unreachable.
 
 ## Repository Layout
-- **[`server/`](./server/AGENTS.md)** — Rust backend. gRPC primary interface, REST fallback. Hosts the library, auth, streaming, ingest, recommendations, audit log. See [`server/AGENTS.md`](./server/AGENTS.md).
+- **[`server/`](./server/AGENTS.md)** — Rust backend. gRPC primary interface, REST fallback. Hosts the library, auth, streaming, ingest, recommendations (behavioral + acoustic fingerprinting), audit log. See [`server/AGENTS.md`](./server/AGENTS.md).
 - **[`app/`](./app/AGENTS.md)** — [Tauri 2](https://tauri.app/) client (React 19 + TypeScript frontend, Rust native core). Cross-compiles to desktop + Android (iOS best effort). See [`app/AGENTS.md`](./app/AGENTS.md).
 
 ## Core Features
 - **Streaming** of lossless/downloaded music from server to client.
 - **Online/offline authority:** server is source of truth when reachable; client uses offline cache otherwise.
-- **Recommendations** via fingerprint matching.
+- **Recommendations:** behavioral discovery (play history + favorites + library graph) plus content-based **acoustic "sounds like" radio** — a per-track similarity embedding + nearest-neighbor search (Phase 12, opt-in via `FINGERPRINT_ENABLED`; falls back to behavioral radio otherwise).
 - **Playlists:** create / update / delete.
 - **Offline use:** download and archive content for playback without the server.
 - **Album artwork:** fetched automatically.
@@ -48,7 +48,7 @@ Permission levels, each inheriting the level below:
 Permission checks are **enforced server-side** on every endpoint; the client only gates UI affordances.
 
 ## Server (summary)
-Rust (edition 2024). gRPC primary, REST fallback. Owns library management, streaming, fingerprint recommendations, uploads, the copy-only ingest folder, follow notifications, and the rollback-able audit log. Ships an **optional admin UI** that is **not started by default** and enabled via an environment variable (hosts runtime settings, including `SECRET_KEY` rotation).
+Rust (edition 2024). gRPC primary, REST fallback. Owns library management, streaming, recommendations (behavioral + opt-in acoustic "sounds like" fingerprinting), uploads, the copy-only ingest folder, follow notifications, and the rollback-able audit log. Ships an **optional admin UI** that is **not started by default** and enabled via an environment variable (hosts runtime settings, including `SECRET_KEY` rotation).
 
 Full detail: [`server/AGENTS.md`](./server/AGENTS.md).
 

@@ -88,6 +88,10 @@ pub struct Config {
     /// `LIBRARY_PATH` is set (defaults to `<LIBRARY_PATH>/Podcasts`). `None`
     /// disables the whole feature.
     pub podcast: Option<PodcastConfig>,
+    /// Optional acoustic-fingerprinting subsystem (Phase 12 — "sounds like"
+    /// radio). `Some` when `FINGERPRINT_ENABLED` is on. The server boots + the
+    /// radio stays purely behavioral when this is `None`.
+    pub fingerprint: Option<FingerprintConfig>,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
@@ -113,6 +117,19 @@ pub struct PodcastConfig {
 pub struct PodcastIndexCreds {
     pub api_key: String,
     pub api_secret: String,
+}
+
+/// Acoustic-fingerprinting config (Phase 12). Enabled by `FINGERPRINT_ENABLED`.
+#[derive(Debug, Clone)]
+pub struct FingerprintConfig {
+    /// Optional ONNX model path. `Some` selects the learned `OnnxExtractor`
+    /// (requires the `onnx` build feature); `None` uses the DSP baseline.
+    /// Absolute (anchor-resolved).
+    pub model_path: Option<PathBuf>,
+    /// Background analysis-pass cadence in seconds. 0 = startup-only.
+    pub interval_secs: u64,
+    /// Number of concurrent analysis workers (decode + DSP/ONNX is CPU-heavy).
+    pub concurrency: usize,
 }
 
 /// Firebase Cloud Messaging config (Phase 10 — real-time push). The credentials
@@ -182,6 +199,7 @@ impl Config {
             .or_else(|| library_path.as_ref().map(|l| l.join(".artwork")));
 
         let podcast = load_podcast(&anchor, library_path.as_ref())?;
+        let fingerprint = load_fingerprint(&anchor);
 
         // Image optimization knobs (sensible defaults; all overridable).
         let image_max_dim = env_u64("IMAGE_MAX_DIM", 800).clamp(64, 8192) as u32;
@@ -224,6 +242,7 @@ impl Config {
             primary_language,
             fcm,
             podcast,
+            fingerprint,
             config_anchor: anchor,
         })
     }
@@ -426,6 +445,30 @@ fn load_podcastindex() -> Result<Option<PodcastIndexCreds>> {
             "PODCASTINDEX_API_KEY and PODCASTINDEX_API_SECRET must both be set (or neither)".into(),
         )),
     }
+}
+
+/// Optional acoustic fingerprinting (Phase 12). Enabled by `FINGERPRINT_ENABLED`.
+/// `FINGERPRINT_MODEL` (an ONNX path) selects the learned extractor when set;
+/// `FINGERPRINT_INTERVAL_SECS` (default 6h, 0 = startup-only) and
+/// `FINGERPRINT_CONCURRENCY` (default min(4, cores-1)) tune the background pass.
+fn load_fingerprint(anchor: &Path) -> Option<FingerprintConfig> {
+    if !env_flag("FINGERPRINT_ENABLED") {
+        return None;
+    }
+    let model_path = env::var("FINGERPRINT_MODEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|p| resolve_path(anchor, &p));
+    let interval_secs = env_u64("FINGERPRINT_INTERVAL_SECS", 21_600);
+    let default_workers = std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1).clamp(1, 4))
+        .unwrap_or(2) as u64;
+    let concurrency = env_u64("FINGERPRINT_CONCURRENCY", default_workers).clamp(1, 64) as usize;
+    Some(FingerprintConfig {
+        model_path,
+        interval_secs,
+        concurrency,
+    })
 }
 
 fn parse_addr(var: &str, default: &str) -> Result<SocketAddr> {

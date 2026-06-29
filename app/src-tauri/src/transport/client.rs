@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, LibraryStorage,
-    ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
+    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, FingerprintStatus,
+    LibraryStorage, ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
+    PlayInput,
     Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport,
     RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
@@ -842,15 +843,48 @@ impl ServerClient {
         cred: &Credential,
         seed_artist_id: Option<&str>,
         seed_album_id: Option<&str>,
+        seed_track_id: Option<&str>,
     ) -> AppResult<Vec<Track>> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.discover_radio(cred, seed_artist_id, seed_album_id).await {
+            match grpc
+                .discover_radio(cred, seed_artist_id, seed_album_id, seed_track_id)
+                .await
+            {
                 Ok(v) => return Ok(v),
                 Err(e) if is_transport_error(&e) => fallback_log("discover_radio", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.discover_radio(cred, seed_artist_id, seed_album_id).await
+        self.rest
+            .discover_radio(cred, seed_artist_id, seed_album_id, seed_track_id)
+            .await
+    }
+
+    pub async fn discover_similar(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.discover_similar(cred, track_id, limit).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("discover_similar", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.discover_similar(cred, track_id, limit).await
+    }
+
+    pub async fn fingerprint_status(&self, cred: &Credential) -> AppResult<FingerprintStatus> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.fingerprint_status(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("fingerprint_status", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.fingerprint_status(cred).await
     }
 
     // ----- Podcasts --------------------------------------------------------

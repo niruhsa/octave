@@ -276,9 +276,11 @@ pub fn run() {
             commands::favorite_commands::favorites_list_albums,
             commands::favorite_commands::favorites_list_artists,
             commands::favorite_commands::favorites_track_ids,
-            // discover (Phase 11)
+            // discover (Phase 11) + acoustic similarity (Phase 12)
             commands::discover_commands::discover_home,
             commands::discover_commands::discover_radio,
+            commands::discover_commands::discover_similar,
+            commands::discover_commands::fingerprint_status,
             // podcasts
             commands::podcast_commands::podcast_search,
             commands::podcast_commands::podcast_list,

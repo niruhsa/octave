@@ -67,6 +67,17 @@ export const DiscIcon = (p: IconProps) => (
   </Line>
 );
 
+// Acoustic "sounds like" radio — a sonar/broadcast burst (concentric arcs
+// radiating from a point). Used for the per-track "Radio" / "Sounds like"
+// affordances (Phase 12).
+export const RadioIcon = (p: IconProps) => (
+  <Line {...p}>
+    <circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none" />
+    <path d="M5.2 10.8a4 4 0 0 1 0-5.6M10.8 5.2a4 4 0 0 1 0 5.6" />
+    <path d="M3.4 12.6a6.5 6.5 0 0 1 0-9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2" />
+  </Line>
+);
+
 export const ArtistIcon = (p: IconProps) => (
   <Line {...p}>
     <circle cx="8" cy="5.5" r="2.6" />

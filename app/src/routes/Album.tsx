@@ -41,10 +41,12 @@ import {
   InfoIcon,
   PlayIcon,
   PlaylistIcon,
+  RadioIcon,
   ShuffleIcon,
   TrashIcon,
 } from "../components/icons";
 import { EditMetaButton, MetadataEditor } from "../components/MetadataEditor";
+import { SoundsLikeShelf } from "../components/SoundsLikeShelf";
 import { FavoriteButton } from "../components/FavoriteButton";
 import { ImageUploader } from "../components/ImageUploader";
 import { TrackInfoSheet } from "../components/TrackInfoSheet";
@@ -308,7 +310,7 @@ export default function Album() {
             className={btnGhost}
             {...offlineAttrs(online)}
           >
-            <PlayIcon size={13} /> Radio
+            <RadioIcon size={14} /> Radio
           </button>
           {anyDownloaded && (
             <Link to="/downloads" className="font-mono text-[11px] text-oct-accent hover:underline">
@@ -408,6 +410,21 @@ export default function Album() {
                         className="hidden items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 sm:flex"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        <button
+                          onClick={async () => {
+                            try {
+                              const tracks = await discoverRadio(undefined, undefined, t.id);
+                              if (tracks.length > 0)
+                                playQueue(tracks.map(serverTrackToQueueItem), 0);
+                            } catch (e) {
+                              alert(formatError(e));
+                            }
+                          }}
+                          {...offlineAttrs(online, false, "Start a radio that sounds like this track")}
+                          className="text-oct-dim hover:text-oct-text disabled:opacity-30"
+                        >
+                          <RadioIcon size={14} />
+                        </button>
                         {t.downloaded ? (
                           <button onClick={() => void removeTrack(t)} title="Remove download" className="text-oct-accent hover:text-oct-accent-bright">
                             <DownloadIcon size={14} />
@@ -456,6 +473,12 @@ export default function Album() {
             </>
           )}
         </div>
+      )}
+
+      {/* Acoustic "sounds like" shelf, seeded by the album's first track. Self-
+          hides when there are no neighbors (fingerprinting off / not analyzed). */}
+      {online && items.length > 0 && (
+        <SoundsLikeShelf seedTrackId={items[0].id} title="Sounds like this album" />
       )}
 
       {editTracks && (

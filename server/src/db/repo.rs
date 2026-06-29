@@ -297,6 +297,25 @@ pub trait PlayHistoryRepo: Send + Sync {
     async fn play_count(&self, user_id: Uuid, track_id: Uuid) -> Result<i64>;
 }
 
+/// Acoustic similarity embeddings (Phase 12 — "sounds like" radio). One row per
+/// track, server-only. The repo boundary owns the f32 ↔ little-endian `BYTEA`
+/// conversion so the rest of the code only ever sees `Vec<f32>`.
+#[async_trait]
+pub trait TrackFeatureRepo: Send + Sync {
+    /// Insert or replace the embedding for a track (a re-analysis overwrites).
+    async fn upsert(&self, new: NewTrackFeature) -> Result<()>;
+    async fn get(&self, track_id: Uuid) -> Result<Option<TrackFeature>>;
+    /// Every embedding for the current `model_version` — the brute-force index
+    /// load. Rows from older model versions are excluded (they're stale).
+    async fn all_for_model(&self, model_version: &str) -> Result<Vec<TrackFeature>>;
+    /// `(track_id, source_sig, model_version)` for every analyzed track — drives
+    /// the incremental "skip if fresh" decision in the analysis pass.
+    async fn statuses(&self) -> Result<Vec<TrackFeatureStatus>>;
+    /// Number of analyzed tracks for `model_version` (the status endpoint).
+    async fn count_for_model(&self, model_version: &str) -> Result<i64>;
+    async fn delete(&self, track_id: Uuid) -> Result<()>;
+}
+
 /// Device push tokens (Phase 10 — FCM). One row per registration token, owned
 /// by a user; the new-release fan-out reads them to push.
 #[async_trait]

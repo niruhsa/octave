@@ -1608,6 +1608,135 @@ impl PlayHistoryRepo for PgRepos {
 }
 
 // ---------------------------------------------------------------------------
+// TrackFeatureRepo
+// ---------------------------------------------------------------------------
+
+/// Pack an embedding into a little-endian f32 byte blob (DB write).
+fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(embedding.len() * 4);
+    for f in embedding {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    bytes
+}
+
+/// Unpack a little-endian f32 byte blob back into an embedding (DB read). A
+/// trailing partial chunk (corrupt row) is ignored rather than panicking.
+fn embedding_from_bytes(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Raw `track_features` row as stored (the embedding is still a blob here).
+#[derive(FromRow)]
+struct TrackFeatureRow {
+    track_id: Uuid,
+    embedding: Vec<u8>,
+    dims: i32,
+    model_version: String,
+    source_sig: String,
+    chromaprint: Option<String>,
+    analyzed_at: OffsetDateTime,
+}
+
+impl From<TrackFeatureRow> for TrackFeature {
+    fn from(r: TrackFeatureRow) -> Self {
+        TrackFeature {
+            track_id: r.track_id,
+            embedding: embedding_from_bytes(&r.embedding),
+            dims: r.dims,
+            model_version: r.model_version,
+            source_sig: r.source_sig,
+            chromaprint: r.chromaprint,
+            analyzed_at: r.analyzed_at,
+        }
+    }
+}
+
+#[async_trait]
+impl TrackFeatureRepo for PgRepos {
+    async fn upsert(&self, new: NewTrackFeature) -> Result<()> {
+        let blob = embedding_to_bytes(&new.embedding);
+        sqlx::query(
+            r#"INSERT INTO track_features
+                   (track_id, embedding, dims, model_version, source_sig, chromaprint, analyzed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now())
+               ON CONFLICT (track_id) DO UPDATE SET
+                   embedding     = EXCLUDED.embedding,
+                   dims          = EXCLUDED.dims,
+                   model_version = EXCLUDED.model_version,
+                   source_sig    = EXCLUDED.source_sig,
+                   chromaprint   = COALESCE(EXCLUDED.chromaprint, track_features.chromaprint),
+                   analyzed_at   = now()"#,
+        )
+        .bind(new.track_id)
+        .bind(blob)
+        .bind(new.dims)
+        .bind(&new.model_version)
+        .bind(&new.source_sig)
+        .bind(&new.chromaprint)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn get(&self, track_id: Uuid) -> Result<Option<TrackFeature>> {
+        let row = sqlx::query_as::<_, TrackFeatureRow>(
+            r#"SELECT track_id, embedding, dims, model_version, source_sig, chromaprint, analyzed_at
+               FROM track_features WHERE track_id = $1"#,
+        )
+        .bind(track_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn all_for_model(&self, model_version: &str) -> Result<Vec<TrackFeature>> {
+        let rows = sqlx::query_as::<_, TrackFeatureRow>(
+            r#"SELECT track_id, embedding, dims, model_version, source_sig, chromaprint, analyzed_at
+               FROM track_features WHERE model_version = $1"#,
+        )
+        .bind(model_version)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn statuses(&self) -> Result<Vec<TrackFeatureStatus>> {
+        sqlx::query_as::<_, TrackFeatureStatus>(
+            "SELECT track_id, source_sig, model_version FROM track_features",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn count_for_model(&self, model_version: &str) -> Result<i64> {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM track_features WHERE model_version = $1")
+                .bind(model_version)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(db)?;
+        Ok(n)
+    }
+
+    async fn delete(&self, track_id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM track_features WHERE track_id = $1")
+            .bind(track_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SessionRepo
 // ---------------------------------------------------------------------------
 

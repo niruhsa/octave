@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
-    EpisodeProgress, LibraryStorage, ListeningStats, MetadataEdit, PermissionTier, PlayEvent,
+    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, PermissionTier,
+    PlayEvent,
     PlayHistoryPage, PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig, SingleUploadResult,
     Track, TrackStat, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
@@ -1186,6 +1187,7 @@ impl RestClient {
         cred: &Credential,
         seed_artist_id: Option<&str>,
         seed_album_id: Option<&str>,
+        seed_track_id: Option<&str>,
     ) -> AppResult<Vec<Track>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1196,7 +1198,10 @@ impl RestClient {
             url.push_str(&format!("seed_artist_id={a}&"));
         }
         if let Some(a) = seed_album_id {
-            url.push_str(&format!("seed_album_id={a}"));
+            url.push_str(&format!("seed_album_id={a}&"));
+        }
+        if let Some(t) = seed_track_id {
+            url.push_str(&format!("seed_track_id={t}"));
         }
         let resp = self
             .http
@@ -1211,6 +1216,51 @@ impl RestClient {
             .await
             .map_err(rest_err("discover_radio decode"))?;
         Ok(body.tracks.into_iter().map(Into::into).collect())
+    }
+
+    /// Acoustic "sounds like this" — the seed track's nearest neighbors (Phase 12).
+    pub async fn discover_similar(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        limit: i32,
+    ) -> AppResult<Vec<Track>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            tracks: Vec<TrackJson>,
+        }
+        let url = format!("{}/tracks/{track_id}/similar?limit={limit}", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discover_similar"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discover_similar decode"))?;
+        Ok(body.tracks.into_iter().map(Into::into).collect())
+    }
+
+    /// Fingerprint analysis coverage (Phase 12).
+    pub async fn fingerprint_status(&self, cred: &Credential) -> AppResult<FingerprintStatus> {
+        let url = format!("{}/fingerprint/status", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("fingerprint_status"))?;
+        let body: FingerprintStatus = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("fingerprint_status decode"))?;
+        Ok(body)
     }
 
     // ----- Podcasts ------------------------------------------------------

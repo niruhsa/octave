@@ -22,6 +22,7 @@ use crate::auth::Identity;
 use crate::db::models::{Album, FavoriteKind, PermissionLevel, Track};
 use crate::db::repo::{AlbumRepo, ArtistRepo, FavoriteRepo, PlayHistoryRepo, TrackRepo};
 use crate::error::{AppError, Result};
+use crate::services::fingerprint::SimilarityIndex;
 
 /// Albums per home shelf.
 const SECTION_LIMIT: usize = 12;
@@ -31,6 +32,16 @@ const ARTIST_CANDIDATES: i64 = 10;
 const RECENT_PLAYS_SCAN: i64 = 60;
 /// Max tracks returned by a radio seed.
 const RADIO_LIMIT: usize = 100;
+/// Acoustic-neighbor candidate pool pulled before diversification (we over-fetch
+/// so the per-artist cap still leaves a full station).
+const NEIGHBOR_POOL: usize = 400;
+/// Max tracks from any one artist in a diversified "sounds like" station, so it
+/// isn't 20 tracks by the seed's artist (MMR-style cap).
+const ARTIST_CAP: usize = 3;
+/// Max tracks from any one album in a diversified station.
+const ALBUM_CAP: usize = 2;
+/// Default neighbor count for the "Sounds like this" shelf.
+pub const SIMILAR_DEFAULT: usize = 20;
 
 /// One home shelf: a titled list of albums.
 #[derive(Debug, Clone)]
@@ -47,6 +58,10 @@ pub struct RecommendationService {
     pub tracks: Arc<dyn TrackRepo>,
     pub albums: Arc<dyn AlbumRepo>,
     pub artists: Arc<dyn ArtistRepo>,
+    /// Acoustic-similarity index (Phase 12). `None` when fingerprinting is
+    /// disabled — `seed_track_id` radio + `similar_tracks` then fall back to
+    /// behavioral (same-artist) results, so the feature never hard-fails.
+    pub index: Option<Arc<dyn SimilarityIndex>>,
 }
 
 impl RecommendationService {
@@ -63,7 +78,15 @@ impl RecommendationService {
             tracks,
             albums,
             artists,
+            index: None,
         }
+    }
+
+    /// Attach the acoustic-similarity index (Phase 12), enabling true "sounds
+    /// like" radio + the similar-tracks shelf.
+    pub fn with_similarity(mut self, index: Arc<dyn SimilarityIndex>) -> Self {
+        self.index = Some(index);
+        self
     }
 
     /// Personalized home shelves (only the non-empty ones). Any authed user;
@@ -117,15 +140,27 @@ impl RecommendationService {
         Ok(sections)
     }
 
-    /// A radio queue seeded from an artist (its tracks) or an album (its tracks
-    /// first, then the artist's other tracks). Any authed identity.
+    /// A radio queue seeded from a **track** (acoustic "sounds like"), an artist
+    /// (its tracks), or an album (its tracks first, then the artist's other
+    /// tracks). Pass exactly one seed; track takes precedence. Any authed
+    /// identity.
+    ///
+    /// The track seed uses the acoustic-similarity index when the seed has an
+    /// embedding; otherwise (analysis pending / fingerprinting off) it **falls
+    /// back** to behavioral radio seeded by the track's artist — so it never
+    /// hard-fails while the first analysis pass is still running.
     pub async fn get_radio(
         &self,
         caller: &Identity,
         seed_artist_id: Option<Uuid>,
         seed_album_id: Option<Uuid>,
+        seed_track_id: Option<Uuid>,
     ) -> Result<Vec<Track>> {
         caller.require(PermissionLevel::User)?;
+
+        if let Some(track_id) = seed_track_id {
+            return self.radio_from_track(track_id).await;
+        }
 
         let mut out: Vec<Track> = Vec::new();
         if let Some(album_id) = seed_album_id {
@@ -155,6 +190,125 @@ impl RecommendationService {
         }
 
         out.truncate(RADIO_LIMIT);
+        Ok(out)
+    }
+
+    /// "Sounds like this" — the seed track's acoustic neighbors (no diversity
+    /// cap; this is the raw similarity list for a shelf). Falls back to the
+    /// artist's other tracks when the seed has no embedding. Any authed user.
+    pub async fn similar_tracks(
+        &self,
+        caller: &Identity,
+        track_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        caller.require(PermissionLevel::User)?;
+        let seed = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        let limit = limit.clamp(1, RADIO_LIMIT);
+
+        if let Some(neighbors) = self.acoustic_neighbors(track_id, limit).await? {
+            return Ok(neighbors);
+        }
+        // Behavioral fallback: other tracks by the same artist.
+        self.artist_tracks_excluding(seed.artist_id, track_id, limit).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Acoustic "sounds like" (Phase 12)
+    // -----------------------------------------------------------------------
+
+    /// Build a diversified radio station from a seed track's acoustic neighbors,
+    /// or fall back to artist radio when the seed has no embedding yet.
+    async fn radio_from_track(&self, track_id: Uuid) -> Result<Vec<Track>> {
+        let seed = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+
+        if let Some(neighbors) = self.acoustic_neighbors(track_id, NEIGHBOR_POOL).await? {
+            // Seed track first, then diversified neighbors (per-artist/album cap).
+            let mut out = vec![seed];
+            diversify_into(&mut out, neighbors, RADIO_LIMIT);
+            return Ok(out);
+        }
+
+        // Fallback: behavioral artist radio (the seed's artist catalog), seed first.
+        let mut out = vec![seed.clone()];
+        self.append_artist_radio(&mut out, seed.artist_id, seed.id).await?;
+        out.truncate(RADIO_LIMIT);
+        Ok(out)
+    }
+
+    /// The seed's nearest acoustic neighbors hydrated to `Track`s (nearest
+    /// first, seed excluded), or `None` when there's no usable embedding (index
+    /// disabled, or seed not yet analyzed) — signaling the caller to fall back.
+    async fn acoustic_neighbors(
+        &self,
+        seed: Uuid,
+        k: usize,
+    ) -> Result<Option<Vec<Track>>> {
+        let Some(index) = &self.index else {
+            return Ok(None);
+        };
+        if !index.has(seed).await {
+            return Ok(None);
+        }
+        let ranked = index.nearest(seed, k).await?;
+        let mut out = Vec::with_capacity(ranked.len());
+        for (id, _score) in ranked {
+            if let Some(t) = self.tracks.get(id).await? {
+                out.push(t);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Append an artist's catalog (album by album) to `out`, skipping the seed
+    /// track, up to `RADIO_LIMIT`.
+    async fn append_artist_radio(
+        &self,
+        out: &mut Vec<Track>,
+        artist_id: Uuid,
+        skip_track: Uuid,
+    ) -> Result<()> {
+        for a in self.albums.list_by_artist(artist_id).await? {
+            for t in self.tracks.list_by_album(a.id).await? {
+                if t.id == skip_track {
+                    continue;
+                }
+                out.push(t);
+                if out.len() >= RADIO_LIMIT {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Other tracks by `artist_id`, excluding `skip_track`, up to `limit`.
+    async fn artist_tracks_excluding(
+        &self,
+        artist_id: Uuid,
+        skip_track: Uuid,
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        let mut out = Vec::new();
+        for a in self.albums.list_by_artist(artist_id).await? {
+            for t in self.tracks.list_by_album(a.id).await? {
+                if t.id == skip_track {
+                    continue;
+                }
+                out.push(t);
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
         Ok(out)
     }
 
@@ -242,6 +396,56 @@ impl RecommendationService {
                 "SECRET_KEY identity has no user to personalize discover; log in as a user".into(),
             )
         })
+    }
+}
+
+/// Greedily append similarity-ordered `candidates` onto `out`, skipping any that
+/// would push an artist past [`ARTIST_CAP`] or an album past [`ALBUM_CAP`], until
+/// `out` reaches `limit`. This is the MMR-style diversification that keeps a
+/// "sounds like" station from collapsing onto one artist. Tracks already in
+/// `out` (e.g. the seed) seed the caps so they count against them.
+fn diversify_into(out: &mut Vec<Track>, candidates: Vec<Track>, limit: usize) {
+    let mut per_artist: HashSet<Uuid> = HashSet::new();
+    let mut artist_counts: std::collections::HashMap<Uuid, usize> = Default::default();
+    let mut album_counts: std::collections::HashMap<Uuid, usize> = Default::default();
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    // Seed the caps + dedup set from whatever's already in `out`.
+    for t in out.iter() {
+        *artist_counts.entry(t.artist_id).or_default() += 1;
+        *album_counts.entry(t.album_id).or_default() += 1;
+        seen.insert(t.id);
+        per_artist.insert(t.artist_id);
+    }
+
+    // First pass: respect the per-artist/album caps.
+    let mut overflow: Vec<Track> = Vec::new();
+    for t in candidates {
+        if out.len() >= limit {
+            return;
+        }
+        if seen.contains(&t.id) {
+            continue;
+        }
+        let ac = artist_counts.entry(t.artist_id).or_default();
+        let alc = album_counts.get(&t.album_id).copied().unwrap_or(0);
+        if *ac >= ARTIST_CAP || alc >= ALBUM_CAP {
+            overflow.push(t);
+            continue;
+        }
+        *ac += 1;
+        *album_counts.entry(t.album_id).or_default() += 1;
+        seen.insert(t.id);
+        out.push(t);
+    }
+    // Second pass: if the caps left us short of a full station, backfill from the
+    // overflow (still similarity-ordered) so we don't return a stub queue.
+    for t in overflow {
+        if out.len() >= limit {
+            return;
+        }
+        if seen.insert(t.id) {
+            out.push(t);
+        }
     }
 }
 
@@ -627,7 +831,7 @@ mod tests {
         f.tracks.insert(artist.id, al1.id, "t1");
         f.tracks.insert(artist.id, al2.id, "t2");
 
-        let tracks = f.svc.get_radio(&user(), Some(artist.id), None).await.unwrap();
+        let tracks = f.svc.get_radio(&user(), Some(artist.id), None, None).await.unwrap();
         assert_eq!(tracks.len(), 2);
     }
 
@@ -640,7 +844,7 @@ mod tests {
         let seed_track = f.tracks.insert(artist.id, seed.id, "seedtrack");
         f.tracks.insert(artist.id, other.id, "othertrack");
 
-        let tracks = f.svc.get_radio(&user(), None, Some(seed.id)).await.unwrap();
+        let tracks = f.svc.get_radio(&user(), None, Some(seed.id), None).await.unwrap();
         assert_eq!(tracks.len(), 2);
         assert_eq!(tracks[0].id, seed_track.id, "seed album's track comes first");
     }
@@ -648,7 +852,122 @@ mod tests {
     #[tokio::test]
     async fn radio_requires_a_seed() {
         let f = make();
-        let err = f.svc.get_radio(&user(), None, None).await.unwrap_err();
+        let err = f.svc.get_radio(&user(), None, None, None).await.unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
+    }
+
+    // --- Acoustic "sounds like" (Phase 12) ---
+
+    use crate::services::fingerprint::SimilarityIndex;
+
+    /// A fake index returning a fixed neighbor ranking for one seed.
+    #[derive(Default)]
+    struct FakeIndex {
+        // seed -> ordered (neighbor_id, score)
+        ranks: Mutex<std::collections::HashMap<Uuid, Vec<(Uuid, f32)>>>,
+    }
+    #[async_trait]
+    impl SimilarityIndex for FakeIndex {
+        async fn nearest(&self, seed: Uuid, k: usize) -> Result<Vec<(Uuid, f32)>> {
+            Ok(self
+                .ranks
+                .lock()
+                .unwrap()
+                .get(&seed)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .take(k)
+                .collect())
+        }
+        async fn has(&self, seed: Uuid) -> bool {
+            self.ranks.lock().unwrap().contains_key(&seed)
+        }
+        async fn reload(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn len(&self) -> usize {
+            self.ranks.lock().unwrap().len()
+        }
+    }
+
+    #[tokio::test]
+    async fn radio_from_track_uses_acoustic_neighbors_and_caps_artists() {
+        let f = make();
+        let idx = Arc::new(FakeIndex::default());
+        let svc = f.svc.clone().with_similarity(idx.clone());
+
+        // Seed track by artist A.
+        let artist_a = f.artists.insert("A");
+        let alb_a = f.albums.insert(artist_a.id, "AlbA");
+        let seed = f.tracks.insert(artist_a.id, alb_a.id, "seed");
+
+        // Build 6 neighbors all by artist B across 1 album — the artist cap (3)
+        // must limit how many land before backfill.
+        let artist_b = f.artists.insert("B");
+        let alb_b = f.albums.insert(artist_b.id, "AlbB");
+        let mut ranks = Vec::new();
+        for i in 0..6 {
+            let t = f.tracks.insert(artist_b.id, alb_b.id, &format!("b{i}"));
+            ranks.push((t.id, 1.0 - i as f32 * 0.1));
+        }
+        idx.ranks.lock().unwrap().insert(seed.id, ranks);
+
+        let out = svc.get_radio(&user(), None, None, Some(seed.id)).await.unwrap();
+        // Seed first.
+        assert_eq!(out[0].id, seed.id);
+        // All 6 neighbors share one album → album cap (2) bounds the *capped*
+        // portion; the rest backfill, so the full station is still returned.
+        assert_eq!(out.len(), 7);
+    }
+
+    #[tokio::test]
+    async fn radio_from_track_falls_back_when_no_embedding() {
+        let f = make();
+        let idx = Arc::new(FakeIndex::default()); // empty → seed has no embedding
+        let svc = f.svc.clone().with_similarity(idx);
+
+        let artist = f.artists.insert("A");
+        let alb = f.albums.insert(artist.id, "Alb");
+        let seed = f.tracks.insert(artist.id, alb.id, "seed");
+        let sibling = f.tracks.insert(artist.id, alb.id, "sibling");
+
+        let out = svc.get_radio(&user(), None, None, Some(seed.id)).await.unwrap();
+        // Behavioral fallback: seed first, then the artist's other tracks.
+        assert_eq!(out[0].id, seed.id);
+        assert!(out.iter().any(|t| t.id == sibling.id));
+    }
+
+    #[tokio::test]
+    async fn radio_from_unknown_track_is_404() {
+        let f = make();
+        let svc = f.svc.clone().with_similarity(Arc::new(FakeIndex::default()));
+        let err = svc
+            .get_radio(&user(), None, None, Some(Uuid::new_v4()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn similar_tracks_returns_neighbors_then_falls_back() {
+        let f = make();
+        let idx = Arc::new(FakeIndex::default());
+        let svc = f.svc.clone().with_similarity(idx.clone());
+
+        let artist = f.artists.insert("A");
+        let alb = f.albums.insert(artist.id, "Alb");
+        let seed = f.tracks.insert(artist.id, alb.id, "seed");
+        let n1 = f.tracks.insert(f.artists.insert("B").id, f.albums.insert(Uuid::new_v4(), "x").id, "n1");
+        idx.ranks.lock().unwrap().insert(seed.id, vec![(n1.id, 0.9)]);
+
+        let out = svc.similar_tracks(&user(), seed.id, 5).await.unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, n1.id);
+
+        // A track with no embedding falls back to same-artist tracks.
+        let other = f.tracks.insert(artist.id, alb.id, "other");
+        let fb = svc.similar_tracks(&user(), other.id, 5).await.unwrap();
+        assert!(fb.iter().any(|t| t.id == seed.id));
     }
 }

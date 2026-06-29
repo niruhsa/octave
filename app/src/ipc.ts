@@ -625,13 +625,41 @@ export type DiscoverSection = {
 /** Personalized home shelves (only the non-empty ones). */
 export const discoverHome = () => invoke<DiscoverSection[]>("discover_home");
 
-/** A radio track queue seeded from an artist or album (pass exactly one).
+/** A radio track queue seeded from an artist, album, or track (pass exactly
+ *  one). A `seedTrackId` uses acoustic "sounds like" similarity (Phase 12),
+ *  falling back to behavioral radio when the track has no embedding yet.
  *  Returns the server track shape (same as a favorited track). */
-export const discoverRadio = (seedArtistId?: string, seedAlbumId?: string) =>
+export const discoverRadio = (
+  seedArtistId?: string,
+  seedAlbumId?: string,
+  seedTrackId?: string,
+) =>
   invoke<FavoriteTrack[]>("discover_radio", {
     seedArtistId: seedArtistId ?? null,
     seedAlbumId: seedAlbumId ?? null,
+    seedTrackId: seedTrackId ?? null,
   });
+
+/** Acoustic "sounds like this" — the seed track's nearest neighbors (Phase 12).
+ *  Falls back to the track's other same-artist tracks when no embedding yet. */
+export const discoverSimilar = (trackId: string, limit?: number) =>
+  invoke<FavoriteTrack[]>("discover_similar", {
+    trackId,
+    limit: limit ?? null,
+  });
+
+/** Acoustic-fingerprint analysis coverage (Phase 12). `enabled` is false when
+ *  the server has `FINGERPRINT_ENABLED` off. */
+export type FingerprintStatus = {
+  analyzed: number;
+  total: number;
+  model_version: string;
+  enabled: boolean;
+};
+
+/** Read fingerprint analysis coverage from the server. */
+export const fingerprintStatus = () =>
+  invoke<FingerprintStatus>("fingerprint_status");
 
 /**
  * Enable the **background** notification poll (Android only; no-op on desktop).

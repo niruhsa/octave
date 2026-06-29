@@ -122,6 +122,30 @@ feed-rs = "2"
 sha1 = "0.10"
 futures-util = "0.3"
 
+# Acoustic fingerprinting (Phase 12 — "sounds like" radio). `rustfft` powers the
+# DSP feature extractor (FFT for the spectrum → MFCC/chroma/spectral features);
+# pure Rust, no C dep, no model file. The optional learned-embedding (ONNX) and
+# Chromaprint identification extractors live behind the `onnx` / `chromaprint`
+# features so the default build stays lean (see services/fingerprint).
+rustfft = "6"
+
+# Optional: learned-embedding extractor (Phase 12C, `onnx` feature). `ort` is the
+# ONNX Runtime binding; `ndarray` shapes the input tensor. Only pulled when the
+# `onnx` feature is enabled.
+ort = { version = "2.0.0-rc.10", optional = true }
+ndarray = { version = "0.16", optional = true }
+# Optional: Chromaprint identification fingerprint (Phase 12E, `chromaprint`
+# feature). Pure-Rust Chromaprint port.
+rusty-chromaprint = { version = "0.3", optional = true }
+
+[features]
+default = []
+# Phase 12C — learned audio embeddings via ONNX Runtime (`ort`). Selected at
+# runtime by `FINGERPRINT_MODEL`; off by default (heavy native dep + model file).
+onnx = ["dep:ort", "dep:ndarray"]
+# Phase 12E — Chromaprint identification fingerprints (dedup / AcoustID).
+chromaprint = ["dep:rusty-chromaprint"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"

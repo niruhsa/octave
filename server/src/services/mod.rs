@@ -9,6 +9,7 @@ pub mod duration;
 pub mod favorites;
 pub mod fcm;
 pub mod feed;
+pub mod fingerprint;
 pub mod image_opt;
 pub mod ingest;
 pub mod library;
@@ -33,6 +34,10 @@ pub use artwork::{ArtworkService, CoverArtArchive, CoverArtSource, CoverImage};
 pub use favorites::FavoritesService;
 pub use fcm::{FcmSender, PushOutcome, PushSender};
 pub use feed::{parse_feed, ParsedEpisode, ParsedFeed};
+pub use fingerprint::{
+    build_extractor, build_index, BruteForceIndex, FeatureExtractor, FingerprintReport,
+    FingerprintService, FingerprintStatus, SimilarityIndex,
+};
 pub use image_opt::{run_optimize_pass, ImageOptimizer, Variant};
 pub use ingest::{ArchiveIngestResult, IngestService};
 pub use library::LibraryService;

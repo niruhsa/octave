@@ -4,15 +4,19 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::auth::Identity;
-use crate::db::models as m;
+use crate::db::models::{self as m, PermissionLevel};
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::discover as pb;
-use crate::services::RecommendationService;
+use crate::services::recommendation::SIMILAR_DEFAULT;
+use crate::services::{FingerprintService, RecommendationService};
 
 #[derive(Clone)]
 pub struct DiscoverServer {
     pub discover: RecommendationService,
+    /// Acoustic fingerprinting (Phase 12). `None` when `FINGERPRINT_ENABLED` is
+    /// off — status reports `enabled = false` and scan is unavailable.
+    pub fingerprint: Option<FingerprintService>,
     pub interceptor: AuthInterceptor,
 }
 
@@ -96,13 +100,83 @@ impl pb::discover_service_server::DiscoverService for DiscoverServer {
         let body = req.into_inner();
         let seed_artist = opt_uuid(&body.seed_artist_id, "artist")?;
         let seed_album = opt_uuid(&body.seed_album_id, "album")?;
+        let seed_track = opt_uuid(&body.seed_track_id, "track")?;
         let tracks = self
             .discover
-            .get_radio(&caller, seed_artist, seed_album)
+            .get_radio(&caller, seed_artist, seed_album, seed_track)
             .await
             .map_err(map_err)?;
         Ok(Response::new(pb::GetRadioResponse {
             tracks: tracks.into_iter().map(track_to_pb).collect(),
+        }))
+    }
+
+    async fn get_similar_tracks(
+        &self,
+        req: Request<pb::GetSimilarRequest>,
+    ) -> Result<Response<pb::GetRadioResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let body = req.into_inner();
+        let track_id = opt_uuid(&body.track_id, "track")?
+            .ok_or_else(|| Status::invalid_argument("track_id is required"))?;
+        let limit = if body.limit <= 0 {
+            SIMILAR_DEFAULT
+        } else {
+            body.limit as usize
+        };
+        let tracks = self
+            .discover
+            .similar_tracks(&caller, track_id, limit)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::GetRadioResponse {
+            tracks: tracks.into_iter().map(track_to_pb).collect(),
+        }))
+    }
+
+    async fn fingerprint_status(
+        &self,
+        req: Request<pb::FingerprintStatusRequest>,
+    ) -> Result<Response<pb::FingerprintStatusResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        caller.require(PermissionLevel::User).map_err(map_err)?;
+        let resp = match &self.fingerprint {
+            Some(fp) => {
+                let s = fp.status().await;
+                pb::FingerprintStatusResponse {
+                    analyzed: s.analyzed,
+                    total: s.total,
+                    model_version: s.model_version,
+                    enabled: true,
+                }
+            }
+            None => pb::FingerprintStatusResponse {
+                analyzed: 0,
+                total: 0,
+                model_version: String::new(),
+                enabled: false,
+            },
+        };
+        Ok(Response::new(resp))
+    }
+
+    async fn fingerprint_scan(
+        &self,
+        req: Request<pb::FingerprintScanRequest>,
+    ) -> Result<Response<pb::FingerprintStatusResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        caller.require(PermissionLevel::Manager).map_err(map_err)?;
+        let fp = self
+            .fingerprint
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("fingerprinting is disabled"))?;
+        fp.run_pass().await;
+        let s = fp.status().await;
+        Ok(Response::new(pb::FingerprintStatusResponse {
+            analyzed: s.analyzed,
+            total: s.total,
+            model_version: s.model_version,
+            enabled: true,
         }))
     }
 }

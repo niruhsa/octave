@@ -12,12 +12,14 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, FavoritesService,
-    FcmSender, ImageOptimizer, IngestService, ItunesDirectory, LibraryService, MetadataService,
+    build_extractor, build_index, run_optimize_pass, ArtworkService, CoverArtArchive,
+    CoverArtSource, FavoritesService, FcmSender, FingerprintService,
+    ImageOptimizer, IngestService, ItunesDirectory, LibraryService, MetadataService,
     NotificationService, PlayHistoryService, PlaylistService, PodcastDirectory,
     PodcastIndexDirectory, PodcastService, PushSender, RecommendationService, ScanService,
     StorageService, StreamingService, UploadHub, UploadsService,
 };
+use server::db::repo::TrackFeatureRepo;
 use server::auth::Identity;
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
@@ -137,6 +139,36 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()), // albums
         Arc::new(repos.clone()), // artists
     );
+
+    // Acoustic fingerprinting (Phase 12) — optional "sounds like" radio. When
+    // enabled it builds an embedding extractor + an in-memory similarity index,
+    // augments `discover` with true acoustic neighbors, and starts a background
+    // analysis pass. When disabled, the radio stays purely behavioral (the
+    // server boots + behaves exactly as before).
+    let (discover, fingerprint) = if let Some(fp_cfg) = config.fingerprint.clone() {
+        let features: Arc<dyn TrackFeatureRepo> = Arc::new(repos.clone());
+        let extractor = build_extractor(fp_cfg.model_path.as_deref());
+        let index = build_index(features.clone(), extractor.model_version());
+        let fp = FingerprintService::new(
+            Arc::new(repos.clone()), // tracks
+            features,
+            extractor,
+            index.clone(),
+            fp_cfg.concurrency,
+        )
+        .with_library_root(config.library_path.clone());
+        info!(
+            model = %fp.model_version(),
+            interval_secs = fp_cfg.interval_secs,
+            concurrency = fp_cfg.concurrency,
+            "acoustic fingerprinting enabled"
+        );
+        // Background analysis pass: startup + interval (0 = startup-only).
+        std::sync::Arc::new(fp.clone()).spawn_poller(fp_cfg.interval_secs);
+        (discover.with_similarity(index), Some(fp))
+    } else {
+        (discover, None)
+    };
 
     let metadata = MetadataService::new(library.clone(), config.write_tags);
     // Construct the artwork service whenever there's somewhere to cache images
@@ -296,6 +328,7 @@ async fn main() -> Result<()> {
         play_history: play_history.clone(),
         favorites: favorites.clone(),
         discover: discover.clone(),
+        fingerprint: fingerprint.clone(),
         podcasts: podcasts.clone(),
         ingest: ingest.clone(),
         metadata: metadata.clone(),
@@ -320,6 +353,7 @@ async fn main() -> Result<()> {
         play_history,
         favorites,
         discover,
+        fingerprint,
         podcasts,
         ingest,
         uploads,

@@ -406,6 +406,15 @@ pub struct DiscoverSection {
     pub albums: Vec<Album>,
 }
 
+/// Acoustic-fingerprint analysis coverage (Phase 12 — "sounds like" radio).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FingerprintStatus {
+    pub analyzed: i64,
+    pub total: i64,
+    pub model_version: String,
+    pub enabled: bool,
+}
+
 // ── Podcasts ───────────────────────────────────────────────────────────
 
 /// Server's view of a podcast show. `categories` is the parsed list (the
