@@ -4,9 +4,12 @@
 //! intentionally unauthenticated.
 
 pub mod auth_svc;
+pub mod discover_svc;
+pub mod favorite_svc;
 pub mod interceptor;
 pub mod library_svc;
 pub mod notification_svc;
+pub mod playhistory_svc;
 pub mod playlist_svc;
 pub mod podcast_svc;
 pub mod proto;
@@ -22,14 +25,18 @@ use crate::config::TlsConfig;
 use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
-    ArtworkService, IngestService, LibraryService, MetadataService, NotificationService,
-    PlaylistService, PodcastService, ScanService, StorageService, UploadHub, UploadsService,
+    ArtworkService, FavoritesService, IngestService, LibraryService, MetadataService,
+    NotificationService, PlayHistoryService, PlaylistService, PodcastService, RecommendationService,
+    ScanService, StorageService, UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
+pub use discover_svc::DiscoverServer;
+pub use favorite_svc::FavoriteServer;
 pub use interceptor::AuthInterceptor;
 pub use library_svc::LibraryServer;
 pub use notification_svc::NotificationServer;
+pub use playhistory_svc::PlayHistoryServer;
 pub use playlist_svc::PlaylistServer;
 pub use podcast_svc::PodcastServer;
 pub use upload_svc::UploadServer;
@@ -47,6 +54,9 @@ pub async fn serve(
     artwork: Option<ArtworkService>,
     playlists: PlaylistService,
     notifications: NotificationService,
+    play_history: PlayHistoryService,
+    favorites: FavoritesService,
+    discover: RecommendationService,
     podcasts: Option<PodcastService>,
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
@@ -72,6 +82,15 @@ pub async fn serve(
         .await;
     health_reporter
         .set_serving::<proto::podcast::podcast_service_server::PodcastServiceServer<PodcastServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::playhistory::play_history_service_server::PlayHistoryServiceServer<PlayHistoryServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::favorite::favorite_service_server::FavoriteServiceServer<FavoriteServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::discover::discover_service_server::DiscoverServiceServer<DiscoverServer>>()
         .await;
 
     let interceptor = AuthInterceptor::new(auth.clone());
@@ -101,6 +120,21 @@ pub async fn serve(
     .into_service();
     let podcast_server = PodcastServer {
         podcasts,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
+    let play_history_server = PlayHistoryServer {
+        plays: play_history,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
+    let favorite_server = FavoriteServer {
+        favorites,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
+    let discover_server = DiscoverServer {
+        discover,
         interceptor: interceptor.clone(),
     }
     .into_service();
@@ -135,6 +169,9 @@ pub async fn serve(
         .add_service(playlist_server)
         .add_service(notification_server)
         .add_service(podcast_server)
+        .add_service(play_history_server)
+        .add_service(favorite_server)
+        .add_service(discover_server)
         .add_service(upload_server)
         .serve_with_shutdown(addr, shutdown_signal)
         .await

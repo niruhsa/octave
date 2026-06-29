@@ -11,10 +11,11 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, EpisodeProgress, LibraryStorage, MetadataEdit,
-    NotificationPage, PermissionTier, Playlist, PlaylistWithTracks, Podcast, PodcastCandidate,
-    PodcastEpisode, RefreshReport, RescanReport, ServerConfig, Track, UploadEvent,
-    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, LibraryStorage,
+    ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
+    Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport,
+    RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter,
+    UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -693,6 +694,163 @@ impl ServerClient {
             }
         }
         self.rest.unregister_device(cred, token).await
+    }
+
+    // ----- Play history (Phase 11) -----------------------------------------
+
+    pub async fn record_plays(&self, cred: &Credential, events: &[PlayInput]) -> AppResult<u64> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.record_plays(cred, events).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("record_plays", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.record_plays(cred, events).await
+    }
+
+    pub async fn list_play_history(
+        &self,
+        cred: &Credential,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> AppResult<PlayHistoryPage> {
+        if let Some(grpc) = self.try_grpc().await {
+            let l = limit.unwrap_or(0).clamp(0, i32::MAX as i64) as i32;
+            let o = offset.unwrap_or(0).clamp(0, i32::MAX as i64) as i32;
+            match grpc.list_play_history(cred, l, o).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_play_history", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_play_history(cred, limit, offset).await
+    }
+
+    pub async fn play_stats(
+        &self,
+        cred: &Credential,
+        window_days: Option<i64>,
+        limit: Option<i64>,
+    ) -> AppResult<ListeningStats> {
+        if let Some(grpc) = self.try_grpc().await {
+            let w = window_days.unwrap_or(0).clamp(0, i32::MAX as i64) as i32;
+            let l = limit.unwrap_or(0).clamp(0, i32::MAX as i64) as i32;
+            match grpc.play_stats(cred, w, l).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("play_stats", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.play_stats(cred, window_days, limit).await
+    }
+
+    // ----- Favorites (Phase 11) --------------------------------------------
+
+    pub async fn favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.favorite(cred, kind, entity_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("favorite", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.favorite(cred, kind, entity_id).await
+    }
+
+    pub async fn unfavorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.unfavorite(cred, kind, entity_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("unfavorite", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.unfavorite(cred, kind, entity_id).await
+    }
+
+    pub async fn is_favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.is_favorite(cred, kind, entity_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("is_favorite", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.is_favorite(cred, kind, entity_id).await
+    }
+
+    pub async fn list_favorite_tracks(&self, cred: &Credential) -> AppResult<Vec<Track>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_favorite_tracks(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_favorite_tracks", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_favorite_tracks(cred).await
+    }
+
+    pub async fn list_favorite_albums(&self, cred: &Credential) -> AppResult<Vec<Album>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_favorite_albums(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_favorite_albums", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_favorite_albums(cred).await
+    }
+
+    pub async fn list_favorite_artists(&self, cred: &Credential) -> AppResult<Vec<Artist>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_favorite_artists(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("list_favorite_artists", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_favorite_artists(cred).await
+    }
+
+    pub async fn favorited_track_ids(&self, cred: &Credential) -> AppResult<Vec<String>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.favorited_track_ids(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("favorited_track_ids", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.favorited_track_ids(cred).await
+    }
+
+    // ----- Discover (Phase 11) ---------------------------------------------
+
+    pub async fn discover_home(&self, cred: &Credential) -> AppResult<Vec<DiscoverSection>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.discover_home(cred).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("discover_home", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.discover_home(cred).await
+    }
+
+    pub async fn discover_radio(
+        &self,
+        cred: &Credential,
+        seed_artist_id: Option<&str>,
+        seed_album_id: Option<&str>,
+    ) -> AppResult<Vec<Track>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.discover_radio(cred, seed_artist_id, seed_album_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("discover_radio", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.discover_radio(cred, seed_artist_id, seed_album_id).await
     }
 
     // ----- Podcasts --------------------------------------------------------

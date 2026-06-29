@@ -3,9 +3,12 @@
 //! All routes use the shared `AuthService` to gate access. `AppError` is
 //! mapped into HTTP statuses by `ApiError`.
 
+pub mod discover;
+pub mod favorites;
 pub mod ingest;
 pub mod library;
 pub mod notification;
+pub mod playhistory;
 pub mod playlist;
 pub mod podcast;
 pub mod range;
@@ -38,9 +41,9 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::time_fmt::rfc3339;
 use crate::services::{
-    ArtworkService, ImageOptimizer, IngestService, LibraryService, MetadataService,
-    NotificationService, PlaylistService, PodcastService, ScanService, StorageService,
-    StreamingService, UploadHub, UploadsService,
+    ArtworkService, FavoritesService, ImageOptimizer, IngestService, LibraryService,
+    MetadataService, NotificationService, PlayHistoryService, PlaylistService, PodcastService,
+    RecommendationService, ScanService, StorageService, StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -53,6 +56,9 @@ pub struct RestState {
     pub streaming: StreamingService,
     pub playlists: PlaylistService,
     pub notifications: NotificationService,
+    pub play_history: PlayHistoryService,
+    pub favorites: FavoritesService,
+    pub discover: RecommendationService,
     /// Podcast subsystem (None when no `PODCAST_PATH` is configured).
     pub podcasts: Option<PodcastService>,
     pub ingest: Option<IngestService>,
@@ -90,6 +96,9 @@ pub async fn serve(addr: SocketAddr, tls: Option<TlsConfig>, state: RestState) -
         .merge(library::router())
         .merge(playlist::router())
         .merge(notification::router())
+        .merge(playhistory::router())
+        .merge(favorites::router())
+        .merge(discover::router())
         .merge(podcast::router())
         .merge(streaming::router())
         .merge(ingest::router())

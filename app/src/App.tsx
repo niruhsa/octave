@@ -25,6 +25,8 @@ import Account from "./routes/Account";
 import Upload from "./routes/Upload";
 import Uploads from "./routes/Uploads";
 import Notifications from "./routes/Notifications";
+import Stats from "./routes/Stats";
+import Favorites from "./routes/Favorites";
 import Podcasts from "./routes/Podcasts";
 import PodcastDetail from "./routes/PodcastDetail";
 import Settings from "./routes/Settings";
@@ -40,6 +42,7 @@ import { useSyncScheduler } from "./sync/useSync";
 import { useDownloadListener } from "./downloads/useDownloads";
 import { useUploadEvents } from "./uploads/useUploads";
 import { useNotificationsScheduler } from "./notifications/useNotifications";
+import { useFavoritesStore } from "./favorites/useFavorites";
 import { useHotkeys } from "./settings/useHotkeys";
 
 const queryClient = new QueryClient({
@@ -209,6 +212,13 @@ function RootLayout() {
     if (session) void uploadsResumePending().catch(() => {});
   }, [session]);
 
+  // Phase 11: hydrate the favorited-track set for a bearer-user session (drives
+  // instant heart state on track rows + the player bar); clear it otherwise.
+  useEffect(() => {
+    if (session?.kind === "bearer") void useFavoritesStore.getState().load();
+    else useFavoritesStore.getState().clear();
+  }, [session]);
+
   // Push the persisted Networking prefs (chunk upload concurrency) to the
   // backend on startup, so an upload honours the user's setting from the first
   // chunk — before they ever open Settings this run.
@@ -255,6 +265,8 @@ const router = createBrowserRouter([
       { path: "upload", element: <Upload /> },
       { path: "uploads", element: <Uploads /> },
       { path: "notifications", element: <Notifications /> },
+      { path: "stats", element: <Stats /> },
+      { path: "favorites", element: <Favorites /> },
       { path: "settings", element: <Settings /> },
     ],
   },

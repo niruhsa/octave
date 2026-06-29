@@ -38,6 +38,35 @@ impl PermissionLevel {
     }
 }
 
+/// Which catalog entity a favorite points at (Phase 11). Selects the column in
+/// the polymorphic `favorites` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FavoriteKind {
+    Track,
+    Album,
+    Artist,
+}
+
+impl FavoriteKind {
+    /// Parse a wire string (`"track"`/`"album"`/`"artist"`).
+    pub fn parse(s: &str) -> Option<FavoriteKind> {
+        match s.to_ascii_lowercase().as_str() {
+            "track" => Some(FavoriteKind::Track),
+            "album" => Some(FavoriteKind::Album),
+            "artist" => Some(FavoriteKind::Artist),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FavoriteKind::Track => "track",
+            FavoriteKind::Album => "album",
+            FavoriteKind::Artist => "artist",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entities
 // ---------------------------------------------------------------------------
@@ -177,6 +206,26 @@ pub struct Notification {
     pub body: Option<String>,
     pub read_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
+}
+
+/// A recorded play (Phase 11 — play history). One row per "play" event posted
+/// by the client (which decides what counts — e.g. ≥30 s or ≥50 % of the
+/// track). `track_id`/`artist_id`/`album_id` go NULL if the catalog row is
+/// later deleted; the denormalized `track_title`/`artist_name` keep the row
+/// readable regardless. `ms_played`/`completed` distinguish a skip from a real
+/// listen. `played_at` is client-supplied so offline plays keep their real time.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct PlayEvent {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub track_id: Option<Uuid>,
+    pub artist_id: Option<Uuid>,
+    pub album_id: Option<Uuid>,
+    pub track_title: String,
+    pub artist_name: String,
+    pub ms_played: i64,
+    pub completed: bool,
+    pub played_at: OffsetDateTime,
 }
 
 /// A registered device push token (Phase 10 — FCM). `token` is the FCM
@@ -324,6 +373,23 @@ pub struct NewNotification {
     pub episode_id: Option<Uuid>,
     pub title: String,
     pub body: Option<String>,
+}
+
+/// Insert-shape for a play event. `id` is DB-generated. The denormalized
+/// display fields + `artist_id`/`album_id` are resolved server-side from the
+/// `track_id` at record time (the client posts only `track_id`/`ms_played`/
+/// `completed`/`played_at`). `played_at` defaults to now() in the DB when `None`.
+#[derive(Debug, Clone)]
+pub struct NewPlayEvent {
+    pub user_id: Uuid,
+    pub track_id: Uuid,
+    pub artist_id: Uuid,
+    pub album_id: Uuid,
+    pub track_title: String,
+    pub artist_name: String,
+    pub ms_played: i64,
+    pub completed: bool,
+    pub played_at: Option<OffsetDateTime>,
 }
 
 /// Insert/upsert shape for a device push token.

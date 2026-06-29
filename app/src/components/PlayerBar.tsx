@@ -8,6 +8,7 @@ import { formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
 import { Thumb } from "./Cover";
 import { SavedPill } from "./SourceBadge";
+import { FavoriteButton } from "./FavoriteButton";
 import NowPlaying from "./NowPlaying";
 import {
   ChevronDownIcon,
@@ -123,6 +124,10 @@ export default function PlayerBar() {
             <ChevronDownIcon size={15} className="rotate-180" />
           </span>
         </button>
+        {/* like the current track (sibling, not nested in the button above) */}
+        {current && current.mediaKind !== "episode" && (
+          <FavoriteButton kind="track" id={current.id} size={18} />
+        )}
 
         {/* transport + progress */}
         <div className="flex w-[440px] flex-col items-center gap-2">

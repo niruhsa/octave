@@ -20,6 +20,18 @@ pub mod podcast {
     tonic::include_proto!("music.podcast.v1");
 }
 
+pub mod playhistory {
+    tonic::include_proto!("music.playhistory.v1");
+}
+
+pub mod favorite {
+    tonic::include_proto!("music.favorite.v1");
+}
+
+pub mod discover {
+    tonic::include_proto!("music.discover.v1");
+}
+
 pub mod upload {
     tonic::include_proto!("music.upload.v1");
 }

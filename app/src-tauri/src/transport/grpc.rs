@@ -39,12 +39,19 @@ use super::proto::notification::notification_service_client::NotificationService
 use super::proto::notification as npb;
 use super::proto::podcast::podcast_service_client::PodcastServiceClient;
 use super::proto::podcast as ppb;
+use super::proto::playhistory::play_history_service_client::PlayHistoryServiceClient;
+use super::proto::playhistory as phpb;
+use super::proto::favorite::favorite_service_client::FavoriteServiceClient;
+use super::proto::favorite as fpb;
+use super::proto::discover::discover_service_client::DiscoverServiceClient;
+use super::proto::discover as dpb;
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, EpisodeProgress, LibraryStorage,
-    MetadataEdit, Notification, NotificationPage, PermissionTier, Playlist, PlaylistTrack,
+    Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
+    EpisodeProgress, LibraryStorage, ListeningStats, MetadataEdit, Notification, NotificationPage,
+    PermissionTier, PlayEvent, PlayHistoryPage, PlayInput, Playlist, PlaylistTrack,
     PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
-    ServerConfig, SingleUploadResult, Track, UploadEvent, UploadFileInit, UploadFileView,
-    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    ServerConfig, SingleUploadResult, Track, TrackStat, UploadEvent, UploadFileInit,
+    UploadFileView, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
 
@@ -166,6 +173,18 @@ impl GrpcClient {
 
     fn podcasts(&self) -> PodcastServiceClient<Channel> {
         PodcastServiceClient::new(self.channel.clone())
+    }
+
+    fn play_history(&self) -> PlayHistoryServiceClient<Channel> {
+        PlayHistoryServiceClient::new(self.channel.clone())
+    }
+
+    fn favorites(&self) -> FavoriteServiceClient<Channel> {
+        FavoriteServiceClient::new(self.channel.clone())
+    }
+
+    fn discover(&self) -> DiscoverServiceClient<Channel> {
+        DiscoverServiceClient::new(self.channel.clone())
     }
 
     /// Username/password login. On success the server returns an opaque
@@ -866,6 +885,212 @@ impl GrpcClient {
             .await
             .map_err(map_mutation_err("register_device"))?;
         Ok(())
+    }
+
+    // ----- Play history (Phase 11) ---------------------------------------
+
+    /// Record a batch of plays. `SECRET_KEY` is rejected server-side (no user)
+    /// → a permanent error, no REST fallback.
+    pub async fn record_plays(&self, cred: &Credential, events: &[PlayInput]) -> AppResult<u64> {
+        let req_events = events
+            .iter()
+            .map(|e| phpb::PlayEventInput {
+                track_id: e.track_id.clone(),
+                ms_played: e.ms_played,
+                completed: e.completed,
+                played_at: e.played_at.clone().unwrap_or_default(),
+            })
+            .collect();
+        let mut req = Request::new(phpb::RecordPlaysRequest { events: req_events });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .play_history()
+            .record_plays(req)
+            .await
+            .map_err(map_mutation_err("record_plays"))?
+            .into_inner();
+        Ok(resp.recorded.max(0) as u64)
+    }
+
+    pub async fn list_play_history(
+        &self,
+        cred: &Credential,
+        limit: i32,
+        offset: i32,
+    ) -> AppResult<PlayHistoryPage> {
+        let mut req = Request::new(phpb::ListRecentRequest { limit, offset });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .play_history()
+            .list_recent(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_play_history: {s}")))?
+            .into_inner();
+        Ok(PlayHistoryPage {
+            events: resp.events.into_iter().map(play_event_from_proto).collect(),
+            total: resp.total,
+        })
+    }
+
+    pub async fn play_stats(
+        &self,
+        cred: &Credential,
+        window_days: i32,
+        limit: i32,
+    ) -> AppResult<ListeningStats> {
+        let mut req = Request::new(phpb::GetStatsRequest { window_days, limit });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .play_history()
+            .get_stats(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("play_stats: {s}")))?
+            .into_inner();
+        Ok(ListeningStats {
+            top_tracks: resp.top_tracks.into_iter().map(track_stat_from_proto).collect(),
+            top_artists: resp.top_artists.into_iter().map(artist_stat_from_proto).collect(),
+            total_plays: resp.total_plays,
+            total_ms: resp.total_ms,
+        })
+    }
+
+    // ----- Favorites (Phase 11) ------------------------------------------
+
+    /// Favorite an entity (`kind` = track|album|artist). `SECRET_KEY` is
+    /// rejected server-side (no user) → a permanent error, no REST fallback.
+    pub async fn favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let mut req = Request::new(fpb::FavoriteRequest {
+            kind: kind.to_string(),
+            entity_id: entity_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .favorite(req)
+            .await
+            .map_err(map_mutation_err("favorite"))?
+            .into_inner();
+        Ok(resp.favorited)
+    }
+
+    pub async fn unfavorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let mut req = Request::new(fpb::FavoriteRequest {
+            kind: kind.to_string(),
+            entity_id: entity_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .unfavorite(req)
+            .await
+            .map_err(map_mutation_err("unfavorite"))?
+            .into_inner();
+        Ok(resp.favorited)
+    }
+
+    pub async fn is_favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let mut req = Request::new(fpb::FavoriteRequest {
+            kind: kind.to_string(),
+            entity_id: entity_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .is_favorite(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("is_favorite: {s}")))?
+            .into_inner();
+        Ok(resp.favorited)
+    }
+
+    pub async fn list_favorite_tracks(&self, cred: &Credential) -> AppResult<Vec<Track>> {
+        let mut req = Request::new(fpb::ListFavoritesRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .list_favorite_tracks(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_favorite_tracks: {s}")))?
+            .into_inner();
+        Ok(resp.tracks.into_iter().map(track_from_fav).collect())
+    }
+
+    pub async fn list_favorite_albums(&self, cred: &Credential) -> AppResult<Vec<Album>> {
+        let mut req = Request::new(fpb::ListFavoritesRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .list_favorite_albums(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_favorite_albums: {s}")))?
+            .into_inner();
+        Ok(resp.albums.into_iter().map(album_from_fav).collect())
+    }
+
+    pub async fn list_favorite_artists(&self, cred: &Credential) -> AppResult<Vec<Artist>> {
+        let mut req = Request::new(fpb::ListFavoritesRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .list_favorite_artists(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_favorite_artists: {s}")))?
+            .into_inner();
+        Ok(resp.artists.into_iter().map(artist_from_fav).collect())
+    }
+
+    pub async fn favorited_track_ids(&self, cred: &Credential) -> AppResult<Vec<String>> {
+        let mut req = Request::new(fpb::ListFavoritesRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .favorites()
+            .list_favorite_track_ids(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("favorited_track_ids: {s}")))?
+            .into_inner();
+        Ok(resp.track_ids)
+    }
+
+    // ----- Discover (Phase 11) -------------------------------------------
+
+    pub async fn discover_home(&self, cred: &Credential) -> AppResult<Vec<DiscoverSection>> {
+        let mut req = Request::new(dpb::GetHomeRequest {});
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .discover()
+            .get_home(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("discover_home: {s}")))?
+            .into_inner();
+        Ok(resp
+            .sections
+            .into_iter()
+            .map(|s| DiscoverSection {
+                id: s.id,
+                title: s.title,
+                albums: s.albums.into_iter().map(album_from_disc).collect(),
+            })
+            .collect())
+    }
+
+    pub async fn discover_radio(
+        &self,
+        cred: &Credential,
+        seed_artist_id: Option<&str>,
+        seed_album_id: Option<&str>,
+    ) -> AppResult<Vec<Track>> {
+        let mut req = Request::new(dpb::GetRadioRequest {
+            seed_artist_id: seed_artist_id.unwrap_or_default().to_string(),
+            seed_album_id: seed_album_id.unwrap_or_default().to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .discover()
+            .get_radio(req)
+            .await
+            .map_err(map_mutation_err("discover_radio"))?
+            .into_inner();
+        Ok(resp.tracks.into_iter().map(track_from_disc).collect())
     }
 
     pub async fn unregister_device(&self, cred: &Credential, token: &str) -> AppResult<()> {
@@ -1792,6 +2017,37 @@ fn notification_from_proto(n: npb::Notification) -> Notification {
     }
 }
 
+fn play_event_from_proto(p: phpb::PlayEvent) -> PlayEvent {
+    PlayEvent {
+        id: p.id,
+        track_id: opt_str(p.track_id),
+        artist_id: opt_str(p.artist_id),
+        album_id: opt_str(p.album_id),
+        track_title: p.track_title,
+        artist_name: p.artist_name,
+        ms_played: p.ms_played,
+        completed: p.completed,
+        played_at: p.played_at,
+    }
+}
+
+fn track_stat_from_proto(s: phpb::TrackStat) -> TrackStat {
+    TrackStat {
+        track_id: opt_str(s.track_id),
+        track_title: s.track_title,
+        artist_name: s.artist_name,
+        plays: s.plays,
+    }
+}
+
+fn artist_stat_from_proto(s: phpb::ArtistStat) -> ArtistStat {
+    ArtistStat {
+        artist_id: opt_str(s.artist_id),
+        artist_name: s.artist_name,
+        plays: s.plays,
+    }
+}
+
 fn podcast_from_proto(p: ppb::Podcast) -> Podcast {
     Podcast {
         id: p.id,
@@ -1887,6 +2143,83 @@ fn library_storage_from_proto(s: super::proto::library::LibraryStorage) -> Libra
 }
 
 fn track_from_proto(t: super::proto::library::Track) -> Track {
+    Track {
+        id: t.id,
+        album_id: t.album_id,
+        artist_id: t.artist_id,
+        title: t.title,
+        track_no: opt_i32(t.track_no),
+        disc_no: opt_i32(t.disc_no),
+        duration_ms: t.duration_ms,
+        codec: t.codec,
+        bitrate_kbps: opt_i32(t.bitrate_kbps),
+        file_path: t.file_path,
+        file_size: opt_i64(t.file_size),
+        sample_rate_hz: opt_i32(t.sample_rate_hz),
+        bit_depth: opt_i32(t.bit_depth),
+        channels: opt_i32(t.channels),
+        metadata_json: t.metadata_json,
+        is_single_release: t.is_single_release,
+    }
+}
+
+fn artist_from_fav(a: fpb::FavArtist) -> Artist {
+    Artist {
+        id: a.id,
+        name: a.name,
+        sort_name: opt_str(a.sort_name),
+        image_path: opt_str(a.image_path),
+        aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
+    }
+}
+
+fn album_from_fav(a: fpb::FavAlbum) -> Album {
+    Album {
+        id: a.id,
+        artist_id: a.artist_id,
+        title: a.title,
+        release_year: opt_i32(a.release_year),
+        cover_path: opt_str(a.cover_path),
+        aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
+    }
+}
+
+fn track_from_fav(t: fpb::FavTrack) -> Track {
+    Track {
+        id: t.id,
+        album_id: t.album_id,
+        artist_id: t.artist_id,
+        title: t.title,
+        track_no: opt_i32(t.track_no),
+        disc_no: opt_i32(t.disc_no),
+        duration_ms: t.duration_ms,
+        codec: t.codec,
+        bitrate_kbps: opt_i32(t.bitrate_kbps),
+        file_path: t.file_path,
+        file_size: opt_i64(t.file_size),
+        sample_rate_hz: opt_i32(t.sample_rate_hz),
+        bit_depth: opt_i32(t.bit_depth),
+        channels: opt_i32(t.channels),
+        metadata_json: t.metadata_json,
+        is_single_release: t.is_single_release,
+    }
+}
+
+fn album_from_disc(a: dpb::DiscAlbum) -> Album {
+    Album {
+        id: a.id,
+        artist_id: a.artist_id,
+        title: a.title,
+        release_year: opt_i32(a.release_year),
+        cover_path: opt_str(a.cover_path),
+        aliases: Vec::new(),
+        storage_bytes: a.storage_bytes,
+    }
+}
+
+fn track_from_disc(t: dpb::DiscTrack) -> Track {
     Track {
         id: t.id,
         album_id: t.album_id,

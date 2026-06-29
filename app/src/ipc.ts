@@ -451,6 +451,188 @@ export const notificationsMarkRead = (id: string) =>
 export const notificationsMarkAllRead = () =>
   invoke<number>("notifications_mark_all_read");
 
+// ---------------------------------------------------------------------------
+// play history (Phase 11)
+//
+// Recording is offline-first: `playHistoryRecord` queues a play locally; the
+// sync scheduler (and an opportunistic `playHistoryFlush` right after) pushes
+// the backlog to the server. Reads (`playHistoryList` / `playStats`) are
+// server-authoritative + online-only, like the notifications feed.
+// ---------------------------------------------------------------------------
+
+/** One recorded play. Entity refs are null when the catalog row was deleted. */
+export type PlayEvent = {
+  id: string;
+  track_id: string | null;
+  artist_id: string | null;
+  album_id: string | null;
+  track_title: string;
+  artist_name: string;
+  ms_played: number;
+  completed: boolean;
+  played_at: string;
+};
+
+export type PlayHistoryPage = { events: PlayEvent[]; total: number };
+
+export type TrackStat = {
+  track_id: string | null;
+  track_title: string;
+  artist_name: string;
+  plays: number;
+};
+
+export type ArtistStat = {
+  artist_id: string | null;
+  artist_name: string;
+  plays: number;
+};
+
+export type ListeningStats = {
+  top_tracks: TrackStat[];
+  top_artists: ArtistStat[];
+  total_plays: number;
+  total_ms: number;
+};
+
+/** Queue a play locally (offline-safe). Flushed to the server separately. */
+export const playHistoryRecord = (
+  trackId: string,
+  msPlayed: number,
+  completed: boolean,
+) =>
+  invoke<void>("play_history_record", {
+    trackId,
+    msPlayed: Math.max(0, Math.round(msPlayed)),
+    completed,
+  });
+
+/** Flush the queued plays to the server. Returns the count recorded. */
+export const playHistoryFlush = () => invoke<number>("play_history_flush");
+
+/** A page of the caller's plays, newest first. */
+export const playHistoryList = (limit?: number, offset?: number) =>
+  invoke<PlayHistoryPage>("play_history_list", {
+    limit: limit ?? null,
+    offset: offset ?? null,
+  });
+
+/** Listening stats over a window (`windowDays` 0/omitted = all time). */
+export const playStats = (windowDays?: number, limit?: number) =>
+  invoke<ListeningStats>("play_history_stats", {
+    windowDays: windowDays ?? null,
+    limit: limit ?? null,
+  });
+
+// ---------------------------------------------------------------------------
+// favorites (Phase 11)
+//
+// Per-user likes on tracks/albums/artists. Server-authoritative; the UI toggles
+// optimistically and reverts on error. Bearer-user only (a SECRET_KEY session
+// has no user — server-rejected). List reads return full entities.
+// ---------------------------------------------------------------------------
+
+export type FavoriteKind = "track" | "album" | "artist";
+
+/** A favorited track (server's entity shape; lacks the cache `downloaded`/
+ *  `local_file_path` fields — playback resolves local-or-stream in Rust). */
+export type FavoriteTrack = {
+  id: string;
+  album_id: string;
+  artist_id: string;
+  title: string;
+  track_no: number | null;
+  disc_no: number | null;
+  duration_ms: number;
+  codec: string;
+  bitrate_kbps: number | null;
+  file_path: string;
+  file_size: number | null;
+  sample_rate_hz: number | null;
+  bit_depth: number | null;
+  channels: number | null;
+  metadata_json: string;
+  is_single_release: boolean;
+};
+
+export type FavoriteAlbum = {
+  id: string;
+  artist_id: string;
+  title: string;
+  release_year: number | null;
+  cover_path: string | null;
+  aliases: AliasInfo[];
+  storage_bytes: number;
+};
+
+export type FavoriteArtist = {
+  id: string;
+  name: string;
+  sort_name: string | null;
+  image_path: string | null;
+  aliases: AliasInfo[];
+  storage_bytes: number;
+};
+
+/** Favorite an entity. Returns the resulting state (`true`). */
+export const favoritesFavorite = (kind: FavoriteKind, entityId: string) =>
+  invoke<boolean>("favorites_favorite", { kind, entityId });
+
+/** Unfavorite an entity. Returns the resulting state (`false`). */
+export const favoritesUnfavorite = (kind: FavoriteKind, entityId: string) =>
+  invoke<boolean>("favorites_unfavorite", { kind, entityId });
+
+/** Whether the caller has favorited `entityId`. */
+export const favoritesIsFavorite = (kind: FavoriteKind, entityId: string) =>
+  invoke<boolean>("favorites_is_favorite", { kind, entityId });
+
+export const favoritesListTracks = () =>
+  invoke<FavoriteTrack[]>("favorites_list_tracks");
+export const favoritesListAlbums = () =>
+  invoke<FavoriteAlbum[]>("favorites_list_albums");
+export const favoritesListArtists = () =>
+  invoke<FavoriteArtist[]>("favorites_list_artists");
+
+/** Just the favorited track ids — for bulk heart-state hydration. */
+export const favoritesTrackIds = () => invoke<string[]>("favorites_track_ids");
+
+// ---------------------------------------------------------------------------
+// discover / recommendations (Phase 11)
+//
+// Behavioral home shelves + seeded radio, derived from play history + favorites
+// + the library graph. Server-authoritative + online-only; `discoverHome` is
+// bearer-user personalized.
+// ---------------------------------------------------------------------------
+
+/** An album in a discover shelf (server entity shape; no cache fields). */
+export type DiscoverAlbum = {
+  id: string;
+  artist_id: string;
+  title: string;
+  release_year: number | null;
+  cover_path: string | null;
+  aliases: AliasInfo[];
+  storage_bytes: number;
+};
+
+/** A titled album shelf. */
+export type DiscoverSection = {
+  id: string;
+  title: string;
+  albums: DiscoverAlbum[];
+};
+
+/** Personalized home shelves (only the non-empty ones). */
+export const discoverHome = () => invoke<DiscoverSection[]>("discover_home");
+
+/** A radio track queue seeded from an artist or album (pass exactly one).
+ *  Returns the server track shape (same as a favorited track). */
+export const discoverRadio = (seedArtistId?: string, seedAlbumId?: string) =>
+  invoke<FavoriteTrack[]>("discover_radio", {
+    seedArtistId: seedArtistId ?? null,
+    seedAlbumId: seedAlbumId ?? null,
+  });
+
 /**
  * Enable the **background** notification poll (Android only; no-op on desktop).
  * Reads the active bearer token natively and schedules a ~15-min WorkManager

@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package music.playhistory.v1;
+
+// Play history (Phase 11). A play is a per-user event posted by the client,
+// which decides what counts (e.g. ≥30 s OR ≥50 % of the track). The server
+// stores it and serves "recently played" + listening stats. Per-user data: the
+// SECRET_KEY identity has no user and is rejected. Records are private
+// telemetry and are not audited.
+service PlayHistoryService {
+  // Record a batch of plays (one event, or a flushed offline backlog).
+  rpc RecordPlays(RecordPlaysRequest) returns (RecordPlaysResponse);
+  // Newest-first page of the caller's plays.
+  rpc ListRecent(ListRecentRequest) returns (ListRecentResponse);
+  // Aggregate listening stats over a window (top tracks/artists + totals).
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+
+// A play posted by the client. The server resolves the denormalized
+// title/artist + artist_id/album_id from `track_id` at record time.
+message PlayEventInput {
+  string track_id = 1;
+  int64 ms_played = 2;
+  bool completed = 3;
+  string played_at = 4; // RFC3339; empty = server stamps receipt time
+}
+
+message PlayEvent {
+  string id = 1;
+  string track_id = 2;    // empty when the track was since deleted
+  string artist_id = 3;   // empty when the artist was since deleted
+  string album_id = 4;    // empty when the album was since deleted
+  string track_title = 5;
+  string artist_name = 6;
+  int64 ms_played = 7;
+  bool completed = 8;
+  string played_at = 9;
+}
+
+message TrackStat {
+  string track_id = 1;    // empty when the track was since deleted
+  string track_title = 2;
+  string artist_name = 3;
+  int64 plays = 4;
+}
+
+message ArtistStat {
+  string artist_id = 1;   // empty when the artist was since deleted
+  string artist_name = 2;
+  int64 plays = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Requests / responses
+// ---------------------------------------------------------------------------
+
+message RecordPlaysRequest { repeated PlayEventInput events = 1; }
+message RecordPlaysResponse { int64 recorded = 1; }
+
+message ListRecentRequest {
+  int32 limit = 1;  // 0 = server default; capped server-side
+  int32 offset = 2;
+}
+message ListRecentResponse {
+  repeated PlayEvent events = 1;
+  int64 total = 2; // count in this page
+}
+
+message GetStatsRequest {
+  int32 window_days = 1; // 0 = all time
+  int32 limit = 2;       // top-N size; 0 = server default
+}
+message GetStatsResponse {
+  repeated TrackStat top_tracks = 1;
+  repeated ArtistStat top_artists = 2;
+  int64 total_plays = 3;
+  int64 total_ms = 4;
+}

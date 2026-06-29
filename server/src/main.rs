@@ -12,10 +12,11 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, FcmSender, ImageOptimizer,
-    IngestService, ItunesDirectory, LibraryService, MetadataService, NotificationService,
-    PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService, PushSender,
-    ScanService, StorageService, StreamingService, UploadHub, UploadsService,
+    run_optimize_pass, ArtworkService, CoverArtArchive, CoverArtSource, FavoritesService,
+    FcmSender, ImageOptimizer, IngestService, ItunesDirectory, LibraryService, MetadataService,
+    NotificationService, PlayHistoryService, PlaylistService, PodcastDirectory,
+    PodcastIndexDirectory, PodcastService, PushSender, RecommendationService, ScanService,
+    StorageService, StreamingService, UploadHub, UploadsService,
 };
 use server::auth::Identity;
 use server::services::organizer::Organizer;
@@ -109,6 +110,32 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
+    );
+
+    // Play history (Phase 11) — records plays + serves recently-played/stats.
+    let play_history = PlayHistoryService::new(
+        Arc::new(repos.clone()), // play_events
+        Arc::new(repos.clone()), // tracks (hydration)
+        Arc::new(repos.clone()), // artists (hydration)
+    );
+
+    // Favorites (Phase 11) — per-user likes on tracks/albums/artists.
+    let favorites = FavoritesService::new(
+        Arc::new(repos.clone()), // favorites
+        Arc::new(repos.clone()), // tracks (hydration + existence)
+        Arc::new(repos.clone()), // albums
+        Arc::new(repos.clone()), // artists
+        Arc::new(repos.clone()), // audit
+    );
+
+    // Recommendations / Discover (Phase 11) — behavioral shelves + radio,
+    // derived from play history + favorites + the library graph.
+    let discover = RecommendationService::new(
+        Arc::new(repos.clone()), // play_history
+        Arc::new(repos.clone()), // favorites
+        Arc::new(repos.clone()), // tracks
+        Arc::new(repos.clone()), // albums
+        Arc::new(repos.clone()), // artists
     );
 
     let metadata = MetadataService::new(library.clone(), config.write_tags);
@@ -266,6 +293,9 @@ async fn main() -> Result<()> {
         streaming,
         playlists: playlists.clone(),
         notifications: notifications.clone(),
+        play_history: play_history.clone(),
+        favorites: favorites.clone(),
+        discover: discover.clone(),
         podcasts: podcasts.clone(),
         ingest: ingest.clone(),
         metadata: metadata.clone(),
@@ -287,6 +317,9 @@ async fn main() -> Result<()> {
         artwork,
         playlists,
         notifications,
+        play_history,
+        favorites,
+        discover,
         podcasts,
         ingest,
         uploads,

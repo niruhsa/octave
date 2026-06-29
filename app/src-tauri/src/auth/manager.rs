@@ -12,10 +12,10 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ChunkAck, Credential, EpisodeProgress, MetadataEdit, NotificationPage,
-    PermissionTier, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
-    ServerClient, ServerConfig, Track, TransportHealth, TransportUsed, UploadEvent,
-    UploadInitRequest, UploadListFilter,
+    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, ListeningStats,
+    MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput, Podcast,
+    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerClient, ServerConfig,
+    Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
 
@@ -367,6 +367,84 @@ impl AuthManager {
     pub async fn register_device(&self, token: &str, platform: &str) -> AppResult<()> {
         let cred = self.credential().await?;
         self.server.register_device(&cred, token, platform).await
+    }
+
+    // ----- Play history (Phase 11) -----------------------------------------
+
+    pub async fn record_plays(&self, events: &[PlayInput]) -> AppResult<u64> {
+        let cred = self.credential().await?;
+        self.server.record_plays(&cred, events).await
+    }
+
+    pub async fn list_play_history(
+        &self,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> AppResult<PlayHistoryPage> {
+        let cred = self.credential().await?;
+        self.server.list_play_history(&cred, limit, offset).await
+    }
+
+    pub async fn play_stats(
+        &self,
+        window_days: Option<i64>,
+        limit: Option<i64>,
+    ) -> AppResult<ListeningStats> {
+        let cred = self.credential().await?;
+        self.server.play_stats(&cred, window_days, limit).await
+    }
+
+    // ----- Favorites (Phase 11) --------------------------------------------
+
+    pub async fn favorite(&self, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.favorite(&cred, kind, entity_id).await
+    }
+
+    pub async fn unfavorite(&self, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.unfavorite(&cred, kind, entity_id).await
+    }
+
+    pub async fn is_favorite(&self, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let cred = self.credential().await?;
+        self.server.is_favorite(&cred, kind, entity_id).await
+    }
+
+    pub async fn list_favorite_tracks(&self) -> AppResult<Vec<Track>> {
+        let cred = self.credential().await?;
+        self.server.list_favorite_tracks(&cred).await
+    }
+
+    pub async fn list_favorite_albums(&self) -> AppResult<Vec<Album>> {
+        let cred = self.credential().await?;
+        self.server.list_favorite_albums(&cred).await
+    }
+
+    pub async fn list_favorite_artists(&self) -> AppResult<Vec<Artist>> {
+        let cred = self.credential().await?;
+        self.server.list_favorite_artists(&cred).await
+    }
+
+    pub async fn favorited_track_ids(&self) -> AppResult<Vec<String>> {
+        let cred = self.credential().await?;
+        self.server.favorited_track_ids(&cred).await
+    }
+
+    // ----- Discover (Phase 11) ---------------------------------------------
+
+    pub async fn discover_home(&self) -> AppResult<Vec<DiscoverSection>> {
+        let cred = self.credential().await?;
+        self.server.discover_home(&cred).await
+    }
+
+    pub async fn discover_radio(
+        &self,
+        seed_artist_id: Option<&str>,
+        seed_album_id: Option<&str>,
+    ) -> AppResult<Vec<Track>> {
+        let cred = self.credential().await?;
+        self.server.discover_radio(&cred, seed_artist_id, seed_album_id).await
     }
 
     pub async fn unregister_device(&self, token: &str) -> AppResult<()> {

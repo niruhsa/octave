@@ -23,6 +23,7 @@ import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import {
   authRefreshTransports,
+  playHistoryFlush,
   syncNow,
   syncPendingCount,
   type SyncReport,
@@ -54,6 +55,9 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
     // Don't stack runs; a sync in flight already covers newer edits.
     if (get().status === "syncing") return;
     set({ status: "syncing", lastError: null });
+    // Drain any queued play-history events (Phase 11). Best-effort: a failure
+    // leaves them queued for the next pass and must never fail the sync.
+    void playHistoryFlush().catch(() => {});
     try {
       const report = await syncNow();
       set({

@@ -1,6 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { appInfo, authRefreshOnline, cacheListDownloadedTracks, getLibraryStorage } from "../ipc";
+import {
+  appInfo,
+  authRefreshOnline,
+  cacheListDownloadedTracks,
+  discoverHome,
+  getLibraryStorage,
+  playHistoryList,
+  type DiscoverSection,
+  type PlayEvent,
+} from "../ipc";
+import { Cover } from "../components/Cover";
 import { useAppStore } from "../store";
 import { useSyncStore } from "../sync/useSync";
 import { useQuickSearchStore } from "../quicksearch/store";
@@ -43,6 +53,22 @@ export default function Home() {
     queryKey: ["library_storage"],
     queryFn: getLibraryStorage,
     enabled: online,
+    retry: false,
+  });
+  // Recently played (Phase 11) — per-user + online-only, so only for a bearer
+  // session while online (a SECRET_KEY session has no play history).
+  const isUser = session?.kind === "bearer";
+  const recent = useQuery({
+    queryKey: ["play_history", "recent"],
+    queryFn: () => playHistoryList(24),
+    enabled: online && isUser,
+    retry: false,
+  });
+  // Behavioral discover shelves (Phase 11) — bearer-user + online only.
+  const discover = useQuery({
+    queryKey: ["discover", "home"],
+    queryFn: discoverHome,
+    enabled: online && isUser,
     retry: false,
   });
 
@@ -137,6 +163,15 @@ export default function Home() {
         unavailable={!online || storage.isError}
       />
 
+      {/* recently played */}
+      {isUser && online && <RecentlyPlayed events={recent.data?.events ?? []} />}
+
+      {/* discover shelves */}
+      {isUser && online &&
+        (discover.data ?? []).map((section) => (
+          <DiscoverShelf key={section.id} section={section} />
+        ))}
+
       {/* quick links */}
       <div>
         <h2 className="mb-3 font-mono text-[11px] tracking-[0.14em] text-oct-faint">JUMP TO</h2>
@@ -223,6 +258,80 @@ function StorageWidget({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** A compact "recently played" shelf, deduped to the most recent distinct
+ *  tracks. Hidden entirely when there's nothing to show. */
+function RecentlyPlayed({ events }: { events: PlayEvent[] }) {
+  // Dedup by track (keep the most recent occurrence), cap to a short shelf.
+  const seen = new Set<string>();
+  const rows: PlayEvent[] = [];
+  for (const e of events) {
+    const key = e.track_id ?? `${e.track_title}|${e.artist_name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(e);
+    if (rows.length >= 8) break;
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <div>
+      <div className="mb-3 flex items-baseline justify-between">
+        <h2 className="font-mono text-[11px] tracking-[0.14em] text-oct-faint">RECENTLY PLAYED</h2>
+        <Link to="/stats" className="font-mono text-[11px] text-oct-accent hover:underline">
+          View stats →
+        </Link>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {rows.map((e) => {
+          const inner = (
+            <>
+              <span className="min-w-0">
+                <span className="block truncate text-[14px] font-medium">{e.track_title}</span>
+                <span className="block truncate font-mono text-[11px] text-oct-subtle">
+                  {e.artist_name}
+                </span>
+              </span>
+            </>
+          );
+          const cls =
+            "flex items-center gap-3 rounded-xl border border-oct-border bg-oct-panel/50 px-3.5 py-2.5 transition-colors hover:bg-oct-elevated/40";
+          return e.album_id ? (
+            <Link key={e.id} to={`/albums/${e.album_id}`} className={cls}>
+              {inner}
+            </Link>
+          ) : (
+            <div key={e.id} className={cls}>
+              {inner}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** One discover shelf: a titled row of album covers. */
+function DiscoverShelf({ section }: { section: DiscoverSection }) {
+  if (section.albums.length === 0) return null;
+  return (
+    <div>
+      <h2 className="mb-3 font-mono text-[11px] tracking-[0.14em] text-oct-faint">
+        {section.title.toUpperCase()}
+      </h2>
+      <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-6">
+        {section.albums.map((a) => (
+          <Link key={a.id} to={`/albums/${a.id}`} className="group flex flex-col gap-2">
+            <Cover album={a} tryCover className="w-full" />
+            <span className="truncate text-[12.5px] font-medium group-hover:text-white">
+              {a.title}
+            </span>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

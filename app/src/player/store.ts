@@ -10,8 +10,15 @@
 // local file when downloaded, else proxies the server stream with auth.
 
 import { create } from "zustand";
-import type { MergedEpisode, MergedTrack } from "../ipc";
-import { playerMediaUrl, playerPrefetch, podcastRecordProgress } from "../ipc";
+import type { FavoriteTrack, MergedEpisode, MergedTrack } from "../ipc";
+import {
+  playerMediaUrl,
+  playerPrefetch,
+  playHistoryFlush,
+  playHistoryRecord,
+  podcastRecordProgress,
+} from "../ipc";
+import { useAppStore } from "../store";
 
 export type RepeatMode = "off" | "all" | "one";
 
@@ -59,6 +66,33 @@ export function episodeToQueueItem(ep: MergedEpisode): QueueItem {
     // Resume an in-progress episode where the listener left off; a completed
     // one starts fresh from 0.
     resumeMs: ep.completed ? 0 : ep.position_ms ?? 0,
+  };
+}
+
+/**
+ * Adapt a *server* track (the favorites / discover shape, which lacks the cache
+ * `downloaded` / `local_file_path` fields) into a `QueueItem`. Playback resolves
+ * local-or-stream in Rust, so `downloaded: false` still plays when online.
+ */
+export function serverTrackToQueueItem(t: FavoriteTrack): QueueItem {
+  return {
+    id: t.id,
+    album_id: t.album_id,
+    artist_id: t.artist_id,
+    title: t.title,
+    track_no: t.track_no,
+    disc_no: t.disc_no,
+    duration_ms: t.duration_ms,
+    codec: t.codec,
+    bitrate_kbps: t.bitrate_kbps,
+    file_path: t.file_path,
+    file_size: t.file_size,
+    sample_rate_hz: t.sample_rate_hz,
+    bit_depth: t.bit_depth,
+    channels: t.channels,
+    local_file_path: null,
+    is_single_release: t.is_single_release,
+    downloaded: false,
   };
 }
 
@@ -313,12 +347,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       set({ positionSec: el.currentTime, durationSec: el.duration || 0 });
       const s = get();
       maybeRecordProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
+      maybeRecordPlay(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
     };
     const onDuration = () => set({ durationSec: el.duration || 0 });
     const onEnded = () => {
-      // Mark the finished episode listened before advancing.
+      // Mark the finished episode listened + count the track play before advancing.
       const s = get();
       recordEpisodeProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0, true);
+      recordPlay(s.queue[s.currentIndex], el.currentTime, true);
       get().next();
     };
     const onErr = () => {
@@ -449,6 +485,49 @@ function maybeRecordProgress(item: QueueItem | undefined, posSec: number, durSec
   recordEpisodeProgress(item, posSec, durSec);
 }
 
+// ---------------------------------------------------------------------------
+// play-history recording (Phase 11)
+//
+// A track counts as a "play" once the listener reaches PLAY_COUNT_MIN_SEC OR
+// PLAY_COUNT_MIN_FRACTION of it (whichever first), or plays it to the end. We
+// record at most one play per listen (`_playRecordedId`, reset on each load),
+// so a paused/resumed track isn't double-counted but a repeat replays a new
+// play. Only a bearer *user* session records — play history is per-user, and a
+// SECRET_KEY session has no user to own it (the server would reject it).
+// ---------------------------------------------------------------------------
+
+const PLAY_COUNT_MIN_SEC = 30;
+const PLAY_COUNT_MIN_FRACTION = 0.5;
+let _playRecordedId: string | null = null;
+
+function isBearerUser(): boolean {
+  return useAppStore.getState().session?.kind === "bearer";
+}
+
+/** Record a track play once per listen (no-op for episodes / non-user sessions). */
+function recordPlay(item: QueueItem | undefined, posSec: number, completed: boolean) {
+  if (!item || item.mediaKind === "episode") return;
+  if (_playRecordedId === item.id) return;
+  if (!isBearerUser()) return;
+  _playRecordedId = item.id;
+  const msPlayed = Math.max(0, Math.round(posSec * 1000));
+  // Queue locally, then opportunistically flush (both fire-and-forget — an
+  // offline failure leaves the play queued for the sync scheduler).
+  void playHistoryRecord(item.id, msPlayed, completed)
+    .then(() => playHistoryFlush())
+    .catch(() => {});
+}
+
+/** From the `timeupdate` firehose: count a play once it crosses the threshold. */
+function maybeRecordPlay(item: QueueItem | undefined, posSec: number, durSec: number) {
+  if (!item || item.mediaKind === "episode") return;
+  if (_playRecordedId === item.id) return;
+  const crossed =
+    posSec >= PLAY_COUNT_MIN_SEC ||
+    (durSec > 0 && posSec / durSec >= PLAY_COUNT_MIN_FRACTION);
+  if (crossed) recordPlay(item, posSec, false);
+}
+
 /** Seek the element to `sec` once it has enough metadata to honor it. */
 function seekOnReady(el: HTMLAudioElement, sec: number) {
   if (sec <= 0) return;
@@ -516,6 +595,8 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
     recordEpisodeProgress(outgoing, audio.currentTime, audio.duration || 0);
   }
   set({ currentIndex: index, positionSec: 0, durationSec: 0, error: null });
+  // New listen → allow this track to count a fresh play (repeat re-counts).
+  _playRecordedId = null;
   // Kick off the next track's prefetch in parallel with this one's load, so it's
   // a local file by the time we reach it (screen-off auto-advance — see below).
   prefetchNext(_get);

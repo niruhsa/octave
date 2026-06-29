@@ -45,6 +45,8 @@ pub trait AlbumRepo: Send + Sync {
     async fn create(&self, new: NewAlbum) -> Result<Album>;
     async fn get(&self, id: Uuid) -> Result<Option<Album>>;
     async fn list_by_artist(&self, artist_id: Uuid) -> Result<Vec<Album>>;
+    /// Newest albums by creation time (the "Recently added" discover shelf).
+    async fn recent(&self, limit: i64) -> Result<Vec<Album>>;
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Album>>;
     async fn update(
         &self,
@@ -164,6 +166,25 @@ pub trait FollowRepo: Send + Sync {
     async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<()>;
 }
 
+/// Per-user favorites (Phase 11). Polymorphic over track/album/artist via the
+/// [`FavoriteKind`] selector. Structurally like [`FollowRepo`] but for likeable
+/// catalog entities.
+#[async_trait]
+pub trait FavoriteRepo: Send + Sync {
+    /// Add a favorite. Idempotent (`ON CONFLICT DO NOTHING`).
+    async fn add(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()>;
+    /// Remove a favorite. Idempotent.
+    async fn remove(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()>;
+    async fn is_favorite(
+        &self,
+        user_id: Uuid,
+        kind: FavoriteKind,
+        entity_id: Uuid,
+    ) -> Result<bool>;
+    /// Entity ids of `kind` the user has favorited, newest first.
+    async fn list_ids(&self, user_id: Uuid, kind: FavoriteKind) -> Result<Vec<Uuid>>;
+}
+
 /// Alias rows preserve every known spelling of an artist / album so a merge
 /// never loses the original name. See [`ArtistAlias`] / [`AlbumAlias`].
 #[async_trait]
@@ -218,6 +239,62 @@ pub trait NotificationRepo: Send + Sync {
     async fn mark_read(&self, user_id: Uuid, id: Uuid) -> Result<bool>;
     /// Mark every unread notification for a user read. Returns the count flipped.
     async fn mark_all_read(&self, user_id: Uuid) -> Result<u64>;
+}
+
+/// One row of a "top tracks" aggregation: a track (or its preserved title, if
+/// since deleted) and how many times the user played it in the window.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TrackPlayStat {
+    pub track_id: Option<Uuid>,
+    pub track_title: String,
+    pub artist_name: String,
+    pub plays: i64,
+}
+
+/// One row of a "top artists" aggregation.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ArtistPlayStat {
+    pub artist_id: Option<Uuid>,
+    pub artist_name: String,
+    pub plays: i64,
+}
+
+/// Aggregate totals over a window: number of plays and total ms listened.
+#[derive(Debug, Clone, Copy, Default, sqlx::FromRow)]
+pub struct PlayTotals {
+    pub total_plays: i64,
+    pub total_ms: i64,
+}
+
+/// Play history (Phase 11). Append-only event log keyed on the caller, plus the
+/// read/aggregation paths that drive "recently played", listening stats, and
+/// behavioral recommendations. Records are private telemetry — not audited.
+#[async_trait]
+pub trait PlayHistoryRepo: Send + Sync {
+    /// Bulk-insert play events (a single posted batch, possibly a flushed
+    /// offline backlog). Returns the number of rows inserted. No-op (0) on an
+    /// empty slice.
+    async fn record_many(&self, items: &[NewPlayEvent]) -> Result<u64>;
+    /// Newest-first page of the user's plays (recently played).
+    async fn recent(&self, user_id: Uuid, limit: i64, offset: i64) -> Result<Vec<PlayEvent>>;
+    /// The user's most-played tracks since `since`, descending by play count.
+    async fn top_tracks(
+        &self,
+        user_id: Uuid,
+        since: OffsetDateTime,
+        limit: i64,
+    ) -> Result<Vec<TrackPlayStat>>;
+    /// The user's most-played artists since `since`, descending by play count.
+    async fn top_artists(
+        &self,
+        user_id: Uuid,
+        since: OffsetDateTime,
+        limit: i64,
+    ) -> Result<Vec<ArtistPlayStat>>;
+    /// Total plays + total ms listened by the user since `since`.
+    async fn totals(&self, user_id: Uuid, since: OffsetDateTime) -> Result<PlayTotals>;
+    /// How many times the user has played one track (all time).
+    async fn play_count(&self, user_id: Uuid, track_id: Uuid) -> Result<i64>;
 }
 
 /// Device push tokens (Phase 10 — FCM). One row per registration token, owned

@@ -263,6 +263,22 @@ pub fn run() {
             commands::notification_commands::notifications_unread_count,
             commands::notification_commands::notifications_mark_read,
             commands::notification_commands::notifications_mark_all_read,
+            // play history (Phase 11)
+            commands::play_history_commands::play_history_record,
+            commands::play_history_commands::play_history_flush,
+            commands::play_history_commands::play_history_list,
+            commands::play_history_commands::play_history_stats,
+            // favorites (Phase 11)
+            commands::favorite_commands::favorites_favorite,
+            commands::favorite_commands::favorites_unfavorite,
+            commands::favorite_commands::favorites_is_favorite,
+            commands::favorite_commands::favorites_list_tracks,
+            commands::favorite_commands::favorites_list_albums,
+            commands::favorite_commands::favorites_list_artists,
+            commands::favorite_commands::favorites_track_ids,
+            // discover (Phase 11)
+            commands::discover_commands::discover_home,
+            commands::discover_commands::discover_radio,
             // podcasts
             commands::podcast_commands::podcast_search,
             commands::podcast_commands::podcast_list,

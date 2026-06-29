@@ -333,6 +333,79 @@ pub struct NotificationPage {
     pub unread_count: i64,
 }
 
+// ── Play history (Phase 11) ────────────────────────────────────────────
+
+/// A play the client posts to the server. The denormalized display fields are
+/// resolved server-side from `track_id`. `played_at` is RFC3339 (the time the
+/// play happened); `None` lets the server stamp receipt time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayInput {
+    pub track_id: String,
+    pub ms_played: i64,
+    pub completed: bool,
+    #[serde(default)]
+    pub played_at: Option<String>,
+}
+
+/// One recorded play (server's `PlayEvent`). The entity refs are `None` when
+/// the catalog row was since deleted; `track_title`/`artist_name` are
+/// denormalized so the row still reads correctly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayEvent {
+    pub id: String,
+    pub track_id: Option<String>,
+    pub artist_id: Option<String>,
+    pub album_id: Option<String>,
+    pub track_title: String,
+    pub artist_name: String,
+    pub ms_played: i64,
+    pub completed: bool,
+    pub played_at: String,
+}
+
+/// A page of the caller's plays (newest first).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayHistoryPage {
+    pub events: Vec<PlayEvent>,
+    pub total: i64,
+}
+
+/// One "top tracks" row in a stats window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackStat {
+    pub track_id: Option<String>,
+    pub track_title: String,
+    pub artist_name: String,
+    pub plays: i64,
+}
+
+/// One "top artists" row in a stats window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStat {
+    pub artist_id: Option<String>,
+    pub artist_name: String,
+    pub plays: i64,
+}
+
+/// Aggregate listening stats over a window (server's `GetStatsResponse`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListeningStats {
+    pub top_tracks: Vec<TrackStat>,
+    pub top_artists: Vec<ArtistStat>,
+    pub total_plays: i64,
+    pub total_ms: i64,
+}
+
+// ── Discover (Phase 11) ────────────────────────────────────────────────
+
+/// One home shelf — a titled list of albums (server's `DiscoverSection`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoverSection {
+    pub id: String,
+    pub title: String,
+    pub albums: Vec<Album>,
+}
+
 // ── Podcasts ───────────────────────────────────────────────────────────
 
 /// Server's view of a podcast show. `categories` is the parsed list (the

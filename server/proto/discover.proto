@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package music.discover.v1;
+
+// Recommendations / Discover (Phase 11). Behavioral shelves derived from the
+// caller's play history + favorites + the library graph. `GetHome` is
+// personalized (per-user; SECRET_KEY rejected). `GetRadio` returns a track
+// queue seeded from an artist or album (library-derived; any authed identity).
+// Slim entity messages (own copies, like favorite's FavAlbum/FavTrack) avoid a
+// cross-proto import.
+service DiscoverService {
+  rpc GetHome(GetHomeRequest) returns (GetHomeResponse);
+  rpc GetRadio(GetRadioRequest) returns (GetRadioResponse);
+}
+
+message GetHomeRequest {}
+
+// A titled album shelf.
+message DiscoverSection {
+  string id = 1;     // stable key, e.g. "recently_added"
+  string title = 2;  // display title
+  repeated DiscAlbum albums = 3;
+}
+message GetHomeResponse { repeated DiscoverSection sections = 1; }
+
+// Provide exactly one seed (artist takes precedence if both are set server-side
+// — but the client sends one).
+message GetRadioRequest {
+  string seed_artist_id = 1;
+  string seed_album_id = 2;
+}
+message GetRadioResponse { repeated DiscTrack tracks = 1; }
+
+message DiscAlbum {
+  string id = 1;
+  string artist_id = 2;
+  string title = 3;
+  int32 release_year = 4; // 0 = unknown
+  string cover_path = 5;  // empty when unset
+  int64 storage_bytes = 6;
+}
+
+message DiscTrack {
+  string id = 1;
+  string album_id = 2;
+  string artist_id = 3;
+  string title = 4;
+  int32 track_no = 5;
+  int32 disc_no = 6;
+  int64 duration_ms = 7;
+  string codec = 8;
+  int32 bitrate_kbps = 9;
+  string file_path = 10;
+  int64 file_size = 11;
+  string metadata_json = 12;
+  bool is_single_release = 13;
+  int32 sample_rate_hz = 14;
+  int32 bit_depth = 15;
+  int32 channels = 16;
+}

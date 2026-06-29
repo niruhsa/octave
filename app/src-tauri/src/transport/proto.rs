@@ -33,3 +33,18 @@ pub mod notification {
 pub mod podcast {
     tonic::include_proto!("music.podcast.v1");
 }
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod playhistory {
+    tonic::include_proto!("music.playhistory.v1");
+}
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod favorite {
+    tonic::include_proto!("music.favorite.v1");
+}
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod discover {
+    tonic::include_proto!("music.discover.v1");
+}

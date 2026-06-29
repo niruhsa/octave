@@ -306,6 +306,18 @@ impl AlbumRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn recent(&self, limit: i64) -> Result<Vec<Album>> {
+        sqlx::query_as::<_, Album>(
+            r#"SELECT id, artist_id, title, release_year, cover_path, storage_bytes,
+                       created_at, updated_at
+               FROM albums ORDER BY created_at DESC LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Album>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         sqlx::query_as::<_, Album>(
@@ -1012,6 +1024,82 @@ impl FollowRepo for PgRepos {
 }
 
 // ---------------------------------------------------------------------------
+// FavoriteRepo
+// ---------------------------------------------------------------------------
+
+/// The `favorites` column for a [`FavoriteKind`]. Not user input — safe to
+/// interpolate into the query text.
+fn fav_col(kind: FavoriteKind) -> &'static str {
+    match kind {
+        FavoriteKind::Track => "track_id",
+        FavoriteKind::Album => "album_id",
+        FavoriteKind::Artist => "artist_id",
+    }
+}
+
+#[async_trait]
+impl FavoriteRepo for PgRepos {
+    async fn add(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()> {
+        let col = fav_col(kind);
+        // ON CONFLICT DO NOTHING (no target) ignores the partial unique-index
+        // violation when the favorite already exists.
+        sqlx::query(&format!(
+            "INSERT INTO favorites (user_id, {col}) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+        ))
+        .bind(user_id)
+        .bind(entity_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn remove(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()> {
+        let col = fav_col(kind);
+        sqlx::query(&format!(
+            "DELETE FROM favorites WHERE user_id = $1 AND {col} = $2"
+        ))
+        .bind(user_id)
+        .bind(entity_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn is_favorite(
+        &self,
+        user_id: Uuid,
+        kind: FavoriteKind,
+        entity_id: Uuid,
+    ) -> Result<bool> {
+        let col = fav_col(kind);
+        let (exists,): (bool,) = sqlx::query_as(&format!(
+            "SELECT EXISTS(SELECT 1 FROM favorites WHERE user_id = $1 AND {col} = $2)"
+        ))
+        .bind(user_id)
+        .bind(entity_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(exists)
+    }
+
+    async fn list_ids(&self, user_id: Uuid, kind: FavoriteKind) -> Result<Vec<Uuid>> {
+        let col = fav_col(kind);
+        let rows: Vec<(Uuid,)> = sqlx::query_as(&format!(
+            "SELECT {col} FROM favorites \
+             WHERE user_id = $1 AND {col} IS NOT NULL ORDER BY created_at DESC"
+        ))
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AliasRepo
 // ---------------------------------------------------------------------------
 
@@ -1403,6 +1491,119 @@ impl NotificationRepo for PgRepos {
         .await
         .map_err(db)?;
         Ok(res.rows_affected())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PlayHistoryRepo
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl PlayHistoryRepo for PgRepos {
+    async fn record_many(&self, items: &[NewPlayEvent]) -> Result<u64> {
+        if items.is_empty() {
+            return Ok(0);
+        }
+        // One multi-row INSERT (single round-trip) for a posted batch / flushed
+        // offline backlog. A row with no client `played_at` is stamped now().
+        let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+            "INSERT INTO play_events \
+               (user_id, track_id, artist_id, album_id, track_title, artist_name, \
+                ms_played, completed, played_at) ",
+        );
+        qb.push_values(items, |mut b, item| {
+            b.push_bind(item.user_id)
+                .push_bind(item.track_id)
+                .push_bind(item.artist_id)
+                .push_bind(item.album_id)
+                .push_bind(&item.track_title)
+                .push_bind(&item.artist_name)
+                .push_bind(item.ms_played)
+                .push_bind(item.completed)
+                .push_bind(item.played_at.unwrap_or_else(OffsetDateTime::now_utc));
+        });
+        let res = qb.build().execute(&self.pool).await.map_err(db)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn recent(&self, user_id: Uuid, limit: i64, offset: i64) -> Result<Vec<PlayEvent>> {
+        sqlx::query_as::<_, PlayEvent>(
+            "SELECT id, user_id, track_id, artist_id, album_id, track_title, artist_name, \
+                    ms_played, completed, played_at \
+             FROM play_events WHERE user_id = $1 \
+             ORDER BY played_at DESC LIMIT $2 OFFSET $3",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn top_tracks(
+        &self,
+        user_id: Uuid,
+        since: OffsetDateTime,
+        limit: i64,
+    ) -> Result<Vec<TrackPlayStat>> {
+        sqlx::query_as::<_, TrackPlayStat>(
+            "SELECT track_id, track_title, artist_name, COUNT(*) AS plays \
+             FROM play_events WHERE user_id = $1 AND played_at >= $2 \
+             GROUP BY track_id, track_title, artist_name \
+             ORDER BY plays DESC, track_title ASC LIMIT $3",
+        )
+        .bind(user_id)
+        .bind(since)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn top_artists(
+        &self,
+        user_id: Uuid,
+        since: OffsetDateTime,
+        limit: i64,
+    ) -> Result<Vec<ArtistPlayStat>> {
+        sqlx::query_as::<_, ArtistPlayStat>(
+            "SELECT artist_id, artist_name, COUNT(*) AS plays \
+             FROM play_events WHERE user_id = $1 AND played_at >= $2 \
+             GROUP BY artist_id, artist_name \
+             ORDER BY plays DESC, artist_name ASC LIMIT $3",
+        )
+        .bind(user_id)
+        .bind(since)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn totals(&self, user_id: Uuid, since: OffsetDateTime) -> Result<PlayTotals> {
+        sqlx::query_as::<_, PlayTotals>(
+            "SELECT COUNT(*) AS total_plays, \
+                    COALESCE(SUM(ms_played), 0)::BIGINT AS total_ms \
+             FROM play_events WHERE user_id = $1 AND played_at >= $2",
+        )
+        .bind(user_id)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn play_count(&self, user_id: Uuid, track_id: Uuid) -> Result<i64> {
+        let (n,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM play_events WHERE user_id = $1 AND track_id = $2",
+        )
+        .bind(user_id)
+        .bind(track_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(n)
     }
 }
 

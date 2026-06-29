@@ -10,10 +10,11 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, ChunkAck, Credential, EpisodeProgress, LibraryStorage,
-    MetadataEdit, PermissionTier, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
+    Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
+    EpisodeProgress, LibraryStorage, ListeningStats, MetadataEdit, PermissionTier, PlayEvent,
+    PlayHistoryPage, PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig, SingleUploadResult,
-    Track, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
+    Track, TrackStat, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
     UploadView,
 };
 use crate::error::{AppError, AppResult};
@@ -924,6 +925,292 @@ impl RestClient {
             .map_err(rest_err("unregister_device"))?;
         check_status(resp).await?;
         Ok(())
+    }
+
+    // ----- Play history (Phase 11) ---------------------------------------
+
+    pub async fn record_plays(&self, cred: &Credential, events: &[PlayInput]) -> AppResult<u64> {
+        #[derive(Deserialize)]
+        struct Resp {
+            recorded: u64,
+        }
+        let url = format!("{}/history", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "events": events }))
+            .send()
+            .await
+            .map_err(rest_err("record_plays"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("record_plays decode"))?;
+        Ok(body.recorded)
+    }
+
+    pub async fn list_play_history(
+        &self,
+        cred: &Credential,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> AppResult<PlayHistoryPage> {
+        let mut url = format!("{}/history?", self.base);
+        if let Some(l) = limit {
+            url.push_str(&format!("limit={l}&"));
+        }
+        if let Some(o) = offset {
+            url.push_str(&format!("offset={o}"));
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_play_history"))?;
+        let body: PlayHistoryPageJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_play_history decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn play_stats(
+        &self,
+        cred: &Credential,
+        window_days: Option<i64>,
+        limit: Option<i64>,
+    ) -> AppResult<ListeningStats> {
+        let mut url = format!("{}/history/stats?", self.base);
+        if let Some(w) = window_days {
+            url.push_str(&format!("window_days={w}&"));
+        }
+        if let Some(l) = limit {
+            url.push_str(&format!("limit={l}"));
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("play_stats"))?;
+        let body: StatsJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("play_stats decode"))?;
+        Ok(body.into())
+    }
+
+    // ----- Favorites (Phase 11) ------------------------------------------
+
+    pub async fn favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let seg = fav_path_segment(kind)?;
+        let url = format!("{}/{seg}/{entity_id}/favorite", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("favorite"))?;
+        check_status(resp).await?;
+        Ok(true)
+    }
+
+    pub async fn unfavorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        let seg = fav_path_segment(kind)?;
+        let url = format!("{}/{seg}/{entity_id}/favorite", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("unfavorite"))?;
+        check_status(resp).await?;
+        Ok(false)
+    }
+
+    pub async fn is_favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+        #[derive(Deserialize)]
+        struct Resp {
+            favorited: bool,
+        }
+        let seg = fav_path_segment(kind)?;
+        let url = format!("{}/{seg}/{entity_id}/favorite", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("is_favorite"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("is_favorite decode"))?;
+        Ok(body.favorited)
+    }
+
+    pub async fn list_favorite_tracks(&self, cred: &Credential) -> AppResult<Vec<Track>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            tracks: Vec<TrackJson>,
+        }
+        let url = format!("{}/favorites/tracks", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_favorite_tracks"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_favorite_tracks decode"))?;
+        Ok(body.tracks.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_favorite_albums(&self, cred: &Credential) -> AppResult<Vec<Album>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            albums: Vec<AlbumJson>,
+        }
+        let url = format!("{}/favorites/albums", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_favorite_albums"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_favorite_albums decode"))?;
+        Ok(body.albums.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_favorite_artists(&self, cred: &Credential) -> AppResult<Vec<Artist>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            artists: Vec<ArtistJson>,
+        }
+        let url = format!("{}/favorites/artists", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_favorite_artists"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_favorite_artists decode"))?;
+        Ok(body.artists.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn favorited_track_ids(&self, cred: &Credential) -> AppResult<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            track_ids: Vec<String>,
+        }
+        let url = format!("{}/favorites/track-ids", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("favorited_track_ids"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("favorited_track_ids decode"))?;
+        Ok(body.track_ids)
+    }
+
+    // ----- Discover (Phase 11) -------------------------------------------
+
+    pub async fn discover_home(&self, cred: &Credential) -> AppResult<Vec<DiscoverSection>> {
+        #[derive(Deserialize)]
+        struct SectionJson {
+            id: String,
+            title: String,
+            #[serde(default)]
+            albums: Vec<AlbumJson>,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            sections: Vec<SectionJson>,
+        }
+        let url = format!("{}/discover", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discover_home"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discover_home decode"))?;
+        Ok(body
+            .sections
+            .into_iter()
+            .map(|s| DiscoverSection {
+                id: s.id,
+                title: s.title,
+                albums: s.albums.into_iter().map(Into::into).collect(),
+            })
+            .collect())
+    }
+
+    pub async fn discover_radio(
+        &self,
+        cred: &Credential,
+        seed_artist_id: Option<&str>,
+        seed_album_id: Option<&str>,
+    ) -> AppResult<Vec<Track>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            tracks: Vec<TrackJson>,
+        }
+        let mut url = format!("{}/discover/radio?", self.base);
+        if let Some(a) = seed_artist_id {
+            url.push_str(&format!("seed_artist_id={a}&"));
+        }
+        if let Some(a) = seed_album_id {
+            url.push_str(&format!("seed_album_id={a}"));
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discover_radio"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discover_radio decode"))?;
+        Ok(body.tracks.into_iter().map(Into::into).collect())
     }
 
     // ----- Podcasts ------------------------------------------------------
@@ -2063,6 +2350,115 @@ impl From<NotificationPageJson> for super::NotificationPage {
             total: p.total,
             unread_count: p.unread_count,
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct PlayEventJson {
+    id: String,
+    #[serde(default)]
+    track_id: Option<String>,
+    #[serde(default)]
+    artist_id: Option<String>,
+    #[serde(default)]
+    album_id: Option<String>,
+    track_title: String,
+    artist_name: String,
+    ms_played: i64,
+    completed: bool,
+    played_at: String,
+}
+impl From<PlayEventJson> for PlayEvent {
+    fn from(p: PlayEventJson) -> Self {
+        Self {
+            id: p.id,
+            track_id: p.track_id,
+            artist_id: p.artist_id,
+            album_id: p.album_id,
+            track_title: p.track_title,
+            artist_name: p.artist_name,
+            ms_played: p.ms_played,
+            completed: p.completed,
+            played_at: p.played_at,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct PlayHistoryPageJson {
+    events: Vec<PlayEventJson>,
+    total: i64,
+}
+impl From<PlayHistoryPageJson> for PlayHistoryPage {
+    fn from(p: PlayHistoryPageJson) -> Self {
+        Self {
+            events: p.events.into_iter().map(Into::into).collect(),
+            total: p.total,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct TrackStatJson {
+    #[serde(default)]
+    track_id: Option<String>,
+    track_title: String,
+    artist_name: String,
+    plays: i64,
+}
+impl From<TrackStatJson> for TrackStat {
+    fn from(s: TrackStatJson) -> Self {
+        Self {
+            track_id: s.track_id,
+            track_title: s.track_title,
+            artist_name: s.artist_name,
+            plays: s.plays,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ArtistStatJson {
+    #[serde(default)]
+    artist_id: Option<String>,
+    artist_name: String,
+    plays: i64,
+}
+impl From<ArtistStatJson> for ArtistStat {
+    fn from(s: ArtistStatJson) -> Self {
+        Self {
+            artist_id: s.artist_id,
+            artist_name: s.artist_name,
+            plays: s.plays,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StatsJson {
+    top_tracks: Vec<TrackStatJson>,
+    top_artists: Vec<ArtistStatJson>,
+    total_plays: i64,
+    total_ms: i64,
+}
+impl From<StatsJson> for ListeningStats {
+    fn from(s: StatsJson) -> Self {
+        Self {
+            top_tracks: s.top_tracks.into_iter().map(Into::into).collect(),
+            top_artists: s.top_artists.into_iter().map(Into::into).collect(),
+            total_plays: s.total_plays,
+            total_ms: s.total_ms,
+        }
+    }
+}
+
+/// Map a favorite `kind` to its REST path segment (`track` → `tracks`, etc.).
+fn fav_path_segment(kind: &str) -> AppResult<&'static str> {
+    match kind {
+        "track" => Ok("tracks"),
+        "album" => Ok("albums"),
+        "artist" => Ok("artists"),
+        other => Err(AppError::Transport(format!("invalid favorite kind: {other}"))),
     }
 }
 

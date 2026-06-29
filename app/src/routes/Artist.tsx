@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   artistImageUrl,
+  discoverRadio,
   followArtist,
   isFollowing,
   libraryDeleteArtist,
@@ -11,6 +12,7 @@ import {
   libraryMergeArtists,
   unfollowArtist,
 } from "../ipc";
+import { serverTrackToQueueItem, usePlayerStore } from "../player/store";
 import { byteSize } from "../lib/format";
 import { Cover } from "../components/Cover";
 import { BlurUpImage } from "../components/BlurUpImage";
@@ -24,7 +26,8 @@ import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
 import { btnDanger, btnGhost } from "../lib/ui";
 import { offlineAttrs } from "../components/OfflineGate";
-import { EditIcon, HeartIcon, TrashIcon } from "../components/icons";
+import { BellIcon, EditIcon, PlayIcon, TrashIcon } from "../components/icons";
+import { FavoriteButton } from "../components/FavoriteButton";
 import { SkeletonGrid } from "../components/Skeleton";
 
 export default function Artist() {
@@ -76,6 +79,16 @@ export default function Artist() {
       alert(formatError(e));
     } finally {
       setFollowBusy(false);
+    }
+  }
+
+  async function startRadio() {
+    try {
+      const tracks = await discoverRadio(id, undefined);
+      if (tracks.length === 0) return;
+      usePlayerStore.getState().playQueue(tracks.map(serverTrackToQueueItem), 0);
+    } catch (e) {
+      alert(formatError(e));
     }
   }
 
@@ -141,22 +154,33 @@ export default function Artist() {
             {q.data && <SourceBadge source={q.data.source} />}
           </p>
           {canFollow && (
-            <button
-              onClick={toggleFollow}
-              {...offlineAttrs(
-                online,
-                followBusy,
-                following ? "Unfollow this artist" : "Follow for new-release alerts",
-              )}
-              className={`mt-3 inline-flex w-fit items-center gap-2 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors disabled:opacity-50 ${
-                following
-                  ? "border-oct-accent/40 bg-oct-accent/10 text-oct-accent hover:border-oct-danger/50 hover:bg-oct-danger/10 hover:text-oct-danger"
-                  : "border-oct-border-strong text-oct-muted hover:border-oct-line hover:text-oct-text"
-              }`}
-            >
-              <HeartIcon size={13} />
-              {following ? "Following" : "Follow"}
-            </button>
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                onClick={toggleFollow}
+                {...offlineAttrs(
+                  online,
+                  followBusy,
+                  following ? "Unfollow this artist" : "Follow for new-release alerts",
+                )}
+                className={`inline-flex w-fit items-center gap-2 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors disabled:opacity-50 ${
+                  following
+                    ? "border-oct-accent/40 bg-oct-accent/10 text-oct-accent hover:border-oct-danger/50 hover:bg-oct-danger/10 hover:text-oct-danger"
+                    : "border-oct-border-strong text-oct-muted hover:border-oct-line hover:text-oct-text"
+                }`}
+              >
+                <BellIcon size={13} />
+                {following ? "Following" : "Follow"}
+              </button>
+              {/* Favorite (heart) is distinct from Follow (new-release alerts). */}
+              <FavoriteButton kind="artist" id={id} size={18} />
+              <button
+                onClick={() => void startRadio()}
+                {...offlineAttrs(online, false, "Start a radio from this artist")}
+                className={`${btnGhost} disabled:opacity-50`}
+              >
+                <PlayIcon size={13} /> Radio
+              </button>
+            </div>
           )}
         </div>
       </header>

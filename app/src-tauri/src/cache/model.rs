@@ -83,6 +83,18 @@ pub struct PlaylistTrack {
     pub added_at: String,
 }
 
+/// One queued play awaiting flush to the server (Phase 11). A send-only
+/// outbox: the server owns the authoritative history. `completed` is `0`/`1`;
+/// `played_at` is when the play happened (the insert time).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PendingPlay {
+    pub id: String,
+    pub track_id: String,
+    pub ms_played: i64,
+    pub completed: i64,
+    pub played_at: String,
+}
+
 /// One queued offline edit awaiting replay against the server. `op_type`
 /// selects the payload shape; `payload_json` is decoded by the sync engine.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

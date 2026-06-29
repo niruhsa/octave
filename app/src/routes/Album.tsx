@@ -4,6 +4,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   cacheGetAlbum,
   coverUrl,
+  discoverRadio,
   downloadAlbum,
   downloadDelete,
   downloadTrack,
@@ -26,7 +27,7 @@ import { EqBars } from "../components/EqBars";
 import { byteSize, formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
 import { formatError } from "../lib/error";
-import { usePlayerStore } from "../player/store";
+import { serverTrackToQueueItem, usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { broadcastInvalidate } from "../App";
 import { useAppStore } from "../store";
@@ -44,6 +45,7 @@ import {
   TrashIcon,
 } from "../components/icons";
 import { EditMetaButton, MetadataEditor } from "../components/MetadataEditor";
+import { FavoriteButton } from "../components/FavoriteButton";
 import { ImageUploader } from "../components/ImageUploader";
 import { TrackInfoSheet } from "../components/TrackInfoSheet";
 import type { MergedTrack } from "../ipc";
@@ -293,6 +295,21 @@ export default function Album() {
           <button onClick={dlAlbum} className={btnGhost} {...offlineAttrs(online)}>
             <DownloadIcon size={14} /> Download
           </button>
+          <FavoriteButton kind="album" id={id} size={18} />
+          <button
+            onClick={async () => {
+              try {
+                const tracks = await discoverRadio(undefined, id);
+                if (tracks.length > 0) playQueue(tracks.map(serverTrackToQueueItem), 0);
+              } catch (e) {
+                alert(formatError(e));
+              }
+            }}
+            className={btnGhost}
+            {...offlineAttrs(online)}
+          >
+            <PlayIcon size={13} /> Radio
+          </button>
           {anyDownloaded && (
             <Link to="/downloads" className="font-mono text-[11px] text-oct-accent hover:underline">
               manage downloads
@@ -386,6 +403,7 @@ export default function Album() {
                       {qualityLabel(t)}
                     </span>
                     <span className="flex items-center justify-end gap-2">
+                      <FavoriteButton kind="track" id={t.id} size={15} />
                       <span
                         className="hidden items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 sm:flex"
                         onClick={(e) => e.stopPropagation()}

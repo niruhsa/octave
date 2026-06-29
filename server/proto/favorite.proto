@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package music.favorite.v1;
+
+// Favorites (Phase 11). A per-user "like" on a track, album, or artist. Any
+// authed user may favorite (the SECRET_KEY identity has no user and is
+// rejected). List reads return full entities so the client can render + play
+// them directly. Slim entity messages (own copies, like notification's
+// FollowedArtist) avoid a cross-proto import.
+service FavoriteService {
+  rpc Favorite(FavoriteRequest) returns (FavoriteStatusResponse);
+  rpc Unfavorite(FavoriteRequest) returns (FavoriteStatusResponse);
+  rpc IsFavorite(FavoriteRequest) returns (FavoriteStatusResponse);
+
+  rpc ListFavoriteTracks(ListFavoritesRequest) returns (ListFavoriteTracksResponse);
+  rpc ListFavoriteAlbums(ListFavoritesRequest) returns (ListFavoriteAlbumsResponse);
+  rpc ListFavoriteArtists(ListFavoritesRequest) returns (ListFavoriteArtistsResponse);
+  // Just the ids — for bulk heart-state hydration without N round-trips.
+  rpc ListFavoriteTrackIds(ListFavoritesRequest) returns (ListFavoriteTrackIdsResponse);
+}
+
+// `kind` is "track" | "album" | "artist".
+message FavoriteRequest {
+  string kind = 1;
+  string entity_id = 2;
+}
+message FavoriteStatusResponse { bool favorited = 1; }
+message ListFavoritesRequest {}
+
+// Slim entity projections mirroring the library DTOs the client already maps.
+message FavArtist {
+  string id = 1;
+  string name = 2;
+  string sort_name = 3;   // empty when unset
+  string image_path = 4;  // empty when unset
+  int64 storage_bytes = 5;
+}
+message FavAlbum {
+  string id = 1;
+  string artist_id = 2;
+  string title = 3;
+  int32 release_year = 4; // 0 = unknown
+  string cover_path = 5;  // empty when unset
+  int64 storage_bytes = 6;
+}
+message FavTrack {
+  string id = 1;
+  string album_id = 2;
+  string artist_id = 3;
+  string title = 4;
+  int32 track_no = 5;     // 0 = unknown
+  int32 disc_no = 6;      // 0 = unknown
+  int64 duration_ms = 7;
+  string codec = 8;
+  int32 bitrate_kbps = 9; // 0 = unknown
+  string file_path = 10;
+  int64 file_size = 11;   // 0 = unknown
+  string metadata_json = 12;
+  bool is_single_release = 13;
+  int32 sample_rate_hz = 14;
+  int32 bit_depth = 15;
+  int32 channels = 16;
+}
+
+message ListFavoriteTracksResponse { repeated FavTrack tracks = 1; }
+message ListFavoriteAlbumsResponse { repeated FavAlbum albums = 1; }
+message ListFavoriteArtistsResponse { repeated FavArtist artists = 1; }
+message ListFavoriteTrackIdsResponse { repeated string track_ids = 1; }

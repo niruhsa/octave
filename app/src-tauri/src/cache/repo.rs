@@ -12,8 +12,8 @@
 use sqlx::SqlitePool;
 
 use crate::cache::model::{
-    Album, AlbumArt, Artist, PendingOp, Playlist, PlaylistTrack, Podcast, PodcastEpisode,
-    PodcastEpisodeProgress, SyncState, Track,
+    Album, AlbumArt, Artist, PendingOp, PendingPlay, Playlist, PlaylistTrack, Podcast,
+    PodcastEpisode, PodcastEpisodeProgress, SyncState, Track,
 };
 use crate::error::AppResult;
 
@@ -507,6 +507,66 @@ pub async fn mark_op_failed(pool: &SqlitePool, id: i64, error: &str) -> AppResul
         .execute(pool)
         .await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// pending_plays (Phase 11 — play-history send-only outbox)
+// ---------------------------------------------------------------------------
+
+/// Queue a play for flush. `played_at` defaults (in SQL) to the insert time,
+/// which is when the play happened.
+pub async fn enqueue_play(
+    pool: &SqlitePool,
+    id: &str,
+    track_id: &str,
+    ms_played: i64,
+    completed: bool,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO pending_plays (id, track_id, ms_played, completed) VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(id)
+    .bind(track_id)
+    .bind(ms_played)
+    .bind(if completed { 1 } else { 0 })
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Oldest-first batch of queued plays (FIFO flush), capped at `limit`.
+pub async fn list_pending_plays(pool: &SqlitePool, limit: i64) -> AppResult<Vec<PendingPlay>> {
+    let rows = sqlx::query_as::<_, PendingPlay>(
+        "SELECT id, track_id, ms_played, completed, played_at
+         FROM pending_plays ORDER BY created_at, id LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Delete the flushed plays by id (called after a successful server push).
+pub async fn delete_pending_plays(pool: &SqlitePool, ids: &[String]) -> AppResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    for id in ids {
+        sqlx::query("DELETE FROM pending_plays WHERE id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn count_pending_plays(pool: &SqlitePool) -> AppResult<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_plays")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
 }
 
 // ---------------------------------------------------------------------------

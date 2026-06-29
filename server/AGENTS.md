@@ -15,7 +15,7 @@ Authoritative backend that hosts lossless/downloaded music and streams it to des
 ## Responsibilities
 - **Streaming:** serve lossless/downloaded audio to authenticated clients.
 - **Library management:** create / update / delete tracks, albums, artists, metadata.
-- **Recommendations:** fingerprint-matching based music recommendation.
+- **Recommendations / Discover:** **behavioral** home shelves (more from artists you love, jump back in, your favorite albums, recently added — only the non-empty ones) + a seeded **radio** queue (from an artist or album), derived from play history + favorites + the library graph (no stored model). `GetHome` is per-user (`SECRET_KEY` rejected); radio is library-derived. gRPC `music.discover.v1` + REST `/discover` · `/discover/radio`. See [`services/recommendation.rs`](./src/services/recommendation.rs). _(Acoustic-fingerprint similarity — the original "fingerprint-matching" idea — is deferred to a later phase.)_
 - **Playlists:** create / update / delete.
 - **Offline support:** allow clients to download and archive content for offline use.
 - **Artwork:** automatic album artwork fetching.
@@ -24,6 +24,8 @@ Authoritative backend that hosts lossless/downloaded music and streams it to des
 - **Uploads:** accept new music from clients individually or as archives (archive file, ISO, CD, and other popular music archiving formats).
 - **Ingest folder:** watch a server-side ingest dir. Files placed there (e.g. completed torrents) are **copied — not moved** — out and auto-organised into the library. Never delete or move the source.
 - **Follow notifications:** notify users when a followed artist has a new release.
+- **Play history:** record per-user "play" events (the client decides what counts) and serve recently-played + listening stats (top tracks/artists + totals over a window). Per-user; `SECRET_KEY` rejected. Private telemetry — **not** audited. The foundation for behavioral recommendations. See [`services/playhistory.rs`](./src/services/playhistory.rs).
+- **Favorites:** per-user "likes" on tracks/albums/artists (polymorphic `favorites` table, nullable FKs). Add/remove (audited, mirroring follows), `is_favorite`, full-entity list reads per kind, and a `favorited_track_ids` bulk read for client heart hydration. Per-user; `SECRET_KEY` rejected. gRPC `music.favorite.v1` + REST `/{tracks,albums,artists}/:id/favorite` + `/favorites/...`. See [`services/favorites.rs`](./src/services/favorites.rs).
 - **Audit log:** record every change with viewer access for managers/admins. Changes must be **rollback-able** (e.g. metadata edits).
 
 ## Authentication & Authorization
