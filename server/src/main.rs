@@ -13,11 +13,12 @@ use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
     build_extractor, build_index, run_optimize_pass, ArtworkService, CoverArtArchive,
-    CoverArtSource, FavoritesService, FcmSender, FingerprintService,
+    CoverArtSource, DebouncedWarmer, FavoritesService, FcmSender, FingerprintService,
     ImageOptimizer, IngestService, ItunesDirectory, LibraryService, MetadataService,
-    NotificationService, PlayHistoryService, PlaylistService, PodcastDirectory,
-    PodcastIndexDirectory, PodcastService, PushSender, RecommendationService, ScanService,
-    StorageService, StreamingService, UploadHub, UploadsService,
+    NotificationService, PlaylistRecWarmer, PlayHistoryService, PlaylistService, PodcastDirectory,
+    PodcastIndexDirectory, PodcastService, PushSender, RecommendationCache, RecommendationService,
+    ScanService, StorageService, StreamingService, UploadHub, UploadsService, REC_CACHE_MAX,
+    REC_CACHE_TTL, REC_WARM_DEBOUNCE,
 };
 use server::db::repo::TrackFeatureRepo;
 use server::auth::Identity;
@@ -148,7 +149,18 @@ async fn main() -> Result<()> {
     let (discover, fingerprint) = if let Some(fp_cfg) = config.fingerprint.clone() {
         let features: Arc<dyn TrackFeatureRepo> = Arc::new(repos.clone());
         let extractor = build_extractor(fp_cfg.model_path.as_deref());
-        let index = build_index(features.clone(), extractor.model_version());
+        let index = build_index(
+            fp_cfg.index_kind,
+            features.clone(),
+            extractor.model_version(),
+            extractor.dims(),
+        );
+        // Prepare the index once up front so the first request is usable before
+        // the background pass finishes: bruteforce loads existing embeddings;
+        // pgvector ensures the derived column + HNSW index exist and backfills.
+        if let Err(e) = index.reload().await {
+            tracing::warn!(error = %e, "fingerprint: initial index reload failed");
+        }
         let fp = FingerprintService::new(
             Arc::new(repos.clone()), // tracks
             features,
@@ -169,6 +181,26 @@ async fn main() -> Result<()> {
     } else {
         (discover, None)
     };
+
+    // Playlist-recommendation cache + warm-on-change (Phase 3). The cache tag
+    // is the active fingerprint model (so re-analysis busts warm pools), or
+    // "behavioral" when fingerprinting is off. Attaching the warmer to the
+    // playlist service means a membership change schedules a debounced recompute
+    // so the pool is warm by open time.
+    let rec_cache = std::sync::Arc::new(RecommendationCache::new(REC_CACHE_TTL, REC_CACHE_MAX));
+    let rec_model = fingerprint
+        .as_ref()
+        .map(|fp| fp.model_version().to_string())
+        .unwrap_or_else(|| "behavioral".to_string());
+    let discover = discover
+        .with_rec_cache(rec_cache.clone(), rec_model)
+        .with_rec_persistence(Arc::new(repos.clone()));
+    let warmer: Arc<dyn PlaylistRecWarmer> = Arc::new(DebouncedWarmer::new(
+        Arc::new(discover.clone()),
+        Arc::new(repos.clone()),
+        REC_WARM_DEBOUNCE,
+    ));
+    let playlists = playlists.with_warmer(warmer);
 
     let metadata = MetadataService::new(library.clone(), config.write_tags);
     // Construct the artwork service whenever there's somewhere to cache images

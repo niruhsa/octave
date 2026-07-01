@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -223,11 +223,29 @@ export default function PlaylistDetail() {
 
   // ----- Recommended songs (Spotify-style; Phase 12 acoustic recs) -------
   // A pool (~30) of suggestions similar to the *whole* playlist. We show up to
-  // 10; adding one drops it from the pool so the next slides in (no refetch).
-  // "Refresh" recomputes from whatever is *now* in the playlist.
-  const [recs, setRecs] = useState<FavoriteTrack[] | null>(null);
-  const [recsLoading, setRecsLoading] = useState(false);
+  // 10; adding one drops it (via the `entryIds` filter) so the next slides in.
+  //
+  // Cached in React Query keyed on the playlist's track-*set* signature (Phase
+  // 6): navigating away and back repaints the previous pool instantly instead
+  // of refetching, a membership change revalidates in the background
+  // (stale-while-revalidate via `placeholderData`), and a no-op reorder changes
+  // nothing (the signature is order-independent — same rule as the server's
+  // content signature). Fetched in parallel with the playlist detail rather
+  // than gated behind a serial effect.
   const entryIds = useMemo(() => new Set(entries.map((e) => e.track.id)), [entries]);
+  const recSignature = useMemo(
+    () => entries.map((e) => e.track.id).slice().sort().join(","),
+    [entries],
+  );
+  const recsQuery = useQuery({
+    queryKey: ["playlist-recs", id, recSignature],
+    queryFn: () => discoverPlaylistRecommendations(entries.map((e) => e.track.id), 30),
+    enabled: !!id && online && canEdit && entries.length > 0,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (prev) => prev,
+  });
+  const recs = recsQuery.data ?? null;
+  const recsLoading = recsQuery.isFetching;
   const recVisible = useMemo(
     () => (recs ?? []).filter((r) => !entryIds.has(r.id)).slice(0, 10),
     [recs, entryIds],
@@ -243,24 +261,10 @@ export default function PlaylistDetail() {
   const recNames = useTrackNames(recVisible);
   const addNames = useTrackNames(search.data?.items?.slice(0, 20) ?? []);
 
-  async function loadRecs() {
-    const seedIds = entries.map((e) => e.track.id);
-    if (seedIds.length === 0) { setRecs([]); return; }
-    setRecsLoading(true);
-    const pool = await guard(() => discoverPlaylistRecommendations(seedIds, 30));
-    setRecs(pool ?? []);
-    setRecsLoading(false);
-  }
-  // Load once the playlist has tracks (re-runs only if the pool is reset to null).
-  useEffect(() => {
-    if (recs === null && online && canEdit && entries.length > 0) void loadRecs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recs, online, canEdit, entries.length]);
-
   async function addRec(t: FavoriteTrack) {
-    // Optimistically drop it from the pool so the next recommendation slides in;
-    // `addTrack` optimistically appends it to the playlist (it's then a future seed).
-    setRecs((prev) => (prev ? prev.filter((r) => r.id !== t.id) : prev));
+    // `addTrack` optimistically appends it to the playlist; that bumps `entryIds`
+    // so the `recVisible` filter drops it and the next recommendation slides in.
+    // The membership change also revalidates the rec pool in the background.
     await addTrack(t);
   }
 
@@ -425,7 +429,7 @@ export default function PlaylistDetail() {
               <RadioIcon size={13} /> RECOMMENDED
             </h2>
             <button
-              onClick={() => void loadRecs()}
+              onClick={() => void recsQuery.refetch()}
               disabled={recsLoading}
               className="flex items-center gap-1.5 font-mono text-[11px] text-oct-subtle hover:text-oct-text disabled:opacity-40"
               title="Recalculate from the current playlist"

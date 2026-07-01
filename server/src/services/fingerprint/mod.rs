@@ -30,11 +30,12 @@ mod chromaprint;
 pub mod onnx;
 
 pub use extractor::{DspExtractor, FeatureExtractor};
-pub use index::{cosine_similarity, BruteForceIndex, SimilarityIndex};
+pub use index::{cosine_similarity, BruteForceIndex, PgVectorIndex, SimilarityIndex};
 pub use service::{FingerprintReport, FingerprintService, FingerprintStatus};
 
 use std::sync::Arc;
 
+use crate::config::IndexKind;
 use crate::db::repo::TrackFeatureRepo;
 
 /// Build the configured [`FeatureExtractor`]: the learned ONNX encoder when a
@@ -60,11 +61,19 @@ pub fn build_extractor(model_path: Option<&std::path::Path>) -> Arc<dyn FeatureE
     }
 }
 
-/// Build the (empty, unloaded) similarity index for the given extractor's model
-/// version. Call [`SimilarityIndex::reload`] (the analysis pass does) to fill it.
+/// Build the configured similarity index for the given extractor's model.
+/// `BruteForce` holds embeddings in memory; `PgVector` delegates to a Postgres
+/// ANN index (sized to `dims`). Both start unloaded — call
+/// [`SimilarityIndex::reload`] (the analysis pass does, and `main` does once at
+/// startup) to populate / prepare them.
 pub fn build_index(
+    kind: IndexKind,
     features: Arc<dyn TrackFeatureRepo>,
     model_version: &str,
+    dims: usize,
 ) -> Arc<dyn SimilarityIndex> {
-    Arc::new(BruteForceIndex::new(features, model_version))
+    match kind {
+        IndexKind::BruteForce => Arc::new(BruteForceIndex::new(features, model_version)),
+        IndexKind::PgVector => Arc::new(PgVectorIndex::new(features, model_version, dims)),
+    }
 }

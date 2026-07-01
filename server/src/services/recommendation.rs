@@ -51,6 +51,10 @@ pub const PLAYLIST_REC_DEFAULT: usize = 30;
 const REC_MAX_SEEDS: usize = 100;
 /// Neighbors pulled per seed before aggregation.
 const REC_NEIGHBORS_PER_SEED: usize = 200;
+/// Diversification headroom: hydrate this many × the requested limit of the
+/// top-ranked candidates (so the per-artist/album caps still have alternatives
+/// to pick from) — rather than hydrating the entire ranked pool.
+const DIVERSIFY_HEADROOM: usize = 4;
 
 /// One home shelf: a titled list of albums.
 #[derive(Debug, Clone)]
@@ -71,6 +75,17 @@ pub struct RecommendationService {
     /// disabled — `seed_track_id` radio + `similar_tracks` then fall back to
     /// behavioral (same-artist) results, so the feature never hard-fails.
     pub index: Option<Arc<dyn SimilarityIndex>>,
+    /// Playlist-recommendation pool cache (Phase 3). `None` disables caching
+    /// (every call recomputes). When set, `recommend_for_playlist` serves warm
+    /// pools instantly + single-flights misses.
+    pub cache: Option<Arc<crate::services::rec_cache::RecommendationCache>>,
+    /// Version tag mixed into the cache key so re-analysis (a new model) busts
+    /// stale pools precisely. Empty when caching is off.
+    cache_model: String,
+    /// Durable backing for the in-memory cache (Phase 4). `None` = memory-only.
+    /// An in-memory miss falls through to this before recomputing, so a relaunch
+    /// warms from disk instead of a cold recompute.
+    persist: Option<Arc<dyn crate::db::repo::PlaylistRecCacheRepo>>,
 }
 
 impl RecommendationService {
@@ -88,6 +103,9 @@ impl RecommendationService {
             albums,
             artists,
             index: None,
+            cache: None,
+            cache_model: String::new(),
+            persist: None,
         }
     }
 
@@ -98,16 +116,104 @@ impl RecommendationService {
         self
     }
 
+    /// Attach the playlist-recommendation cache (Phase 3). `model_version` tags
+    /// the cache key so re-analysis invalidates warm pools.
+    pub fn with_rec_cache(
+        mut self,
+        cache: Arc<crate::services::rec_cache::RecommendationCache>,
+        model_version: impl Into<String>,
+    ) -> Self {
+        self.cache = Some(cache);
+        self.cache_model = model_version.into();
+        self
+    }
+
+    /// Attach the durable rec-pool store (Phase 4). Requires the in-memory cache
+    /// (it's the hot layer); a miss there falls through to this before computing.
+    pub fn with_rec_persistence(
+        mut self,
+        store: Arc<dyn crate::db::repo::PlaylistRecCacheRepo>,
+    ) -> Self {
+        self.persist = Some(store);
+        self
+    }
+
+    /// Store a computed pool in the memory cache and (best-effort) the durable
+    /// store, so it survives a relaunch.
+    async fn store_pool(
+        &self,
+        cache: &crate::services::rec_cache::RecommendationCache,
+        key: &str,
+        ids: Vec<Uuid>,
+    ) {
+        cache.put(key.to_string(), ids.clone());
+        if let Some(persist) = &self.persist {
+            if let Err(e) = persist.upsert(key, &self.cache_model, &ids).await {
+                tracing::debug!(error = %e, "playlist rec persist upsert failed");
+            }
+        }
+    }
+
+    /// Content signature for a playlist's seed set: a hash over the *sorted*
+    /// (deduped) track ids + the model tag. Order-independent, so a no-op
+    /// reorder keeps the same key while a membership change busts it.
+    fn cache_key(&self, seeds: &[Uuid]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut ids: Vec<Uuid> = seeds.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut h = Sha256::new();
+        h.update(self.cache_model.as_bytes());
+        h.update(b"|");
+        for id in &ids {
+            h.update(id.as_bytes());
+        }
+        let digest = h.finalize();
+        let mut out = String::with_capacity(64);
+        for b in digest {
+            use std::fmt::Write;
+            let _ = write!(out, "{b:02x}");
+        }
+        out
+    }
+
+    /// (Re)compute + cache the recommendation pool for a playlist's current
+    /// track set — the warm-on-change entry point (fire-and-forget). No-op when
+    /// caching is disabled or the seed set is empty.
+    pub async fn warm_playlist(&self, seed_track_ids: &[Uuid]) -> Result<()> {
+        let Some(cache) = &self.cache else {
+            return Ok(());
+        };
+        if seed_track_ids.is_empty() {
+            return Ok(());
+        }
+        let exclude: HashSet<Uuid> = seed_track_ids.iter().copied().collect();
+        let out = self
+            .compute_playlist_recs(seed_track_ids, &exclude, PLAYLIST_REC_DEFAULT)
+            .await?;
+        let key = self.cache_key(seed_track_ids);
+        self.store_pool(cache, &key, out.iter().map(|t| t.id).collect()).await;
+        Ok(())
+    }
+
     /// Personalized home shelves (only the non-empty ones). Any authed user;
     /// `SECRET_KEY` rejected (no user to personalize for).
     pub async fn get_home(&self, caller: &Identity) -> Result<Vec<DiscoverSection>> {
         caller.require(PermissionLevel::User)?;
         let user_id = self.caller_user_id(caller)?;
 
-        let mut sections = Vec::new();
+        // The four shelves are independent reads — run them concurrently rather
+        // than serially (each is several round-trips), then assemble in a stable
+        // order, keeping only the non-empty ones.
+        let (from_artists, jump_back, fav_albums, recent) = tokio::try_join!(
+            self.albums_from_loved_artists(user_id),
+            self.albums_from_recent_plays(user_id),
+            self.favorite_albums(user_id),
+            self.albums.recent(SECTION_LIMIT as i64),
+        )?;
 
+        let mut sections = Vec::new();
         // 1. More from artists you love (top-played + favorited artists).
-        let from_artists = self.albums_from_loved_artists(user_id).await?;
         if !from_artists.is_empty() {
             sections.push(DiscoverSection {
                 id: "from_artists".into(),
@@ -115,9 +221,7 @@ impl RecommendationService {
                 albums: from_artists,
             });
         }
-
         // 2. Jump back in (albums from your recent plays).
-        let jump_back = self.albums_from_recent_plays(user_id).await?;
         if !jump_back.is_empty() {
             sections.push(DiscoverSection {
                 id: "jump_back_in".into(),
@@ -125,9 +229,7 @@ impl RecommendationService {
                 albums: jump_back,
             });
         }
-
         // 3. Your favorite albums.
-        let fav_albums = self.favorite_albums(user_id).await?;
         if !fav_albums.is_empty() {
             sections.push(DiscoverSection {
                 id: "your_albums".into(),
@@ -135,9 +237,7 @@ impl RecommendationService {
                 albums: fav_albums,
             });
         }
-
         // 4. Recently added (always available — the fresh-account fallback).
-        let recent = self.albums.recent(SECTION_LIMIT as i64).await?;
         if !recent.is_empty() {
             sections.push(DiscoverSection {
                 id: "recently_added".into(),
@@ -250,6 +350,97 @@ impl RecommendationService {
         }
         let exclude: HashSet<Uuid> = seed_track_ids.iter().copied().collect();
 
+        // Fast path: a warm cache pool (µs). The pool is stored at (at least)
+        // PLAYLIST_REC_DEFAULT size, so any request up to that is served from it.
+        if let Some(cache) = &self.cache {
+            let key = self.cache_key(seed_track_ids);
+            if let Some(hit) = self.serve_cached(&cache.get(&key), limit).await? {
+                return Ok(hit);
+            }
+            // Miss → single-flight so a request racing a background warm (or
+            // another request) awaits one shared computation instead of dogpiling.
+            let flight = cache.flight_lock(&key);
+            let _guard = flight.lock().await;
+            // Re-check: the winner of the race may have just populated the cache.
+            if let Some(hit) = self.serve_cached(&cache.get(&key), limit).await? {
+                return Ok(hit);
+            }
+            // Fall through to the durable store (Phase 4) before recomputing, so a
+            // relaunch (cold memory) warms from disk. Hydrate the hot layer on hit.
+            if let Some(persist) = &self.persist {
+                if let Some(row) = persist.get(&key).await? {
+                    if is_fresh(row.computed_at) {
+                        cache.put(key.clone(), row.rec_track_ids.clone());
+                        if let Some(hit) =
+                            self.serve_cached(&Some(row.rec_track_ids), limit).await?
+                        {
+                            return Ok(hit);
+                        }
+                    }
+                }
+            }
+            let pool = limit.max(PLAYLIST_REC_DEFAULT);
+            let out = self.compute_playlist_recs(seed_track_ids, &exclude, pool).await?;
+            self.store_pool(cache, &key, out.iter().map(|t| t.id).collect()).await;
+            return Ok(out.into_iter().take(limit).collect());
+        }
+
+        self.compute_playlist_recs(seed_track_ids, &exclude, limit).await
+    }
+
+    /// Serve a cache hit: hydrate the top `limit` ids in one batched query when
+    /// the cached pool is at least that large. `None` = treat as a miss.
+    async fn serve_cached(
+        &self,
+        cached: &Option<Vec<Uuid>>,
+        limit: usize,
+    ) -> Result<Option<Vec<Track>>> {
+        // Pools are stored at ≥ PLAYLIST_REC_DEFAULT, so any request up to that
+        // is fully covered even when the pool is short (genuinely few candidates).
+        // A larger request only hits if the pool happens to already hold enough.
+        match cached {
+            Some(ids) if ids.len() >= limit || limit <= PLAYLIST_REC_DEFAULT => {
+                let take = &ids[..limit.min(ids.len())];
+                Ok(Some(self.tracks.get_many(take).await?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Compute (uncached) the diversified recommendation pool for a playlist's
+    /// seed set. This is the body shared by the cached read path and the
+    /// warm-on-change recompute.
+    async fn compute_playlist_recs(
+        &self,
+        seed_track_ids: &[Uuid],
+        exclude: &HashSet<Uuid>,
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        // Acoustic path. When the backend supports it (pgvector), collapse the
+        // whole playlist into ONE centroid query — O(1) queries regardless of
+        // playlist size — instead of a per-seed scan. Otherwise fall through to
+        // the summed-per-seed aggregation below (bruteforce / in-memory).
+        if let Some(index) = &self.index {
+            let seeds: Vec<Uuid> = seed_track_ids.iter().take(REC_MAX_SEEDS).copied().collect();
+            if let Some(ranked) = index.centroid_nearest(&seeds, REC_NEIGHBORS_PER_SEED).await? {
+                if !ranked.is_empty() {
+                    // Rank → truncate → hydrate: only fetch the diversification
+                    // window, in one batched query (never thousands of rows).
+                    let ids: Vec<Uuid> = ranked
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .filter(|id| !exclude.contains(id))
+                        .collect();
+                    let candidates = self.hydrate_window(ids, limit).await?;
+                    let mut out = Vec::new();
+                    diversify_into(&mut out, candidates, limit);
+                    if !out.is_empty() {
+                        return Ok(out);
+                    }
+                }
+            }
+        }
+
         // Acoustic path: sum neighbor similarities across the (analyzed) seeds.
         if let Some(index) = &self.index {
             let mut scores: std::collections::HashMap<Uuid, f32> = Default::default();
@@ -268,12 +459,9 @@ impl RecommendationService {
                 ranked.sort_by(|a, b| {
                     b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
                 });
-                let mut candidates = Vec::with_capacity(ranked.len());
-                for (id, _) in ranked {
-                    if let Some(t) = self.tracks.get(id).await? {
-                        candidates.push(t);
-                    }
-                }
+                // Rank → truncate → hydrate: batch-fetch only the window.
+                let ids: Vec<Uuid> = ranked.into_iter().map(|(id, _)| id).collect();
+                let candidates = self.hydrate_window(ids, limit).await?;
                 let mut out = Vec::new();
                 diversify_into(&mut out, candidates, limit);
                 return Ok(out);
@@ -281,7 +469,7 @@ impl RecommendationService {
         }
 
         // Behavioral fallback: the playlist's artists, weighted by frequency.
-        self.recommend_behavioral(seed_track_ids, &exclude, limit).await
+        self.recommend_behavioral(seed_track_ids, exclude, limit).await
     }
 
     /// Behavioral playlist recommendations: pull tracks from the playlist's
@@ -364,13 +552,18 @@ impl RecommendationService {
             return Ok(None);
         }
         let ranked = index.nearest(seed, k).await?;
-        let mut out = Vec::with_capacity(ranked.len());
-        for (id, _score) in ranked {
-            if let Some(t) = self.tracks.get(id).await? {
-                out.push(t);
-            }
-        }
-        Ok(Some(out))
+        // Batch-hydrate the ranked neighbors in one query (was one get per row).
+        let ids: Vec<Uuid> = ranked.into_iter().map(|(id, _)| id).collect();
+        Ok(Some(self.tracks.get_many(&ids).await?))
+    }
+
+    /// Batch-hydrate ranked candidate ids in rank order, truncated to a
+    /// diversification window (`limit × DIVERSIFY_HEADROOM`) so we never fetch
+    /// thousands of rows to render a few dozen. One `get_many` round-trip.
+    async fn hydrate_window(&self, mut ids: Vec<Uuid>, limit: usize) -> Result<Vec<Track>> {
+        let window = limit.saturating_mul(DIVERSIFY_HEADROOM).max(limit);
+        ids.truncate(window);
+        self.tracks.get_many(&ids).await
     }
 
     /// Append an artist's catalog (album by album) to `out`, skipping the seed
@@ -509,6 +702,13 @@ impl RecommendationService {
 /// `out` reaches `limit`. This is the MMR-style diversification that keeps a
 /// "sounds like" station from collapsing onto one artist. Tracks already in
 /// `out` (e.g. the seed) seed the caps so they count against them.
+/// Whether a persisted pool computed at `computed_at` is still within the cache
+/// TTL (same freshness window as the in-memory layer).
+fn is_fresh(computed_at: OffsetDateTime) -> bool {
+    let ttl = time::Duration::seconds(crate::services::rec_cache::REC_CACHE_TTL.as_secs() as i64);
+    OffsetDateTime::now_utc() - computed_at <= ttl
+}
+
 fn diversify_into(out: &mut Vec<Track>, candidates: Vec<Track>, limit: usize) {
     let mut per_artist: HashSet<Uuid> = HashSet::new();
     let mut artist_counts: std::collections::HashMap<Uuid, usize> = Default::default();
@@ -1149,5 +1349,185 @@ mod tests {
         let f = make();
         let svc = f.svc.clone().with_similarity(Arc::new(FakeIndex::default()));
         assert!(svc.recommend_for_playlist(&user(), &[], 10).await.unwrap().is_empty());
+    }
+
+    // --- Rec cache + warm-on-change (Phase 3) ---
+
+    use crate::services::rec_cache::RecommendationCache;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn cache_key_ignores_reorder_but_busts_on_membership() {
+        let f = make();
+        let svc = f.svc.clone().with_rec_cache(
+            Arc::new(RecommendationCache::new(Duration::from_secs(60), 8)),
+            "dsp-v1",
+        );
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        // Reorder → same key (signature is over the sorted set).
+        assert_eq!(svc.cache_key(&[a, b]), svc.cache_key(&[b, a]));
+        // Membership change → different key.
+        assert_ne!(svc.cache_key(&[a, b]), svc.cache_key(&[a]));
+        // Model tag participates → different model, different key.
+        let svc2 = f.svc.clone().with_rec_cache(
+            Arc::new(RecommendationCache::new(Duration::from_secs(60), 8)),
+            "onnx-512",
+        );
+        assert_ne!(svc.cache_key(&[a, b]), svc2.cache_key(&[a, b]));
+    }
+
+    #[tokio::test]
+    async fn playlist_recs_served_from_warm_cache() {
+        let f = make();
+        let idx = Arc::new(FakeIndex::default());
+        let cache = Arc::new(RecommendationCache::new(Duration::from_secs(3600), 16));
+        let svc = f
+            .svc
+            .clone()
+            .with_similarity(idx.clone())
+            .with_rec_cache(cache, "dsp-v1");
+
+        let ar = f.artists.insert("A");
+        let al = f.albums.insert(ar.id, "Al");
+        let seed = f.tracks.insert(ar.id, al.id, "seed");
+        let n1 = f.tracks.insert(
+            f.artists.insert("B").id,
+            f.albums.insert(Uuid::new_v4(), "x").id,
+            "n1",
+        );
+        idx.ranks.lock().unwrap().insert(seed.id, vec![(n1.id, 0.9)]);
+
+        // Warm the pool, then swap the index to a *different* neighbor.
+        svc.warm_playlist(&[seed.id]).await.unwrap();
+        let n2 = f.tracks.insert(
+            f.artists.insert("C").id,
+            f.albums.insert(Uuid::new_v4(), "y").id,
+            "n2",
+        );
+        idx.ranks.lock().unwrap().insert(seed.id, vec![(n2.id, 0.9)]);
+
+        // The read is served from the warm cache (n1), NOT recomputed (n2).
+        let recs = svc
+            .recommend_for_playlist(&user(), &[seed.id], 10)
+            .await
+            .unwrap();
+        assert!(recs.iter().any(|t| t.id == n1.id), "warm pool returned");
+        assert!(
+            !recs.iter().any(|t| t.id == n2.id),
+            "served from cache, not recomputed"
+        );
+    }
+
+    // --- Durable rec-pool persistence (Phase 4) ---
+
+    use crate::db::repo::{PlaylistRecCacheRepo, PlaylistRecRow};
+    use std::collections::HashMap as StdHashMap;
+
+    #[derive(Default)]
+    struct FakePersist {
+        rows: Mutex<StdHashMap<String, (Vec<Uuid>, OffsetDateTime)>>,
+    }
+    impl FakePersist {
+        fn seed(&self, key: &str, ids: Vec<Uuid>) {
+            self.rows.lock().unwrap().insert(key.into(), (ids, now()));
+        }
+    }
+    #[async_trait]
+    impl PlaylistRecCacheRepo for FakePersist {
+        async fn get(&self, signature: &str) -> Result<Option<PlaylistRecRow>> {
+            Ok(self.rows.lock().unwrap().get(signature).map(|(ids, at)| PlaylistRecRow {
+                rec_track_ids: ids.clone(),
+                computed_at: *at,
+            }))
+        }
+        async fn upsert(&self, signature: &str, _model: &str, ids: &[Uuid]) -> Result<()> {
+            self.rows.lock().unwrap().insert(signature.into(), (ids.to_vec(), now()));
+            Ok(())
+        }
+        async fn prune_older_than(&self, _cutoff: OffsetDateTime) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn playlist_recs_warm_from_durable_store_on_cold_memory() {
+        let f = make();
+        let cache = Arc::new(RecommendationCache::new(Duration::from_secs(3600), 16));
+        let persist = Arc::new(FakePersist::default());
+        let svc = f
+            .svc
+            .clone()
+            .with_rec_cache(cache, "dsp-v1")
+            .with_rec_persistence(persist.clone());
+
+        let ar = f.artists.insert("A");
+        let al = f.albums.insert(ar.id, "Al");
+        let seed = f.tracks.insert(ar.id, al.id, "seed");
+        // A track the behavioral compute path would never surface (different
+        // artist) — so its presence proves the result came from the durable store.
+        let ghost = f.tracks.insert(
+            f.artists.insert("Z").id,
+            f.albums.insert(Uuid::new_v4(), "z").id,
+            "ghost",
+        );
+
+        // Simulate a prior run having persisted a pool (memory is cold).
+        let key = svc.cache_key(&[seed.id]);
+        persist.seed(&key, vec![ghost.id]);
+
+        let recs = svc
+            .recommend_for_playlist(&user(), &[seed.id], 10)
+            .await
+            .unwrap();
+        assert!(
+            recs.iter().any(|t| t.id == ghost.id),
+            "cold memory warmed from the durable store"
+        );
+    }
+
+    #[tokio::test]
+    async fn playlist_recs_compute_persists_for_relaunch() {
+        let f = make();
+        let cache = Arc::new(RecommendationCache::new(Duration::from_secs(3600), 16));
+        let persist = Arc::new(FakePersist::default());
+        let svc = f
+            .svc
+            .clone()
+            .with_rec_cache(cache, "dsp-v1")
+            .with_rec_persistence(persist.clone());
+
+        let ar = f.artists.insert("A");
+        let al = f.albums.insert(ar.id, "Al");
+        let seed = f.tracks.insert(ar.id, al.id, "seed");
+        f.tracks.insert(ar.id, al.id, "sibling"); // behavioral candidate
+
+        // First call computes + persists.
+        let _ = svc.recommend_for_playlist(&user(), &[seed.id], 10).await.unwrap();
+        let key = svc.cache_key(&[seed.id]);
+        assert!(
+            persist.rows.lock().unwrap().contains_key(&key),
+            "computed pool was written to the durable store"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_many_preserves_request_order_and_skips_missing() {
+        let f = make();
+        let ar = f.artists.insert("A");
+        let al = f.albums.insert(ar.id, "Al");
+        let t1 = f.tracks.insert(ar.id, al.id, "t1");
+        let t2 = f.tracks.insert(ar.id, al.id, "t2");
+        let t3 = f.tracks.insert(ar.id, al.id, "t3");
+
+        // Request out of insertion order, with an unknown id interleaved.
+        let missing = Uuid::new_v4();
+        let got = f
+            .tracks
+            .get_many(&[t3.id, missing, t1.id, t2.id])
+            .await
+            .unwrap();
+        let ids: Vec<Uuid> = got.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![t3.id, t1.id, t2.id], "request order, missing dropped");
     }
 }

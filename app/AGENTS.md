@@ -42,6 +42,7 @@ Cross-platform music player that streams from the remote server when online and 
 
 ## Server Communication
 - Backend is **gRPC primary, REST fallback**. Mirror that preference in the client transport layer.
+- The gRPC **channel is long-lived + reused** ([`transport/client.rs`](./src-tauri/src/transport/client.rs)): `ServerClient` builds one lazily-connecting channel at construction and hands out cheap per-call clones over it (tonic multiplexes HTTP/2), warmed off the request path via `warm_grpc()` on server-config. The connect budget is short (1.5 s) so an unreachable server fails over to REST quickly instead of stalling cold loads (PLAYLISTS_OPTS.md Phase 5).
 - All requests carry auth (`SECRET_KEY` or session from username/password).
 - Treat server as source of truth when reachable; degrade gracefully to offline cache otherwise.
 - Heavy/native work (filesystem cache, secure credential storage, downloads) belongs in the Rust side via `#[tauri::command]`; keep the React layer for UI/state.

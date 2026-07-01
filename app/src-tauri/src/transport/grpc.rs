@@ -1,11 +1,21 @@
 //! gRPC client over the server's auth service.
 //!
-//! Connection is lazy and per-call: `Endpoint::connect()` is cheap once the
-//! channel is warm (tonic reuses HTTP/2 streams), and constructing a new
-//! channel on failure is simpler than keeping state for reconnect logic at
-//! this stage. Phase 5 may add a long-lived channel + reconnect strategy.
+//! The channel is **long-lived + reused** (Phase 5). [`ServerClient`] builds one
+//! lazily-connecting [`Channel`] at startup via [`GrpcClient::connect_lazy`] and
+//! hands out per-call [`GrpcClient`]s over clones of it ([`GrpcClient::from_channel`])
+//! — clones are cheap and tonic multiplexes HTTP/2 streams over the one
+//! connection, so a warm call pays no connect. tonic reconnects internally when
+//! the connection drops, so no manual reconnect state is needed. The connect
+//! budget is short ([`CONNECT_TIMEOUT`]) so a cold/unreachable server falls back
+//! to REST quickly instead of stalling for seconds.
 
 use std::time::Duration;
+
+/// Connect budget for a gRPC channel. Short so an unreachable server fails over
+/// to REST quickly (the old 5 s budget was the dominant cold-load stall).
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Per-RPC deadline once connected.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -57,7 +67,10 @@ use super::{
 };
 use crate::error::{AppError, AppResult};
 
-/// Thin wrapper around the generated `AuthServiceClient`.
+/// Thin wrapper around the generated service clients. Cheap to clone — a clone
+/// shares the same underlying [`Channel`] (one multiplexed HTTP/2 connection),
+/// which is how [`ServerClient`] reuses a single warm channel across calls.
+#[derive(Clone)]
 pub struct GrpcClient {
     channel: Channel,
 }
@@ -67,16 +80,28 @@ impl GrpcClient {
     /// the endpoint URL can't be parsed or the TCP/HTTP2 handshake fails
     /// within the connect timeout.
     pub async fn connect(config: &ServerConfig) -> AppResult<Self> {
-        let endpoint = Self::endpoint(config.grpc_endpoint())?
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(20))
-            .tcp_nodelay(true);
-
+        let endpoint = Self::tuned_endpoint(config)?;
         let channel = endpoint
             .connect()
             .await
             .map_err(|e| AppError::Transport(format!("gRPC connect: {e}")))?;
         Ok(Self { channel })
+    }
+
+    /// Build a **lazily-connecting** client: no I/O happens here — the channel
+    /// connects on first use and tonic reconnects on drop. This is the shared,
+    /// long-lived channel [`ServerClient`] caches so warm calls skip the connect.
+    pub fn connect_lazy(config: &ServerConfig) -> AppResult<Self> {
+        let channel = Self::tuned_endpoint(config)?.connect_lazy();
+        Ok(Self { channel })
+    }
+
+    /// The configured endpoint with the shared connect/request budgets applied.
+    fn tuned_endpoint(config: &ServerConfig) -> AppResult<Endpoint> {
+        Ok(Self::endpoint(config.grpc_endpoint())?
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .tcp_nodelay(true))
     }
 
     /// Build a tonic [`Endpoint`] for the gRPC URL, attaching a TLS config

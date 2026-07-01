@@ -26,23 +26,49 @@ use crate::error::{AppError, AppResult};
 pub struct ServerClient {
     config: ServerConfig,
     rest: RestClient,
+    /// Long-lived, lazily-connecting gRPC channel reused across calls (Phase 5).
+    /// `None` when the endpoint can't even be built (invalid URL / TLS) — then
+    /// every call goes straight to REST. Cloning a `GrpcClient` shares the one
+    /// channel, so warm calls skip the per-call connect that used to stall cold
+    /// loads for seconds.
+    grpc: Option<GrpcClient>,
 }
 
 impl ServerClient {
     pub fn new(config: ServerConfig) -> AppResult<Self> {
         let rest = RestClient::new(&config)?;
-        Ok(Self { config, rest })
+        // Build the shared channel up front. Lazy: no I/O here, it connects on
+        // first use; a build failure (bad URL/TLS) just disables gRPC.
+        let grpc = match GrpcClient::connect_lazy(&config) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::info!(err = %e, "gRPC channel unavailable; REST-only");
+                None
+            }
+        };
+        Ok(Self { config, rest, grpc })
     }
 
     pub fn config(&self) -> &ServerConfig {
         &self.config
     }
 
+    /// Warm the shared gRPC channel in the background (Phase 5): establish the
+    /// TCP/HTTP2 connection at launch so the first user query doesn't pay it.
+    /// Fire-and-forget; a failure just means the first real call reconnects.
+    pub fn warm_grpc(&self) {
+        let config = self.config.clone();
+        tokio::spawn(async move {
+            if GrpcClient::probe(&config).await {
+                tracing::debug!("gRPC channel warmed at launch");
+            }
+        });
+    }
+
     /// Username/password login. Tries gRPC first; falls back to REST on
     /// any non-auth transport failure.
     pub async fn login(&self, username: &str, password: &str) -> AppResult<LoginOutcome> {
-        let grpc_attempt = try_grpc(&self.config).await;
-        if let Ok(client) = &grpc_attempt {
+        if let Some(client) = self.try_grpc().await {
             match client.login(username, password).await {
                 Ok(o) => {
                     return Ok(LoginOutcome {
@@ -58,8 +84,6 @@ impl ServerClient {
                 }
                 Err(e) => return Err(e),
             }
-        } else if let Err(e) = &grpc_attempt {
-            tracing::info!(err = %e, "gRPC connect failed; falling back to REST");
         }
         let o = self.rest.login(username, password).await?;
         Ok(LoginOutcome {
@@ -73,7 +97,7 @@ impl ServerClient {
 
     /// Resolve a credential to a server identity (and therefore tier).
     pub async fn whoami(&self, cred: &Credential) -> AppResult<WhoAmI> {
-        if let Ok(client) = try_grpc(&self.config).await {
+        if let Some(client) = self.try_grpc().await {
             match client.whoami(cred).await {
                 Ok(w) => {
                     return Ok(WhoAmI {
@@ -102,7 +126,7 @@ impl ServerClient {
 
     /// Revoke a session.
     pub async fn logout(&self, cred: &Credential) -> AppResult<()> {
-        if let Ok(client) = try_grpc(&self.config).await {
+        if let Some(client) = self.try_grpc().await {
             match client.logout(cred).await {
                 Ok(()) => return Ok(()),
                 Err(e) if is_transport_error(&e) => {
@@ -1571,22 +1595,15 @@ impl ServerClient {
     /// `Err`) when the channel can't be opened so the call sites can just
     /// fall through to REST without nested matches.
     async fn try_grpc(&self) -> Option<GrpcClient> {
-        match GrpcClient::connect(&self.config).await {
-            Ok(c) => Some(c),
-            Err(e) => {
-                fallback_log("connect", &e);
-                None
-            }
-        }
+        // Hand out a clone of the shared, long-lived channel (Phase 5) — cheap,
+        // no per-call connect. `async` is kept so the ~40 `self.try_grpc().await`
+        // call sites are unchanged; there's no I/O here.
+        self.grpc.clone()
     }
 }
 
 fn fallback_log(op: &str, err: &AppError) {
     tracing::info!(op, err = %err, "gRPC unavailable; falling back to REST");
-}
-
-async fn try_grpc(config: &ServerConfig) -> AppResult<GrpcClient> {
-    GrpcClient::connect(config).await
 }
 
 fn is_transport_error(err: &AppError) -> bool {

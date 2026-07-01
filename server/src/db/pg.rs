@@ -503,6 +503,27 @@ impl TrackRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn get_many(&self, ids: &[Uuid]) -> Result<Vec<Track>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One round-trip; re-order to match `ids` (SQL returns arbitrary order).
+        let rows = sqlx::query_as::<_, Track>(
+            r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
+                       duration_ms, codec, bitrate_kbps, file_path, file_size,
+                       sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, is_explicit, created_at, updated_at
+               FROM tracks WHERE id = ANY($1)"#,
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        let mut by_id: std::collections::HashMap<Uuid, Track> =
+            rows.into_iter().map(|t| (t.id, t)).collect();
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
+    }
+
     async fn list_by_album(&self, album_id: Uuid) -> Result<Vec<Track>> {
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
@@ -1883,6 +1904,231 @@ impl TrackFeatureRepo for PgRepos {
             .map_err(db)?;
         Ok(())
     }
+
+    // ----- pgvector ANN backend (Phase 13) -----
+
+    async fn upsert_vector(&self, track_id: Uuid, embedding: &[f32]) -> Result<()> {
+        sqlx::query("UPDATE track_features SET embedding_vec = $2::vector WHERE track_id = $1")
+            .bind(track_id)
+            .bind(vector_literal(embedding))
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn nearest(
+        &self,
+        seed: Uuid,
+        model_version: &str,
+        k: usize,
+    ) -> Result<Vec<(Uuid, f32)>> {
+        // One round-trip: resolve the seed's vector and rank against it. The
+        // CROSS JOIN yields no rows when the seed has no vector → empty result.
+        let rows = sqlx::query_as::<_, (Uuid, f64)>(
+            r#"SELECT tf.track_id, (1 - (tf.embedding_vec <=> seed.embedding_vec))::float8 AS sim
+               FROM track_features tf
+               CROSS JOIN (SELECT embedding_vec FROM track_features
+                           WHERE track_id = $1 AND model_version = $2) seed
+               WHERE tf.model_version = $2 AND tf.track_id <> $1
+                     AND tf.embedding_vec IS NOT NULL
+               ORDER BY tf.embedding_vec <=> seed.embedding_vec
+               LIMIT $3"#,
+        )
+        .bind(seed)
+        .bind(model_version)
+        .bind(k as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows.into_iter().map(|(id, s)| (id, s as f32)).collect())
+    }
+
+    async fn nearest_to_vector(
+        &self,
+        centroid: &[f32],
+        model_version: &str,
+        k: usize,
+    ) -> Result<Vec<(Uuid, f32)>> {
+        let rows = sqlx::query_as::<_, (Uuid, f64)>(
+            r#"SELECT tf.track_id, (1 - (tf.embedding_vec <=> $1::vector))::float8 AS sim
+               FROM track_features tf
+               WHERE tf.model_version = $2 AND tf.embedding_vec IS NOT NULL
+               ORDER BY tf.embedding_vec <=> $1::vector
+               LIMIT $3"#,
+        )
+        .bind(vector_literal(centroid))
+        .bind(model_version)
+        .bind(k as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows.into_iter().map(|(id, s)| (id, s as f32)).collect())
+    }
+
+    async fn has_vector(&self, seed: Uuid, model_version: &str) -> Result<bool> {
+        let (exists,): (bool,) = sqlx::query_as(
+            r#"SELECT EXISTS(
+                   SELECT 1 FROM track_features
+                   WHERE track_id = $1 AND model_version = $2 AND embedding_vec IS NOT NULL
+               )"#,
+        )
+        .bind(seed)
+        .bind(model_version)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(exists)
+    }
+
+    async fn prepare_vector_index(&self, model_version: &str, dims: usize) -> Result<()> {
+        // 1. Extension (idempotent; the migration also installs it).
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+
+        // 2. Ensure the derived column exists and is sized to `dims`. A model
+        //    bump that changes dims requires dropping + recreating it (the HNSW
+        //    index goes with it) — pgvector columns are fixed-width.
+        let declared: Option<String> = sqlx::query_scalar(
+            r#"SELECT format_type(atttypid, atttypmod)
+               FROM pg_attribute
+               WHERE attrelid = 'track_features'::regclass
+                     AND attname = 'embedding_vec' AND NOT attisdropped"#,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+
+        let want = Some(dims);
+        match declared.as_deref().map(parse_vector_dims) {
+            Some(current) if current == want => {} // already correct width
+            None => {
+                sqlx::query(&format!(
+                    "ALTER TABLE track_features ADD COLUMN IF NOT EXISTS embedding_vec vector({dims})"
+                ))
+                .execute(&self.pool)
+                .await
+                .map_err(db)?;
+            }
+            Some(_) => {
+                // Wrong / unsized width — rebuild the derived column + index.
+                sqlx::query("DROP INDEX IF EXISTS idx_track_features_hnsw")
+                    .execute(&self.pool)
+                    .await
+                    .map_err(db)?;
+                sqlx::query("ALTER TABLE track_features DROP COLUMN IF EXISTS embedding_vec")
+                    .execute(&self.pool)
+                    .await
+                    .map_err(db)?;
+                sqlx::query(&format!(
+                    "ALTER TABLE track_features ADD COLUMN embedding_vec vector({dims})"
+                ))
+                .execute(&self.pool)
+                .await
+                .map_err(db)?;
+            }
+        }
+
+        // 3. HNSW index over cosine distance (idempotent). Embeddings are stored
+        //    unit-normalized, so cosine ≈ dot product.
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_track_features_hnsw \
+             ON track_features USING hnsw (embedding_vec vector_cosine_ops)",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+
+        // 4. Backfill the derived vector for any analyzed row missing one, from
+        //    the BYTEA source of truth. Cheap after the first pass (WHERE NULL).
+        let missing = sqlx::query_as::<_, TrackFeatureRow>(
+            r#"SELECT track_id, embedding, dims, model_version, source_sig, chromaprint, analyzed_at
+               FROM track_features WHERE model_version = $1 AND embedding_vec IS NULL"#,
+        )
+        .bind(model_version)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        for row in missing {
+            let emb = embedding_from_bytes(&row.embedding);
+            self.upsert_vector(row.track_id, &emb).await?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PlaylistRecCacheRepo (Phase 14)
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl PlaylistRecCacheRepo for PgRepos {
+    async fn get(&self, signature: &str) -> Result<Option<PlaylistRecRow>> {
+        sqlx::query_as::<_, PlaylistRecRow>(
+            "SELECT rec_track_ids, computed_at FROM playlist_rec_cache WHERE signature = $1",
+        )
+        .bind(signature)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn upsert(
+        &self,
+        signature: &str,
+        model_version: &str,
+        rec_track_ids: &[Uuid],
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO playlist_rec_cache (signature, model_version, rec_track_ids, computed_at)
+               VALUES ($1, $2, $3, now())
+               ON CONFLICT (signature) DO UPDATE SET
+                   model_version = EXCLUDED.model_version,
+                   rec_track_ids = EXCLUDED.rec_track_ids,
+                   computed_at   = now()"#,
+        )
+        .bind(signature)
+        .bind(model_version)
+        .bind(rec_track_ids)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn prune_older_than(&self, cutoff: OffsetDateTime) -> Result<u64> {
+        let res = sqlx::query("DELETE FROM playlist_rec_cache WHERE computed_at < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(res.rows_affected())
+    }
+}
+
+/// pgvector text form of an embedding: `[v1,v2,...]`. Bound as text and cast
+/// `$n::vector` at the query so no extra sqlx type is needed.
+fn vector_literal(embedding: &[f32]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(embedding.len() * 10 + 2);
+    s.push('[');
+    for (i, f) in embedding.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(s, "{f}");
+    }
+    s.push(']');
+    s
+}
+
+/// Extract the declared dimension from a `format_type` string like
+/// `vector(59)` → `Some(59)`; an unsized `vector` (or anything else) → `None`.
+fn parse_vector_dims(declared: &str) -> Option<usize> {
+    let inner = declared.strip_prefix("vector(")?.strip_suffix(')')?;
+    inner.trim().parse::<usize>().ok()
 }
 
 // ---------------------------------------------------------------------------

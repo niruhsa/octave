@@ -119,6 +119,17 @@ pub struct PodcastIndexCreds {
     pub api_secret: String,
 }
 
+/// Which similarity-search backend the "sounds like" radio + playlist recs use.
+/// `BruteForce` (default) scans embeddings in memory; `PgVector` delegates to a
+/// Postgres ANN index (Phase 13) — enables one indexed query per lookup and the
+/// single-query centroid playlist recs. Selected by `FINGERPRINT_INDEX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IndexKind {
+    #[default]
+    BruteForce,
+    PgVector,
+}
+
 /// Acoustic-fingerprinting config (Phase 12). Enabled by `FINGERPRINT_ENABLED`.
 #[derive(Debug, Clone)]
 pub struct FingerprintConfig {
@@ -130,6 +141,8 @@ pub struct FingerprintConfig {
     pub interval_secs: u64,
     /// Number of concurrent analysis workers (decode + DSP/ONNX is CPU-heavy).
     pub concurrency: usize,
+    /// Similarity-search backend (`FINGERPRINT_INDEX`, default `bruteforce`).
+    pub index_kind: IndexKind,
 }
 
 /// Firebase Cloud Messaging config (Phase 10 — real-time push). The credentials
@@ -464,10 +477,20 @@ fn load_fingerprint(anchor: &Path) -> Option<FingerprintConfig> {
         .map(|n| n.get().saturating_sub(1).clamp(1, 4))
         .unwrap_or(2) as u64;
     let concurrency = env_u64("FINGERPRINT_CONCURRENCY", default_workers).clamp(1, 64) as usize;
+    let index_kind = match env::var("FINGERPRINT_INDEX")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pgvector" | "pg" => IndexKind::PgVector,
+        _ => IndexKind::BruteForce,
+    };
     Some(FingerprintConfig {
         model_path,
         interval_secs,
         concurrency,
+        index_kind,
     })
 }
 

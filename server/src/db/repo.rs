@@ -79,6 +79,20 @@ pub trait AlbumRepo: Send + Sync {
 pub trait TrackRepo: Send + Sync {
     async fn create(&self, new: NewTrack) -> Result<Track>;
     async fn get(&self, id: Uuid) -> Result<Option<Track>>;
+    /// Hydrate many tracks in one round-trip (`WHERE id = ANY($1)`), returned in
+    /// the same order as `ids` (missing ids skipped). Turns the N+1 "get each
+    /// ranked candidate" pattern in recommendations into a single query. The
+    /// default impl loops `get` so in-memory fakes work; the Postgres impl
+    /// overrides it with the batched query.
+    async fn get_many(&self, ids: &[Uuid]) -> Result<Vec<Track>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(t) = self.get(id).await? {
+                out.push(t);
+            }
+        }
+        Ok(out)
+    }
     async fn list_by_album(&self, album_id: Uuid) -> Result<Vec<Track>>;
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Track>>;
     async fn update(
@@ -337,6 +351,128 @@ pub trait TrackFeatureRepo: Send + Sync {
     /// Number of analyzed tracks for `model_version` (the status endpoint).
     async fn count_for_model(&self, model_version: &str) -> Result<i64>;
     async fn delete(&self, track_id: Uuid) -> Result<()>;
+
+    // ------------------------------------------------------------------
+    // pgvector ANN backend (Phase 13). All default to a brute-force /
+    // no-op implementation so the in-memory test fakes work unchanged; the
+    // Postgres impl overrides them with an indexed `vector` column so the
+    // `pgvector` `SimilarityIndex` backend is one indexed query, not a scan.
+    // ------------------------------------------------------------------
+
+    /// Set (or refresh) the derived `vector` column for one track from its
+    /// embedding. No-op unless the pgvector column exists (Postgres impl).
+    async fn upsert_vector(&self, track_id: Uuid, embedding: &[f32]) -> Result<()> {
+        let _ = (track_id, embedding);
+        Ok(())
+    }
+
+    /// The `k` nearest tracks to `seed` by cosine distance (nearest first, seed
+    /// excluded), scored within `model_version` only. Empty when `seed` has no
+    /// vector for that model.
+    async fn nearest(
+        &self,
+        seed: Uuid,
+        model_version: &str,
+        k: usize,
+    ) -> Result<Vec<(Uuid, f32)>> {
+        let rows = self.all_for_model(model_version).await?;
+        let Some(seed_row) = rows.iter().find(|f| f.track_id == seed) else {
+            return Ok(Vec::new());
+        };
+        let seed_vec = seed_row.embedding.clone();
+        let mut scored: Vec<(Uuid, f32)> = rows
+            .iter()
+            .filter(|f| f.track_id != seed)
+            .map(|f| (f.track_id, cosine(&seed_vec, &f.embedding)))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        Ok(scored)
+    }
+
+    /// The `k` nearest tracks to an arbitrary `centroid` vector (nearest first)
+    /// within `model_version`. Powers the single-query centroid playlist recs.
+    async fn nearest_to_vector(
+        &self,
+        centroid: &[f32],
+        model_version: &str,
+        k: usize,
+    ) -> Result<Vec<(Uuid, f32)>> {
+        let mut scored: Vec<(Uuid, f32)> = self
+            .all_for_model(model_version)
+            .await?
+            .iter()
+            .map(|f| (f.track_id, cosine(centroid, &f.embedding)))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        Ok(scored)
+    }
+
+    /// Whether `seed` has a usable vector for `model_version` (drives the
+    /// radio's fall-back-to-behavioral decision without a full search).
+    async fn has_vector(&self, seed: Uuid, model_version: &str) -> Result<bool> {
+        Ok(self
+            .all_for_model(model_version)
+            .await?
+            .iter()
+            .any(|f| f.track_id == seed))
+    }
+
+    /// Ensure the pgvector column + HNSW index exist and are sized to `dims` for
+    /// the active model, then backfill any rows missing a vector from their
+    /// BYTEA source of truth. No-op for non-Postgres backends. Called by the
+    /// `pgvector` index on reload (startup + after each analysis pass).
+    async fn prepare_vector_index(&self, model_version: &str, dims: usize) -> Result<()> {
+        let _ = (model_version, dims);
+        Ok(())
+    }
+}
+
+/// Cosine similarity of two equal-length, finite vectors — used by the default
+/// (brute-force) `TrackFeatureRepo::nearest*` impls the in-memory fakes inherit.
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+    for (x, y) in a.iter().zip(b) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na <= 0.0 || nb <= 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
+}
+
+/// Persisted playlist recommendation pools (Phase 14). The durable backing for
+/// the in-memory [`RecommendationCache`](crate::services::rec_cache::RecommendationCache)
+/// so a relaunch warms from disk instead of a cold recompute. Keyed by content
+/// signature (hash of the ordered track-id set + model), matching the cache.
+#[async_trait]
+pub trait PlaylistRecCacheRepo: Send + Sync {
+    /// The stored pool for `signature`, or `None` if absent. `computed_at` lets
+    /// the caller apply the same TTL as the in-memory layer.
+    async fn get(&self, signature: &str) -> Result<Option<PlaylistRecRow>>;
+    /// Insert or replace the pool for `signature` (bumps `computed_at`).
+    async fn upsert(
+        &self,
+        signature: &str,
+        model_version: &str,
+        rec_track_ids: &[Uuid],
+    ) -> Result<()>;
+    /// Delete rows older than `cutoff` (prune superseded signatures). Returns the
+    /// number removed.
+    async fn prune_older_than(&self, cutoff: OffsetDateTime) -> Result<u64>;
+}
+
+/// One persisted recommendation pool row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PlaylistRecRow {
+    pub rec_track_ids: Vec<Uuid>,
+    pub computed_at: OffsetDateTime,
 }
 
 /// Device push tokens (Phase 10 — FCM). One row per registration token, owned

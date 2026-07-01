@@ -38,6 +38,7 @@ pub async fn auth_configure_server(
     };
     tracing::info!(rest = %config.rest_root(), grpc = %config.grpc_endpoint(), "configuring server");
     let server = Arc::new(ServerClient::new(config)?);
+    server.warm_grpc(); // Phase 5: establish the gRPC channel off the request path.
     let store = build_store(&app)?;
     let manager = Arc::new(AuthManager::new(server, store));
     manager.restore_from_store().await;
@@ -93,6 +94,7 @@ pub async fn auth_change_server(
     };
     tracing::info!(rest = %config.rest_root(), grpc = %config.grpc_endpoint(), "changing server");
     let server = Arc::new(ServerClient::new(config)?);
+    server.warm_grpc(); // Phase 5: establish the gRPC channel off the request path.
     let store = build_store(&app)?;
     let manager = Arc::new(AuthManager::new(server, store));
     manager.restore_from_store().await;
@@ -183,6 +185,7 @@ pub async fn auth_session(
         _ => ServerConfig::from_rest_only(rest_url)?,
     };
     let server = Arc::new(ServerClient::new(config)?);
+    server.warm_grpc(); // Phase 5: establish the gRPC channel off the request path.
     let manager = Arc::new(AuthManager::new(server, store));
     manager.restore_from_store().await;
     let session = manager.current().await;

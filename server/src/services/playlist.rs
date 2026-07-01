@@ -33,6 +33,10 @@ pub struct PlaylistService {
     pub tracks: Arc<dyn TrackRepo>,
     pub users: Arc<dyn UserRepo>,
     pub audit: Arc<dyn AuditRepo>,
+    /// Optional recommendation-pool warmer (Phase 3). When set, a membership
+    /// change fires a debounced background recompute so the playlist's recs are
+    /// already warm by the time it's opened. `None` = no warming.
+    pub warmer: Option<Arc<dyn crate::services::rec_cache::PlaylistRecWarmer>>,
 }
 
 /// Convenience view returned by reads: playlist + ordered tracks.
@@ -54,6 +58,25 @@ impl PlaylistService {
             tracks,
             users,
             audit,
+            warmer: None,
+        }
+    }
+
+    /// Attach the recommendation-pool warmer (Phase 3): membership mutations
+    /// will schedule a debounced background recompute of the playlist's recs.
+    pub fn with_warmer(
+        mut self,
+        warmer: Arc<dyn crate::services::rec_cache::PlaylistRecWarmer>,
+    ) -> Self {
+        self.warmer = Some(warmer);
+        self
+    }
+
+    /// Schedule a best-effort rec warm after a membership change (no-op when no
+    /// warmer is wired).
+    fn warm(&self, playlist_id: Uuid) {
+        if let Some(w) = &self.warmer {
+            w.schedule(playlist_id);
         }
     }
 
@@ -199,6 +222,7 @@ impl PlaylistService {
             Some(&row),
         )
         .await?;
+        self.warm(playlist_id);
         Ok(row)
     }
 
@@ -228,6 +252,7 @@ impl PlaylistService {
             Some(&row),
         )
         .await?;
+        self.warm(playlist_id);
         Ok(row)
     }
 
@@ -262,6 +287,7 @@ impl PlaylistService {
             None::<&PlaylistTrack>,
         )
         .await?;
+        self.warm(playlist_id);
         Ok(Some(before))
     }
 

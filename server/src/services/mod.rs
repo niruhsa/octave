@@ -20,6 +20,7 @@ pub mod organizer;
 pub mod playhistory;
 pub mod playlist;
 pub mod podcast;
+pub mod rec_cache;
 pub mod recommendation;
 pub mod podcast_dir;
 pub mod scan;
@@ -46,6 +47,10 @@ pub use notification::NotificationService;
 pub use playhistory::{ListeningStats, PlayHistoryService, PlayInput};
 pub use playlist::{PlaylistService, PlaylistWithTracks};
 pub use podcast::{PodcastService, RefreshReport};
+pub use rec_cache::{
+    DebouncedWarmer, PlaylistRecWarmer, RecommendationCache, REC_CACHE_MAX, REC_CACHE_TTL,
+    REC_WARM_DEBOUNCE,
+};
 pub use recommendation::{DiscoverSection, RecommendationService};
 pub use podcast_dir::{ItunesDirectory, PodcastCandidate, PodcastDirectory, PodcastIndexDirectory};
 pub use scan::{ScanReport, ScanService};

@@ -30,6 +30,21 @@ pub trait SimilarityIndex: Send + Sync {
     async fn reload(&self) -> Result<()>;
     /// Number of embeddings currently loaded.
     async fn len(&self) -> usize;
+
+    /// Single-query recommendation over a set of `seeds` via their **centroid**
+    /// (the `k` nearest to the averaged seed vector, seeds excluded, nearest
+    /// first). Returns `Ok(None)` when this backend has no efficient centroid
+    /// path — the caller then falls back to per-seed aggregation. Default:
+    /// `None`. The `pgvector` backend overrides it to collapse a whole playlist
+    /// into one ANN query (O(1) queries regardless of playlist size).
+    async fn centroid_nearest(
+        &self,
+        seeds: &[Uuid],
+        k: usize,
+    ) -> Result<Option<Vec<(Uuid, f32)>>> {
+        let _ = (seeds, k);
+        Ok(None)
+    }
 }
 
 /// Cosine similarity of two equal-length, finite vectors. Embeddings are stored
@@ -118,6 +133,119 @@ impl SimilarityIndex for BruteForceIndex {
     }
 }
 
+/// Postgres/pgvector-backed similarity index (Phase 13). Postgres *is* the
+/// index, so there's nothing to hold in memory: every method delegates to the
+/// [`TrackFeatureRepo`]'s ANN queries. [`reload`](SimilarityIndex::reload)
+/// ensures the derived `vector` column + HNSW index exist (sized to `dims`) and
+/// backfills them from the BYTEA source of truth — so it stays in sync after
+/// each analysis pass without a separate write path.
+pub struct PgVectorIndex {
+    features: Arc<dyn TrackFeatureRepo>,
+    model_version: String,
+    dims: usize,
+}
+
+impl PgVectorIndex {
+    pub fn new(
+        features: Arc<dyn TrackFeatureRepo>,
+        model_version: impl Into<String>,
+        dims: usize,
+    ) -> Self {
+        Self {
+            features,
+            model_version: model_version.into(),
+            dims,
+        }
+    }
+
+    /// Average the present seed embeddings into one unit-normalized centroid.
+    /// `None` when no seed has a usable embedding.
+    async fn centroid(&self, seeds: &[Uuid]) -> Result<Option<Vec<f32>>> {
+        let mut sum: Vec<f32> = Vec::new();
+        let mut count = 0usize;
+        for &seed in seeds {
+            if let Some(feat) = self.features.get(seed).await? {
+                if feat.model_version != self.model_version {
+                    continue;
+                }
+                if sum.is_empty() {
+                    sum = vec![0.0; feat.embedding.len()];
+                }
+                if sum.len() == feat.embedding.len() {
+                    for (s, v) in sum.iter_mut().zip(&feat.embedding) {
+                        *s += *v;
+                    }
+                    count += 1;
+                }
+            }
+        }
+        if count == 0 {
+            return Ok(None);
+        }
+        for s in sum.iter_mut() {
+            *s /= count as f32;
+        }
+        let norm = sum.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for s in sum.iter_mut() {
+                *s /= norm;
+            }
+        }
+        Ok(Some(sum))
+    }
+}
+
+#[async_trait]
+impl SimilarityIndex for PgVectorIndex {
+    async fn nearest(&self, seed: Uuid, k: usize) -> Result<Vec<(Uuid, f32)>> {
+        self.features.nearest(seed, &self.model_version, k).await
+    }
+
+    async fn has(&self, seed: Uuid) -> bool {
+        self.features
+            .has_vector(seed, &self.model_version)
+            .await
+            .unwrap_or(false)
+    }
+
+    async fn reload(&self) -> Result<()> {
+        // Postgres is the index; "reload" means keep the derived vector column +
+        // HNSW index in sync with the BYTEA source of truth.
+        self.features
+            .prepare_vector_index(&self.model_version, self.dims)
+            .await
+    }
+
+    async fn len(&self) -> usize {
+        self.features
+            .count_for_model(&self.model_version)
+            .await
+            .unwrap_or(0) as usize
+    }
+
+    async fn centroid_nearest(
+        &self,
+        seeds: &[Uuid],
+        k: usize,
+    ) -> Result<Option<Vec<(Uuid, f32)>>> {
+        let Some(centroid) = self.centroid(seeds).await? else {
+            return Ok(None);
+        };
+        // Over-fetch so seed rows can be filtered out without shrinking the pool.
+        let exclude: std::collections::HashSet<Uuid> = seeds.iter().copied().collect();
+        let ranked = self
+            .features
+            .nearest_to_vector(&centroid, &self.model_version, k + exclude.len())
+            .await?;
+        let out: Vec<(Uuid, f32)> = ranked
+            .into_iter()
+            .filter(|(id, _)| !exclude.contains(id))
+            .take(k)
+            .collect();
+        Ok(Some(out))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +326,70 @@ mod tests {
         let idx = BruteForceIndex::load(feats, "dsp-v1").await.unwrap();
         assert!(idx.nearest(Uuid::new_v4(), 5).await.unwrap().is_empty());
         assert!(!idx.has(Uuid::new_v4()).await);
+    }
+
+    // --- PgVectorIndex (Phase 13) — logic verified over the in-memory fake,
+    //     which inherits the default (brute-force) repo ANN impls. ---
+
+    #[tokio::test]
+    async fn pgvector_delegates_nearest_and_has() {
+        let feats = Arc::new(FakeFeatures::default());
+        let seed = Uuid::new_v4();
+        let near = Uuid::new_v4();
+        let far = Uuid::new_v4();
+        feats.insert(seed, vec![1.0, 0.0, 0.0]);
+        feats.insert(near, vec![0.9, 0.1, 0.0]);
+        feats.insert(far, vec![0.0, 0.0, 1.0]);
+
+        let idx = PgVectorIndex::new(feats, "dsp-v1", 3);
+        // reload prepares/backfills the (fake) index — a no-op here, must succeed.
+        idx.reload().await.unwrap();
+        assert_eq!(idx.len().await, 3);
+        assert!(idx.has(seed).await);
+        assert!(!idx.has(Uuid::new_v4()).await);
+
+        let out = idx.nearest(seed, 10).await.unwrap();
+        assert_eq!(out.len(), 2, "seed excluded");
+        assert_eq!(out[0].0, near, "nearest first");
+        assert_eq!(out[1].0, far);
+    }
+
+    #[tokio::test]
+    async fn pgvector_centroid_nearest_excludes_seeds_and_ranks_by_centroid() {
+        let feats = Arc::new(FakeFeatures::default());
+        // Two seeds sit on the x and y axes; their centroid points into the
+        // xy-diagonal, so the diagonal candidate outranks the z-axis one.
+        let s1 = Uuid::new_v4();
+        let s2 = Uuid::new_v4();
+        let diag = Uuid::new_v4();
+        let zaxis = Uuid::new_v4();
+        feats.insert(s1, vec![1.0, 0.0, 0.0]);
+        feats.insert(s2, vec![0.0, 1.0, 0.0]);
+        feats.insert(diag, vec![0.7, 0.7, 0.0]);
+        feats.insert(zaxis, vec![0.0, 0.0, 1.0]);
+
+        let idx = PgVectorIndex::new(feats, "dsp-v1", 3);
+        let ranked = idx
+            .centroid_nearest(&[s1, s2], 10)
+            .await
+            .unwrap()
+            .expect("pgvector supports centroid queries");
+        // Seeds excluded; the diagonal candidate ranks ahead of the z-axis one.
+        assert!(!ranked.iter().any(|(id, _)| *id == s1 || *id == s2));
+        assert_eq!(ranked[0].0, diag, "closest to the centroid first");
+        assert_eq!(ranked[1].0, zaxis);
+    }
+
+    #[tokio::test]
+    async fn pgvector_centroid_none_when_no_seed_has_embedding() {
+        let feats = Arc::new(FakeFeatures::default());
+        feats.insert(Uuid::new_v4(), vec![1.0, 0.0]);
+        let idx = PgVectorIndex::new(feats, "dsp-v1", 2);
+        // Unknown seeds → no centroid → None (caller falls back).
+        assert!(idx
+            .centroid_nearest(&[Uuid::new_v4()], 5)
+            .await
+            .unwrap()
+            .is_none());
     }
 }
