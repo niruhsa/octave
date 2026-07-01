@@ -648,6 +648,9 @@ export default function Album() {
                                 <DownloadIcon size={15} />
                               </button>
                             )}
+                            <button onClick={() => setAddToPlaylist(t)} title="Add to playlist" className="text-oct-dim hover:text-oct-text">
+                              <PlaylistIcon size={15} />
+                            </button>
                             <button onClick={() => setInfoTrack(t)} title="Media information" className="text-oct-dim hover:text-oct-text">
                               <InfoIcon size={15} />
                             </button>
