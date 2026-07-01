@@ -1,0 +1,32 @@
+# Local Postgres for the music server, with pgvector preinstalled (Phase 13,
+# see PLAYLISTS_OPTS.md). Matches the default DATABASE_URL in .env.example:
+#   postgresql://postgres:postgres@localhost:5432/?sslmode=disable
+#
+#   docker compose up -d      # start
+#   docker compose down       # stop (data survives — it's in the named volume)
+#   docker compose down -v    # stop AND delete the data volume
+services:
+  postgres:
+    image: pgvector/pgvector:pg18-trixie
+    container_name: octave-postgres
+    restart: unless-stopped
+    environment:
+      # Override by exporting these in your shell (or an .env next to this file);
+      # defaults match .env.example's DATABASE_URL.
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Named volume → data persists across container removal (docker compose down).
+      # PG18+ images store data in a version-specific subdir, so the mount goes at
+      # /var/lib/postgresql (NOT /var/lib/postgresql/data) — see docker-library/postgres#1259.
+      - octave-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  octave-pgdata:

@@ -1,0 +1,19 @@
+-- Phase 13: pgvector ANN index over track embeddings (the documented Phase D
+-- scale-out from FINGERPRINTING.md §8, promoted first per PLAYLISTS_OPTS.md).
+--
+-- The BYTEA `embedding` column on `track_features` stays the portable source of
+-- truth; a derived `vector` column + HNSW index is layered on top ONLY for the
+-- pgvector backend (FINGERPRINT_INDEX=pgvector, default off). This is
+-- server-only (never cached client-side), so the extension does not violate the
+-- SQLite-portability rule.
+--
+-- Why the derived column + index are NOT created here: a pgvector column has a
+-- FIXED width, but embedding `dims` vary by the active model (dsp-v1 ≈ 59, onnx
+-- 512+). A static `vector(512)` column here would reject the default dsp-v1
+-- rows. So this migration only makes the extension available; the correctly
+-- sized `embedding_vec vector(<dims>)` column + `idx_track_features_hnsw` HNSW
+-- index are created at runtime by `PgVectorIndex` (sized to the active model's
+-- dims, rebuilt if a model bump changes them). Installing the extension is
+-- idempotent and cheap, so it is safe to run always even when the bruteforce
+-- backend is selected.
+CREATE EXTENSION IF NOT EXISTS vector;
