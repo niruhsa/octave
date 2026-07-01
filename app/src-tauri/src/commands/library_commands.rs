@@ -238,6 +238,17 @@ pub async fn library_set_track_single_release(
 }
 
 #[tauri::command]
+pub async fn library_set_album_type(
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+    album_type: String,
+    single_track_id: Option<String>,
+) -> AppResult<MergedAlbum> {
+    let svc = service(&state).await?;
+    svc.set_album_type(&album_id, &album_type, single_track_id.as_deref()).await
+}
+
+#[tauri::command]
 pub async fn library_add_artist_alias(
     state: State<'_, AppStateHandle>,
     artist_id: String,

@@ -102,6 +102,9 @@ pub struct Album {
     pub artist_id: Uuid,
     pub title: String,
     pub release_year: Option<i32>,
+    /// One of `album` / `ep` / `single`. A `single` album always has at least
+    /// one track flagged `is_single_release` (enforced in `LibraryService`).
+    pub album_type: String,
     pub cover_path: Option<String>,
     /// Sum of the on-disk bytes of every track on this album.
     pub storage_bytes: i64,

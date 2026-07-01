@@ -699,6 +699,9 @@ impl LibraryService {
     }
 
     /// Toggle a track's single-release flag (no album change). Audited. Manager+.
+    ///
+    /// Guards the album-level invariant: a `single`-type album must keep at
+    /// least one single track, so clearing its last one is rejected.
     pub async fn set_track_single_release(
         &self,
         caller: &Identity,
@@ -711,12 +714,100 @@ impl LibraryService {
             .get(track_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        if !single_release
+            && before.is_single_release
+            && let Some(album) = self.albums.get(before.album_id).await?
+            && album.album_type == "single"
+        {
+            let others_single = self
+                .tracks
+                .list_by_album(before.album_id)
+                .await?
+                .iter()
+                .filter(|t| t.id != track_id && t.is_single_release)
+                .count();
+            if others_single == 0 {
+                return Err(AppError::InvalidArgument(
+                    "cannot clear the last single of a single-type album; change the \
+                     album type first or flag another track"
+                        .to_string(),
+                ));
+            }
+        }
         let after = self
             .tracks
             .set_single_release(track_id, single_release)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
         self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    /// Set an album's classification (`album` / `ep` / `single`). Manager+,
+    /// audited (`album.set_type`).
+    ///
+    /// A `single` album must have at least one track flagged `is_single_release`.
+    /// When `single_track_id` is given (and the target type is `single`) that
+    /// track is flagged first — it must belong to the album — and the invariant
+    /// is then verified against the album's tracks, else `InvalidArgument`.
+    pub async fn set_album_type(
+        &self,
+        caller: &Identity,
+        album_id: Uuid,
+        album_type: &str,
+        single_track_id: Option<Uuid>,
+    ) -> Result<Album> {
+        caller.require(PermissionLevel::Manager)?;
+        let album_type = parse_album_type(album_type)?;
+        let before = self
+            .albums
+            .get(album_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
+
+        // Optionally flag the caller-chosen main single first (single albums).
+        if album_type == "single"
+            && let Some(track_id) = single_track_id
+        {
+            let track = self
+                .tracks
+                .get(track_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+            if track.album_id != album_id {
+                return Err(AppError::InvalidArgument(format!(
+                    "track {track_id} is not on album {album_id}"
+                )));
+            }
+            if !track.is_single_release {
+                self.tracks.set_single_release(track_id, true).await?;
+            }
+        }
+
+        // Enforce the single-song invariant before persisting the type.
+        if album_type == "single" {
+            let single_count = self
+                .tracks
+                .list_by_album(album_id)
+                .await?
+                .iter()
+                .filter(|t| t.is_single_release)
+                .count();
+            if !single_song_rule_satisfied(&album_type, single_count) {
+                return Err(AppError::InvalidArgument(
+                    "a single album needs at least one track marked as its single song"
+                        .to_string(),
+                ));
+            }
+        }
+
+        let after = self
+            .albums
+            .set_album_type(album_id, &album_type)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
+        self.audit(caller, "album.set_type", "album", Some(album_id), Some(&before), Some(&after))
             .await?;
         Ok(after)
     }
@@ -1411,6 +1502,28 @@ fn paginate(limit: Option<i64>, offset: Option<i64>) -> (i64, i64) {
     (limit, offset)
 }
 
+/// The three valid album classifications.
+const ALBUM_TYPES: [&str; 3] = ["album", "ep", "single"];
+
+/// Normalize + validate an album-type string, returning the canonical lowercase
+/// value or an `InvalidArgument` listing the allowed values.
+fn parse_album_type(raw: &str) -> Result<String> {
+    let t = raw.trim().to_ascii_lowercase();
+    if ALBUM_TYPES.contains(&t.as_str()) {
+        Ok(t)
+    } else {
+        Err(AppError::InvalidArgument(format!(
+            "album_type must be one of album, ep, single (got {raw:?})"
+        )))
+    }
+}
+
+/// The single-song invariant: only a `single` album requires at least one of
+/// its tracks to be flagged `is_single_release`. `ep`/`album` are unrestricted.
+fn single_song_rule_satisfied(album_type: &str, single_track_count: usize) -> bool {
+    album_type != "single" || single_track_count >= 1
+}
+
 /// Resolve the language label for an alias: the explicit value when given
 /// (normalized via the shared tag normalizer), else inferred from the
 /// spelling's script.
@@ -1621,7 +1734,10 @@ fn move_leftover_files(src_dir: &Path, dst_dir: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{lang_artist_of, pick_primary_index, relative_to_root, resolve_language, retarget};
+    use super::{
+        lang_artist_of, parse_album_type, pick_primary_index, relative_to_root, resolve_language,
+        retarget, single_song_rule_satisfied,
+    };
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -1716,5 +1832,25 @@ mod tests {
         assert_eq!(resolve_language(Some("ko"), "YUQI"), "Korean");
         assert_eq!(resolve_language(Some("  "), "우기"), "Korean"); // blank → infer
         assert_eq!(resolve_language(None, "YUQI"), "English");
+    }
+
+    #[test]
+    fn parse_album_type_normalizes_and_validates() {
+        assert_eq!(parse_album_type("album").unwrap(), "album");
+        assert_eq!(parse_album_type("EP").unwrap(), "ep"); // case-insensitive
+        assert_eq!(parse_album_type("  Single ").unwrap(), "single"); // trimmed
+        assert!(parse_album_type("mixtape").is_err());
+        assert!(parse_album_type("").is_err());
+    }
+
+    #[test]
+    fn single_song_rule_only_binds_single_albums() {
+        // album/ep never require a flagged single.
+        assert!(single_song_rule_satisfied("album", 0));
+        assert!(single_song_rule_satisfied("ep", 0));
+        // a single needs at least one.
+        assert!(!single_song_rule_satisfied("single", 0));
+        assert!(single_song_rule_satisfied("single", 1));
+        assert!(single_song_rule_satisfied("single", 3));
     }
 }

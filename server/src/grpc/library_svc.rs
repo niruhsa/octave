@@ -113,6 +113,7 @@ fn album_to_pb(a: m::Album) -> pb::Album {
         updated_at: rfc3339(a.updated_at),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
+        album_type: a.album_type,
     }
 }
 fn track_to_pb(t: m::Track) -> pb::Track {
@@ -569,6 +570,25 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .await
             .map_err(map_err)?;
         Ok(Response::new(track_to_pb(t)))
+    }
+    async fn set_album_type(
+        &self,
+        req: Request<pb::SetAlbumTypeRequest>,
+    ) -> Result<Response<pb::Album>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let album_id = parse_uuid(&b.album_id, "album")?;
+        let single_track_id = if b.single_track_id.trim().is_empty() {
+            None
+        } else {
+            Some(parse_uuid(&b.single_track_id, "track")?)
+        };
+        let a = self
+            .library
+            .set_album_type(&caller, album_id, &b.album_type, single_track_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(album_to_pb(a)))
     }
     async fn list_artist_aliases(
         &self,

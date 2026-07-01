@@ -640,6 +640,16 @@ impl AuthManager {
         self.server.set_track_single_release(&cred, track_id, single_release).await
     }
 
+    pub async fn set_album_type(
+        &self,
+        album_id: &str,
+        album_type: &str,
+        single_track_id: Option<&str>,
+    ) -> AppResult<Album> {
+        let cred = self.credential().await?;
+        self.server.set_album_type(&cred, album_id, album_type, single_track_id).await
+    }
+
     pub async fn add_artist_alias(
         &self,
         artist_id: &str,

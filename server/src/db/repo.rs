@@ -55,6 +55,9 @@ pub trait AlbumRepo: Send + Sync {
         release_year: Option<i32>,
         cover_path: Option<&str>,
     ) -> Result<Option<Album>>;
+    /// Set the album's classification (`album` / `ep` / `single`). The caller
+    /// (service layer) validates the value + the single-song invariant.
+    async fn set_album_type(&self, id: Uuid, album_type: &str) -> Result<Option<Album>>;
     async fn find_by_artist_and_title(
         &self,
         artist_id: Uuid,

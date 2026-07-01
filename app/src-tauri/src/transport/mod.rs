@@ -100,12 +100,19 @@ pub struct Album {
     pub artist_id: String,
     pub title: String,
     pub release_year: Option<i64>,
+    /// Classification: `album` | `ep` | `single`.
+    #[serde(default = "default_album_type")]
+    pub album_type: String,
     pub cover_path: Option<String>,
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
     /// Sum of the on-disk bytes of every track on this album.
     #[serde(default)]
     pub storage_bytes: i64,
+}
+
+fn default_album_type() -> String {
+    "album".to_string()
 }
 
 /// Server's view of a track. `file_path` is the server-side path; the

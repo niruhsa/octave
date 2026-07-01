@@ -24,7 +24,7 @@ use super::proto::library::{
     GetLibraryStorageRequest, GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest,
     ListTracksByAlbumRequest,
     MergeRequest, MoveTrackRequest, Pagination, RemoveAliasRequest, SearchRequest,
-    SetPrimaryAliasRequest, SetSingleReleaseRequest,
+    SetAlbumTypeRequest, SetPrimaryAliasRequest, SetSingleReleaseRequest,
 };
 use super::proto::playlist::playlist_service_client::PlaylistServiceClient;
 use super::proto::playlist::{
@@ -630,6 +630,28 @@ impl GrpcClient {
             .map_err(map_mutation_err("set_track_single_release"))?
             .into_inner();
         Ok(track_from_proto(resp))
+    }
+
+    pub async fn set_album_type(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        album_type: &str,
+        single_track_id: Option<&str>,
+    ) -> AppResult<Album> {
+        let mut req = Request::new(SetAlbumTypeRequest {
+            album_id: album_id.to_string(),
+            album_type: album_type.to_string(),
+            single_track_id: single_track_id.unwrap_or("").to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .set_album_type(req)
+            .await
+            .map_err(map_mutation_err("set_album_type"))?
+            .into_inner();
+        Ok(album_from_proto(resp))
     }
 
     pub async fn add_artist_alias(
@@ -2048,9 +2070,20 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         artist_id: a.artist_id,
         title: a.title,
         release_year: opt_i32(a.release_year),
+        album_type: normalize_album_type(a.album_type),
         cover_path: opt_str(a.cover_path),
         aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
         storage_bytes: a.storage_bytes,
+    }
+}
+
+/// The proto default for an unset string is `""`; treat that as `album` so an
+/// older server (no `album_type`) still yields a valid classification.
+fn normalize_album_type(raw: String) -> String {
+    if raw.trim().is_empty() {
+        "album".to_string()
+    } else {
+        raw
     }
 }
 
@@ -2244,6 +2277,8 @@ fn album_from_fav(a: fpb::FavAlbum) -> Album {
         artist_id: a.artist_id,
         title: a.title,
         release_year: opt_i32(a.release_year),
+        // The favorites shelf proto carries no classification.
+        album_type: "album".to_string(),
         cover_path: opt_str(a.cover_path),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
@@ -2277,6 +2312,8 @@ fn album_from_disc(a: dpb::DiscAlbum) -> Album {
         artist_id: a.artist_id,
         title: a.title,
         release_year: opt_i32(a.release_year),
+        // The discover shelf proto carries no classification.
+        album_type: "album".to_string(),
         cover_path: opt_str(a.cover_path),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,

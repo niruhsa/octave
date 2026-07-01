@@ -374,6 +374,9 @@ mod tests {
         ) -> Result<Option<Album>> {
             Ok(None)
         }
+        async fn set_album_type(&self, _: Uuid, _: &str) -> Result<Option<Album>> {
+            Ok(None)
+        }
         async fn find_by_artist_and_title(&self, _: Uuid, _: &str) -> Result<Option<Album>> {
             Ok(None)
         }

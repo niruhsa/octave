@@ -115,6 +115,25 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Album type (Album / EP / Single) + required single song.** Albums now carry a
+classification alongside the per-track `is_single_release` flag. A `single` album must have at
+least one track flagged `is_single_release` (its main single) — the invariant is enforced in
+`LibraryService` (it can't be a row-local CHECK).
+- **Schema** (migration [`20270201000000_album_type.sql`](./migrations/20270201000000_album_type.sql)):
+  `albums.album_type TEXT NOT NULL DEFAULT 'album' CHECK (album_type IN ('album','ep','single'))`.
+  Backfill defaults every existing album to `album` (managers reclassify; no auto-classification).
+- **Model/repo** ([`db/models.rs`](./src/db/models.rs) `Album.album_type`; [`db/repo.rs`](./src/db/repo.rs)/[`db/pg.rs`](./src/db/pg.rs)):
+  `album_type` in every album `SELECT`/`RETURNING` + a new `AlbumRepo::set_album_type`.
+- **Service** ([`services/library.rs`](./src/services/library.rs)): `set_album_type(caller, album_id, album_type, single_track_id?)`
+  (Manager+, audited `album.set_type`) — validates the enum (`parse_album_type`), optionally flags the
+  caller-chosen main single first (must belong to the album), then enforces the ≥1-single rule
+  (`single_song_rule_satisfied`) → `InvalidArgument` otherwise. `set_track_single_release` gains a guard
+  refusing to clear the **last** single of a `single`-type album. Pure helpers unit-tested (+2 lib tests).
+- **Transports** ([`proto/library.proto`](./proto/library.proto) `Album.album_type` + `SetAlbumType` RPC;
+  [`grpc/library_svc.rs`](./src/grpc/library_svc.rs) + [`rest/library.rs`](./src/rest/library.rs)):
+  `POST /albums/:id/type` `{ album_type, single_track_id? }`; `album_type` added to `AlbumDto`/mappers so
+  every album read carries it.
+
 **Podcasts (full subsystem).** Discover shows via the official **iTunes Search API** (no key) + optional **PodcastIndex API**, parse their RSS feeds, download episode audio **to disk**, serve it with the same byte-range streaming as the music library, and **notify** subscribers of new episodes. Optional + gated on `PODCAST_PATH` (defaults to `<LIBRARY_PATH>/Podcasts`); the server runs unchanged when unset. Reuses the music spine rather than forking it.
 - **Schema/repos** (migration [`20260801000000_podcasts.sql`](./migrations/20260801000000_podcasts.sql)): `podcasts` (catalog show; `feed_url` UNIQUE natural key; `auto_download` newest-N policy; `last_etag`/`last_modified` for conditional GETs), `podcast_episodes` (one per feed `<item>`; `(podcast_id, guid)` UNIQUE; `file_path` nullable until downloaded — then served exactly like a track), `podcast_subscriptions` (user→show, mirrors `follows`), and two nullable `notifications.podcast_id`/`episode_id` columns (ON DELETE SET NULL). New `Podcast`/`PodcastEpisode`/`PodcastSubscription` models + `PodcastRepo`/`PodcastEpisodeRepo`/`PodcastSubscriptionRepo` traits + PG impls (`upsert_by_feed_url`, `upsert_by_guid` returns a `(row, inserted)` pair via the `xmax = 0` new-row signal so the refresh detects genuinely-new episodes).
 - **Directory + feed** ([`services/podcast_dir.rs`](./src/services/podcast_dir.rs) + [`services/feed.rs`](./src/services/feed.rs)): a `PodcastDirectory` trait (mirrors `CoverArtSource`) with `ItunesDirectory` (default, no key) + `PodcastIndexDirectory` (SHA-1 `X-Auth` signature via the new `sha1` dep, iTunes fallback on error/empty). `feed-rs` parses RSS 2.0 + Atom; a malformed/enclosure-less item is skipped, not fatal.

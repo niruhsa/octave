@@ -50,6 +50,10 @@ service LibraryService {
   rpc MergeAlbums(MergeRequest) returns (Album);
   // Move a track to another album, optionally flagging it a single release.
   rpc MoveTrack(MoveTrackRequest) returns (Track);
+  // Set an album's classification (album / ep / single). A single album needs
+  // at least one track flagged is_single_release; single_track_id (optional)
+  // flags the chosen main single before the invariant is checked.
+  rpc SetAlbumType(SetAlbumTypeRequest) returns (Album);
   // Toggle a track's single-release flag in place.
   rpc SetTrackSingleRelease(SetSingleReleaseRequest) returns (Track);
   // Artist alias editing. Each returns the refreshed Artist.
@@ -103,6 +107,8 @@ message Album {
   repeated AliasInfo aliases = 8;  // see Artist.aliases
   // Sum of the on-disk bytes of every track on this album.
   int64 storage_bytes = 9;
+  // Classification: "album" | "ep" | "single".
+  string album_type = 10;
 }
 
 message Track {
@@ -291,6 +297,12 @@ message MoveTrackRequest {
 message SetSingleReleaseRequest {
   string track_id = 1;
   bool single_release = 2;
+}
+
+message SetAlbumTypeRequest {
+  string album_id = 1;
+  string album_type = 2;        // "album" | "ep" | "single"
+  string single_track_id = 3;   // optional; "" = none (main single for a single)
 }
 
 message ListAliasesResponse { repeated AliasInfo aliases = 1; }

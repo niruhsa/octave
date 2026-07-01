@@ -17,6 +17,12 @@ use serde::{Deserialize, Serialize};
 use crate::cache::model as cache_model;
 use crate::transport::{AliasInfo, Album, Artist, Track};
 
+/// Default album classification when a source (older server / offline cache)
+/// doesn't carry one.
+fn default_album_type() -> String {
+    "album".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergedArtist {
     pub id: String,
@@ -45,6 +51,9 @@ pub struct MergedAlbum {
     pub artist_id: String,
     pub title: String,
     pub release_year: Option<i64>,
+    /// Classification: `album` | `ep` | `single`.
+    #[serde(default = "default_album_type")]
+    pub album_type: String,
     /// Server-side cover (might be `None`).
     pub cover_path: Option<String>,
     /// Local on-disk cover (from `album_art` table) when present.
@@ -123,6 +132,7 @@ impl MergedAlbum {
             artist_id: a.artist_id,
             title: a.title,
             release_year: a.release_year,
+            album_type: a.album_type,
             cover_path: a.cover_path,
             local_cover_path,
             aliases: a.aliases,
@@ -137,6 +147,8 @@ impl MergedAlbum {
             artist_id: a.artist_id,
             title: a.title,
             release_year: a.release_year,
+            // The offline cache doesn't store the album type.
+            album_type: default_album_type(),
             cover_path: None,
             local_cover_path: art.map(|x| x.local_cover_path),
             aliases: Vec::new(),

@@ -14,6 +14,7 @@ import {
   libraryListTracksByAlbum,
   libraryMergeAlbums,
   libraryMoveTrack,
+  librarySetAlbumType,
   librarySetTrackSingleRelease,
 } from "../ipc";
 import { Cover } from "../components/Cover";
@@ -51,7 +52,13 @@ import { SoundsLikeShelf } from "../components/SoundsLikeShelf";
 import { FavoriteButton } from "../components/FavoriteButton";
 import { ImageUploader } from "../components/ImageUploader";
 import { TrackInfoSheet } from "../components/TrackInfoSheet";
-import type { MergedTrack } from "../ipc";
+import type { AlbumType, MergedTrack } from "../ipc";
+
+const ALBUM_TYPES: { value: AlbumType; label: string }[] = [
+  { value: "album", label: "Album" },
+  { value: "ep", label: "EP" },
+  { value: "single", label: "Single" },
+];
 
 function totalLabel(ms: number): string {
   const min = Math.round(ms / 60000);
@@ -111,6 +118,9 @@ export default function Album() {
   const [mergingAlbum, setMergingAlbum] = useState(false);
   const [moveTrack, setMoveTrack] = useState<MergedTrack | null>(null);
   const [moveAsSingle, setMoveAsSingle] = useState(false);
+  // "Choose the main single" picker (Manager+) — opened when switching an album
+  // to `single` while no track is yet flagged. Holds the album's tracks.
+  const [pickSingleFor, setPickSingleFor] = useState<MergedTrack[] | null>(null);
   // Mobile long-press action sheet — a touch device can't reach the hover-only
   // row actions, so a press-and-hold opens them in a bottom sheet instead.
   const [sheetTrack, setSheetTrack] = useState<MergedTrack | null>(null);
@@ -137,6 +147,33 @@ export default function Album() {
     } catch (e) {
       alert(formatError(e));
     }
+  }
+  // Persist a new album classification. Setting `single` requires a track
+  // flagged as the album's single: reuse an existing one, else open a picker
+  // (the chosen track is flagged server-side before the invariant is checked).
+  async function applyAlbumType(type: AlbumType, singleTrackId?: string) {
+    try {
+      await librarySetAlbumType(id, type, singleTrackId);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["library", "album", id] }),
+        qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] }),
+      ]);
+      broadcastInvalidate(["library"]);
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+  function setAlbumType(type: AlbumType) {
+    if (type === (album?.album_type ?? "album")) return;
+    if (type === "single" && !items.some((t) => t.is_single_release)) {
+      if (items.length === 0) {
+        alert("Add a track before marking this album a single.");
+        return;
+      }
+      setPickSingleFor(items); // choose the main single, then apply
+      return;
+    }
+    void applyAlbumType(type);
   }
   function onCoverUploaded() {
     setCoverVersion(Date.now());
@@ -264,7 +301,9 @@ export default function Album() {
           )}
         </div>
         <div className="flex min-w-0 flex-col">
-          <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">ALBUM</span>
+          <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">
+            {(ALBUM_TYPES.find((t) => t.value === (album?.album_type ?? "album"))?.label ?? "Album").toUpperCase()}
+          </span>
           <h1 className="mt-1.5 text-3xl font-semibold tracking-tight sm:text-[34px]">{title}</h1>
           <p className="mt-2 flex flex-wrap items-center gap-x-2 text-[13px] text-oct-subtle">
             <span className="font-mono">
@@ -332,6 +371,32 @@ export default function Album() {
           )}
           {isManager && (
             <div className="flex items-center gap-3 sm:ml-auto">
+              <div
+                className="flex overflow-hidden rounded-md border border-oct-border"
+                role="group"
+                aria-label="Album type"
+                {...offlineAttrs(online, false, "Classify this album")}
+              >
+                {ALBUM_TYPES.map((t) => {
+                  const activeType = (album?.album_type ?? "album") === t.value;
+                  return (
+                    <button
+                      key={t.value}
+                      onClick={() => setAlbumType(t.value)}
+                      disabled={!online}
+                      aria-pressed={activeType}
+                      title={`Mark as ${t.label}`}
+                      className={`px-2.5 py-1 font-mono text-[11px] transition-colors disabled:opacity-40 ${
+                        activeType
+                          ? "bg-oct-accent/15 text-oct-accent"
+                          : "text-oct-subtle hover:bg-oct-elevated/60 hover:text-oct-text"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
               <button
                 onClick={() => setEditTracks(items)}
                 className={`${btnGhost} hidden sm:inline-flex`}
@@ -586,6 +651,26 @@ export default function Album() {
           trackTitle={addToPlaylist.title}
           onClose={() => setAddToPlaylist(null)}
         />
+      )}
+
+      {pickSingleFor && (
+        <ActionSheet
+          title="Choose the single"
+          subtitle="A single album needs one main single song"
+          onClose={() => setPickSingleFor(null)}
+        >
+          {pickSingleFor.map((t) => (
+            <SheetItem
+              key={t.id}
+              icon={<span className="text-oct-dim">☆</span>}
+              label={t.title}
+              onClick={() => {
+                setPickSingleFor(null);
+                void applyAlbumType("single", t.id);
+              }}
+            />
+          ))}
+        </ActionSheet>
       )}
     </section>
   );

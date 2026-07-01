@@ -34,6 +34,7 @@ pub fn router() -> Router<RestState> {
         .route("/albums", post(create_album))
         .route("/albums/search", get(search_albums))
         .route("/albums/:id", get(get_album).put(update_album).delete(delete_album))
+        .route("/albums/:id/type", post(set_album_type))
         .route("/albums/:id/tracks", get(list_tracks_by_album))
         .route("/albums/:id/cover", get(serve_album_cover).post(upload_album_cover))
         .route("/albums/:id/artwork", post(fetch_album_artwork))
@@ -136,6 +137,8 @@ pub struct AlbumDto {
     pub artist_id: String,
     pub title: String,
     pub release_year: Option<i32>,
+    /// Classification: `album` | `ep` | `single`.
+    pub album_type: String,
     pub cover_path: Option<String>,
     pub aliases: Vec<AliasDto>,
     /// Sum of the on-disk bytes of every track on this album.
@@ -147,6 +150,7 @@ fn album_dto(a: m::Album) -> AlbumDto {
         artist_id: a.artist_id.to_string(),
         title: a.title,
         release_year: a.release_year,
+        album_type: a.album_type,
         cover_path: a.cover_path,
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
@@ -762,6 +766,28 @@ async fn set_track_single_release(
         .set_track_single_release(&caller, track_id, body.single_release)
         .await?;
     Ok(Json(track_dto(t)))
+}
+
+#[derive(Deserialize)]
+pub struct AlbumTypeBody {
+    pub album_type: String,
+    /// Optional main single to flag before the single-song invariant is checked.
+    #[serde(default)]
+    pub single_track_id: Option<Uuid>,
+}
+
+async fn set_album_type(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<AlbumDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: AlbumTypeBody = crate::rest::parse_json(req).await?;
+    let a = state
+        .library
+        .set_album_type(&caller, album_id, &body.album_type, body.single_track_id)
+        .await?;
+    Ok(Json(album_dto_full(&state, &caller, a).await?))
 }
 
 #[derive(Deserialize)]

@@ -498,6 +498,23 @@ impl ServerClient {
         self.rest.set_track_single_release(cred, track_id, single_release).await
     }
 
+    pub async fn set_album_type(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        album_type: &str,
+        single_track_id: Option<&str>,
+    ) -> AppResult<Album> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_album_type(cred, album_id, album_type, single_track_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("set_album_type", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_album_type(cred, album_id, album_type, single_track_id).await
+    }
+
     pub async fn add_artist_alias(
         &self,
         cred: &Credential,

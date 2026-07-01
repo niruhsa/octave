@@ -539,6 +539,16 @@ impl<'a> LibraryService<'a> {
         self.to_merged_track(t).await
     }
 
+    pub async fn set_album_type(
+        &self,
+        album_id: &str,
+        album_type: &str,
+        single_track_id: Option<&str>,
+    ) -> AppResult<MergedAlbum> {
+        let a = self.auth.set_album_type(album_id, album_type, single_track_id).await?;
+        self.to_merged_album(a).await
+    }
+
     pub async fn add_artist_alias(
         &self,
         artist_id: &str,

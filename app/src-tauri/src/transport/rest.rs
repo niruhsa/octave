@@ -644,6 +644,34 @@ impl RestClient {
         Ok(body.into())
     }
 
+    pub async fn set_album_type(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        album_type: &str,
+        single_track_id: Option<&str>,
+    ) -> AppResult<Album> {
+        let url = format!("{}/albums/{album_id}/type", self.base);
+        let mut body = serde_json::json!({ "album_type": album_type });
+        if let Some(tid) = single_track_id {
+            body["single_track_id"] = serde_json::json!(tid);
+        }
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&body)
+            .send()
+            .await
+            .map_err(rest_err("set_album_type"))?;
+        let body: AlbumJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_album_type decode"))?;
+        Ok(body.into())
+    }
+
     pub async fn add_artist_alias(
         &self,
         cred: &Credential,
@@ -2136,6 +2164,8 @@ struct AlbumJson {
     artist_id: String,
     title: String,
     release_year: Option<i64>,
+    #[serde(default = "super::default_album_type")]
+    album_type: String,
     cover_path: Option<String>,
     #[serde(default)]
     aliases: Vec<AliasJson>,
@@ -2149,6 +2179,7 @@ impl From<AlbumJson> for Album {
             artist_id: a.artist_id,
             title: a.title,
             release_year: a.release_year,
+            album_type: a.album_type,
             cover_path: a.cover_path,
             aliases: a.aliases.into_iter().map(Into::into).collect(),
             storage_bytes: a.storage_bytes,

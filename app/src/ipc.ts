@@ -182,11 +182,16 @@ export type MergedArtist = {
   downloaded: boolean;
 };
 
+/** Album classification. A `single` album always has at least one track
+ * flagged `is_single_release` (enforced server-side). */
+export type AlbumType = "album" | "ep" | "single";
+
 export type MergedAlbum = {
   id: string;
   artist_id: string;
   title: string;
   release_year: number | null;
+  album_type: AlbumType;
   cover_path: string | null;
   local_cover_path: string | null;
   /** Every known title spelling. See `MergedArtist.aliases`. */
@@ -379,6 +384,15 @@ export const libraryMoveTrack = (
 
 export const librarySetTrackSingleRelease = (trackId: string, singleRelease: boolean) =>
   invoke<MergedTrack>("library_set_track_single_release", { trackId, singleRelease });
+
+/** Set an album's classification. When setting `single`, pass `singleTrackId`
+ * to flag the main single (required unless the album already has one). */
+export const librarySetAlbumType = (
+  albumId: string,
+  albumType: AlbumType,
+  singleTrackId?: string,
+) =>
+  invoke<MergedAlbum>("library_set_album_type", { albumId, albumType, singleTrackId });
 
 export const libraryAddArtistAlias = (
   artistId: string,

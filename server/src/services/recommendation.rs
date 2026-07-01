@@ -643,6 +643,7 @@ mod tests {
                 artist_id,
                 title: title.into(),
                 release_year: None,
+                album_type: "album".into(),
                 cover_path: None,
                 storage_bytes: 0,
                 created_at: now(),
@@ -680,6 +681,9 @@ mod tests {
             Ok(vec![])
         }
         async fn update(&self, _: Uuid, _: &str, _: Option<i32>, _: Option<&str>) -> Result<Option<Album>> {
+            Ok(None)
+        }
+        async fn set_album_type(&self, _: Uuid, _: &str) -> Result<Option<Album>> {
             Ok(None)
         }
         async fn find_by_artist_and_title(&self, _: Uuid, _: &str) -> Result<Option<Album>> {

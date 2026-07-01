@@ -90,6 +90,21 @@ This file owns the **client's** status and detail. When client work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Album type (Album / EP / Single) + required single song (client).** The [`Album`](./src/routes/Album.tsx)
+route shows the classification as the hero eyebrow badge (ALBUM / EP / SINGLE) and, for Manager+ online,
+a segmented type control. Choosing **Single** requires a main single: it reuses an already-flagged track
+(the existing ★/SINGLE per-track marker) or opens a "Choose the single" [`ActionSheet`](./src/components/ActionSheet.tsx)
+to pick one, passing it as `singleTrackId`. Success invalidates the library queries (incl. cross-tab
+`broadcastInvalidate`), like the other merge/move mutations.
+- **Transport** ([`transport/{mod,grpc,rest,client}.rs`](./src-tauri/src/transport/) + [`auth/manager.rs`](./src-tauri/src/auth/manager.rs)):
+  `album_type` on the transport `Album` (defaults `album` from an older server / the offline cache) + a
+  gRPC-primary / REST-fallback `set_album_type` routing rejections through `map_mutation_err` (a permanent
+  `InvalidArgument` doesn't fall back). Proto stubs regenerate via `build.rs`.
+- **Merged/command/ipc** ([`library/merged.rs`](./src-tauri/src/library/merged.rs) `MergedAlbum.album_type` — `from_cache`
+  defaults `album`, cache schema unchanged; [`library/service.rs`](./src-tauri/src/library/service.rs) + [`commands/library_commands.rs`](./src-tauri/src/commands/library_commands.rs)
+  `library_set_album_type`; [`ipc.ts`](./src/ipc.ts) `AlbumType` + `librarySetAlbumType`). Bearer Manager+, online only.
+- `npx tsc --noEmit` + `npm run build` + host `cargo test` (**53** lib) + `cargo clippy` clean. (IPC writes need a running server per the app's norm.)
+
 **Podcasts (client — complete).** Browse/search shows (iTunes/PodcastIndex via the server), subscribe for new-episode alerts, and **download episodes for offline use through the exact same pipeline as songs** — reusing the `DownloadManager`'s resumable `stream_to_file`, the `media://` playback server, the player queue, the sync engine, and the kind-agnostic notification stack. New surface only.
 - **Cache** (migration [`0004_podcasts.sql`](./src-tauri/migrations/0004_podcasts.sql)): `podcasts` (subscribed shows, rendered offline) + `podcast_episodes` (downloaded episodes only — `local_file_path` present == offline, like `tracks`); `sync_state`'s CHECK widened (table rebuilt) to allow `'podcast'`/`'podcast_episode'`. Row types in [`cache/model.rs`](./src-tauri/src/cache/model.rs) + helpers in [`cache/repo.rs`](./src-tauri/src/cache/repo.rs) (upsert/get/list/delete + downloaded counts/bytes), mirroring the artist/album/track helpers.
 - **Transport** ([`transport/`](./src-tauri/src/transport/)): the client `build.rs` recompiles the server's `podcast.proto`, so the `music.podcast.v1` stubs flow through. New wire types `Podcast`/`PodcastEpisode`/`PodcastCandidate`/`RefreshReport` + gRPC-primary / REST-fallback `search_podcasts`/`subscribe_feed`/`list_podcasts`/`get_podcast`/`delete_podcast`/`refresh_podcast`/`set_auto_download`/`list_episodes`/`get_episode`/`download_episode`/`subscribe`/`unsubscribe`/`is_subscribed`/`list_subscriptions` across `grpc`/`rest`/`client`/`auth/manager` (reads fall back to REST; catalog/subscribe mutations route through `map_mutation_err`, no fallback — same as `follow_artist`). `Notification` gains `podcast_id`/`episode_id` for tap-routing.
