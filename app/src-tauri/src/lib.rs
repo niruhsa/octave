@@ -252,6 +252,10 @@ pub fn run() {
             commands::library_commands::library_add_album_alias,
             commands::library_commands::library_remove_album_alias,
             commands::library_commands::library_set_primary_album_alias,
+            commands::library_commands::library_list_track_aliases,
+            commands::library_commands::library_add_track_alias,
+            commands::library_commands::library_remove_track_alias,
+            commands::library_commands::library_set_primary_track_alias,
             // library delete (Phase 8+ — Manager+ gated server-side)
             commands::library_commands::library_delete_artist,
             commands::library_commands::library_delete_album,

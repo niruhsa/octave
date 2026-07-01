@@ -141,6 +141,9 @@ pub struct Track {
     /// `true` when this track is a single release within its album.
     #[serde(default)]
     pub is_single_release: bool,
+    /// Alternate title spellings (populated on single-entity reads only).
+    #[serde(default)]
+    pub aliases: Vec<AliasInfo>,
 }
 
 /// The server's library-storage breakdown (homepage widget). `misc` shown in

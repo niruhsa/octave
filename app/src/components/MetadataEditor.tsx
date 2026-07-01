@@ -10,9 +10,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { libraryEditTrackMetadata, type MergedTrack, type MetadataEdit } from "../ipc";
+import {
+  type AliasInfo,
+  libraryEditTrackMetadata,
+  libraryListTrackAliases,
+  type MergedTrack,
+  type MetadataEdit,
+} from "../ipc";
 import { formatError } from "../lib/error";
 import { btnGhost, btnGhostSm, btnPrimary, errorBox, input, label } from "../lib/ui";
+import { Aliases } from "./Aliases";
 import { EditIcon } from "./icons";
 
 type Props = {
@@ -103,6 +110,17 @@ function SingleEditor({ track, online, onClose, onSaved }: Props & { track: Merg
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+
+  // Alternate title spellings (loaded on open; only present on a single-track
+  // read). Managers add/remove/choose the displayed one — mirrors the Album
+  // route's "Also known as" strip.
+  const [aliases, setAliases] = useState<AliasInfo[]>([]);
+  const refetchAliases = () => {
+    void libraryListTrackAliases(track.id)
+      .then(setAliases)
+      .catch(() => {});
+  };
+  useEffect(refetchAliases, [track.id]);
 
   useEffect(() => titleRef.current?.focus(), []);
 
@@ -200,6 +218,20 @@ function SingleEditor({ track, online, onClose, onSaved }: Props & { track: Merg
             />
           </Field>
         )}
+
+        {/* Alternate title spellings (per language). The displayed title
+            follows the server's PRIMARY_LANGUAGE; "make primary" overrides it. */}
+        <div className="flex flex-col gap-2 border-t border-oct-border pt-4">
+          <span className={label}>ALTERNATE SPELLINGS</span>
+          <Aliases
+            kind="track"
+            entityId={track.id}
+            aliases={aliases}
+            online={online}
+            isManager
+            onChanged={refetchAliases}
+          />
+        </div>
       </div>
     </Shell>
   );

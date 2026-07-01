@@ -66,6 +66,12 @@ service LibraryService {
   rpc AddAlbumAlias(AddAlbumAliasRequest) returns (Album);
   rpc RemoveAlbumAlias(RemoveAliasRequest) returns (Album);
   rpc SetPrimaryAlbumAlias(SetPrimaryAliasRequest) returns (Album);
+  // Track alias editing (alternate title spellings). Each mutation returns the
+  // refreshed Track (with its aliases populated).
+  rpc ListTrackAliases(GetTrackRequest) returns (ListAliasesResponse);
+  rpc AddTrackAlias(AddTrackAliasRequest) returns (Track);
+  rpc RemoveTrackAlias(RemoveAliasRequest) returns (Track);
+  rpc SetPrimaryTrackAlias(SetPrimaryAliasRequest) returns (Track);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +137,8 @@ message Track {
   int32 sample_rate_hz = 16;
   int32 bit_depth = 17;
   int32 channels = 18;
+  // Alternate title spellings (populated on single-entity reads only).
+  repeated AliasInfo aliases = 19;
 }
 
 // The library-storage breakdown (homepage widget). `misc` shown in the UI is
@@ -316,6 +324,12 @@ message AddArtistAliasRequest {
 
 message AddAlbumAliasRequest {
   string album_id = 1;
+  string title = 2;
+  string language = 3;         // optional; inferred from the title when empty
+}
+
+message AddTrackAliasRequest {
+  string track_id = 1;
   string title = 2;
   string language = 3;         // optional; inferred from the title when empty
 }

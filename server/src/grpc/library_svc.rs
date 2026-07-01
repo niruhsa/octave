@@ -66,6 +66,22 @@ impl LibraryServer {
         pb.aliases = aliases.into_iter().map(album_alias_to_pb).collect();
         Ok(pb)
     }
+
+    /// Build a `pb::Track` with its alias list populated (single-entity reads).
+    async fn track_pb_with_aliases(
+        &self,
+        caller: &Identity,
+        t: m::Track,
+    ) -> Result<pb::Track, Status> {
+        let aliases = self
+            .library
+            .list_track_aliases(caller, t.id)
+            .await
+            .map_err(map_err)?;
+        let mut pb = track_to_pb(t);
+        pb.aliases = aliases.into_iter().map(track_alias_to_pb).collect();
+        Ok(pb)
+    }
 }
 
 fn parse_uuid(s: &str, what: &str) -> Result<Uuid, Status> {
@@ -136,6 +152,7 @@ fn track_to_pb(t: m::Track) -> pb::Track {
         sample_rate_hz: t.sample_rate_hz.unwrap_or(0),
         bit_depth: t.bit_depth.unwrap_or(0),
         channels: t.channels.unwrap_or(0),
+        aliases: Vec::new(),
     }
 }
 fn library_storage_to_pb(s: m::LibraryStorage) -> pb::LibraryStorage {
@@ -163,6 +180,15 @@ fn artist_alias_to_pb(a: m::ArtistAlias) -> pb::AliasInfo {
     }
 }
 fn album_alias_to_pb(a: m::AlbumAlias) -> pb::AliasInfo {
+    pb::AliasInfo {
+        id: a.id.to_string(),
+        name: a.title,
+        sort_name: String::new(),
+        language: a.language.unwrap_or_default(),
+        is_primary: a.is_primary,
+    }
+}
+fn track_alias_to_pb(a: m::TrackAlias) -> pb::AliasInfo {
     pb::AliasInfo {
         id: a.id.to_string(),
         name: a.title,
@@ -400,7 +426,7 @@ impl pb::library_service_server::LibraryService for LibraryServer {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "track")?;
         let t = self.library.get_track(&caller, id).await.map_err(map_err)?;
-        Ok(Response::new(track_to_pb(t)))
+        Ok(Response::new(self.track_pb_with_aliases(&caller, t).await?))
     }
     async fn update_track(
         &self,
@@ -713,6 +739,67 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .await
             .map_err(map_err)?;
         Ok(Response::new(self.album_pb_with_aliases(&caller, a).await?))
+    }
+
+    // ---- Track aliases ----
+    async fn list_track_aliases(
+        &self,
+        req: Request<pb::GetTrackRequest>,
+    ) -> Result<Response<pb::ListAliasesResponse>, Status> {
+        let caller = self.caller(&req).await?;
+        let id = parse_uuid(&req.into_inner().id, "track")?;
+        let aliases = self
+            .library
+            .list_track_aliases(&caller, id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(pb::ListAliasesResponse {
+            aliases: aliases.into_iter().map(track_alias_to_pb).collect(),
+        }))
+    }
+    async fn add_track_alias(
+        &self,
+        req: Request<pb::AddTrackAliasRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.track_id, "track")?;
+        let t = self
+            .library
+            .add_track_alias(&caller, id, &b.title, nonempty(b.language).as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.track_pb_with_aliases(&caller, t).await?))
+    }
+    async fn remove_track_alias(
+        &self,
+        req: Request<pb::RemoveAliasRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.entity_id, "track")?;
+        let alias_id = parse_uuid(&b.alias_id, "alias")?;
+        let t = self
+            .library
+            .remove_track_alias(&caller, id, alias_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.track_pb_with_aliases(&caller, t).await?))
+    }
+    async fn set_primary_track_alias(
+        &self,
+        req: Request<pb::SetPrimaryAliasRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let id = parse_uuid(&b.entity_id, "track")?;
+        let alias_id = parse_uuid(&b.alias_id, "alias")?;
+        let t = self
+            .library
+            .set_primary_track_alias(&caller, id, alias_id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(self.track_pb_with_aliases(&caller, t).await?))
     }
 
     // ---- Scan ----

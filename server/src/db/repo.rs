@@ -222,6 +222,13 @@ pub trait AliasRepo: Send + Sync {
     async fn delete_album_alias(&self, id: Uuid) -> Result<()>;
     async fn set_primary_album_alias(&self, album_id: Uuid, alias_id: Uuid) -> Result<()>;
     async fn reassign_album_aliases(&self, from_album: Uuid, to_album: Uuid) -> Result<()>;
+
+    // ----- Track aliases -----
+    async fn list_track_aliases(&self, track_id: Uuid) -> Result<Vec<TrackAlias>>;
+    async fn add_track_alias(&self, new: NewTrackAlias) -> Result<TrackAlias>;
+    async fn get_track_alias(&self, id: Uuid) -> Result<Option<TrackAlias>>;
+    async fn delete_track_alias(&self, id: Uuid) -> Result<()>;
+    async fn set_primary_track_alias(&self, track_id: Uuid, alias_id: Uuid) -> Result<()>;
 }
 
 /// Per-user notifications (Phase 10 — new-release alerts). Delivery is

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
+    AliasInfo, Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
     FingerprintStatus,
     LibraryStorage, ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
     PlayInput,
@@ -612,6 +612,70 @@ impl ServerClient {
             }
         }
         self.rest.set_primary_album_alias(cred, album_id, alias_id).await
+    }
+
+    pub async fn list_track_aliases(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+    ) -> AppResult<Vec<AliasInfo>> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.list_track_aliases(cred, track_id).await {
+                Ok(a) => return Ok(a),
+                Err(e) if is_transport_error(&e) => fallback_log("list_track_aliases", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.list_track_aliases(cred, track_id).await
+    }
+
+    pub async fn add_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.add_track_alias(cred, track_id, title, language).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("add_track_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.add_track_alias(cred, track_id, title, language).await
+    }
+
+    pub async fn remove_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.remove_track_alias(cred, track_id, alias_id).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("remove_track_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.remove_track_alias(cred, track_id, alias_id).await
+    }
+
+    pub async fn set_primary_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_primary_track_alias(cred, track_id, alias_id).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("set_primary_track_alias", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_primary_track_alias(cred, track_id, alias_id).await
     }
 
     // ----- Follows & notifications (Phase 10) ------------------------------

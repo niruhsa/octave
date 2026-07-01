@@ -19,7 +19,8 @@ use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
 use super::proto::auth::{ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse};
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
-    AddAlbumAliasRequest, AddArtistAliasRequest, DeleteAlbumRequest, DeleteArtistRequest,
+    AddAlbumAliasRequest, AddArtistAliasRequest, AddTrackAliasRequest, DeleteAlbumRequest,
+    DeleteArtistRequest,
     DeleteTrackRequest, EditTrackMetadataRequest, GetAlbumRequest, GetArtistRequest,
     GetLibraryStorageRequest, GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest,
     ListTracksByAlbumRequest,
@@ -46,7 +47,7 @@ use super::proto::favorite as fpb;
 use super::proto::discover::discover_service_client::DiscoverServiceClient;
 use super::proto::discover as dpb;
 use super::{
-    Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
+    AliasInfo, Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
     EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, Notification,
     NotificationPage,
     PermissionTier, PlayEvent, PlayHistoryPage, PlayInput, Playlist, PlaylistTrack,
@@ -778,6 +779,84 @@ impl GrpcClient {
             .map_err(map_mutation_err("set_primary_album_alias"))?
             .into_inner();
         Ok(album_from_proto(resp))
+    }
+
+    pub async fn list_track_aliases(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+    ) -> AppResult<Vec<AliasInfo>> {
+        let mut req = Request::new(GetTrackRequest { id: track_id.to_string() });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .list_track_aliases(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("list_track_aliases: {s}")))?
+            .into_inner();
+        Ok(resp.aliases.into_iter().map(alias_from_proto).collect())
+    }
+
+    pub async fn add_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(AddTrackAliasRequest {
+            track_id: track_id.to_string(),
+            title: title.to_string(),
+            language: language.unwrap_or_default().to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .add_track_alias(req)
+            .await
+            .map_err(map_mutation_err("add_track_alias"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
+    }
+
+    pub async fn remove_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(RemoveAliasRequest {
+            entity_id: track_id.to_string(),
+            alias_id: alias_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .remove_track_alias(req)
+            .await
+            .map_err(map_mutation_err("remove_track_alias"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
+    }
+
+    pub async fn set_primary_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(SetPrimaryAliasRequest {
+            entity_id: track_id.to_string(),
+            alias_id: alias_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .set_primary_track_alias(req)
+            .await
+            .map_err(map_mutation_err("set_primary_track_alias"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
     }
 
     // ----- Follows & notifications (Phase 10) ----------------------------
@@ -2257,6 +2336,7 @@ fn track_from_proto(t: super::proto::library::Track) -> Track {
         channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        aliases: t.aliases.into_iter().map(alias_from_proto).collect(),
     }
 }
 
@@ -2303,6 +2383,7 @@ fn track_from_fav(t: fpb::FavTrack) -> Track {
         channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        aliases: Vec::new(),
     }
 }
 
@@ -2338,6 +2419,7 @@ fn track_from_disc(t: dpb::DiscTrack) -> Track {
         channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        aliases: Vec::new(),
     }
 }
 

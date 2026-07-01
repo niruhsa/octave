@@ -311,6 +311,46 @@ pub async fn library_set_primary_album_alias(
     svc.set_primary_album_alias(&album_id, &alias_id).await
 }
 
+#[tauri::command]
+pub async fn library_list_track_aliases(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+) -> AppResult<Vec<crate::transport::AliasInfo>> {
+    let svc = service(&state).await?;
+    svc.list_track_aliases(&track_id).await
+}
+
+#[tauri::command]
+pub async fn library_add_track_alias(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+    title: String,
+    language: Option<String>,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.add_track_alias(&track_id, &title, language.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn library_remove_track_alias(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+    alias_id: String,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.remove_track_alias(&track_id, &alias_id).await
+}
+
+#[tauri::command]
+pub async fn library_set_primary_track_alias(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+    alias_id: String,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.set_primary_track_alias(&track_id, &alias_id).await
+}
+
 // ---------------------------------------------------------------------------
 // rescan (Manager+ gated server-side)
 // ---------------------------------------------------------------------------

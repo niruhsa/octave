@@ -815,6 +815,96 @@ impl RestClient {
         Ok(body.into())
     }
 
+    pub async fn list_track_aliases(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+    ) -> AppResult<Vec<super::AliasInfo>> {
+        let url = format!("{}/tracks/{track_id}/aliases", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_track_aliases"))?;
+        let body: Vec<AliasJson> = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_track_aliases decode"))?;
+        Ok(body.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn add_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{track_id}/aliases", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "title": title, "language": language }))
+            .send()
+            .await
+            .map_err(rest_err("add_track_alias"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("add_track_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn remove_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{track_id}/aliases/{alias_id}", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("remove_track_alias"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("remove_track_alias decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn set_primary_track_alias(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{track_id}/primary-alias", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "alias_id": alias_id }))
+            .send()
+            .await
+            .map_err(rest_err("set_primary_track_alias"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_primary_track_alias decode"))?;
+        Ok(body.into())
+    }
+
     // ----- Follows & notifications (Phase 10) ----------------------------
 
     pub async fn follow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
@@ -2209,6 +2299,8 @@ struct TrackJson {
     metadata_json: String,
     #[serde(default)]
     is_single_release: bool,
+    #[serde(default)]
+    aliases: Vec<AliasJson>,
 }
 impl From<TrackJson> for Track {
     fn from(t: TrackJson) -> Self {
@@ -2229,6 +2321,7 @@ impl From<TrackJson> for Track {
             channels: t.channels,
             metadata_json: t.metadata_json,
             is_single_release: t.is_single_release,
+            aliases: t.aliases.into_iter().map(Into::into).collect(),
         }
     }
 }

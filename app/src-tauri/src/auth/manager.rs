@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
+    AliasInfo, Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
     FingerprintStatus,
     ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
     Podcast,
@@ -697,6 +697,35 @@ impl AuthManager {
     ) -> AppResult<Album> {
         let cred = self.credential().await?;
         self.server.set_primary_album_alias(&cred, album_id, alias_id).await
+    }
+
+    pub async fn list_track_aliases(&self, track_id: &str) -> AppResult<Vec<AliasInfo>> {
+        let cred = self.credential().await?;
+        self.server.list_track_aliases(&cred, track_id).await
+    }
+
+    pub async fn add_track_alias(
+        &self,
+        track_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.add_track_alias(&cred, track_id, title, language).await
+    }
+
+    pub async fn remove_track_alias(&self, track_id: &str, alias_id: &str) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.remove_track_alias(&cred, track_id, alias_id).await
+    }
+
+    pub async fn set_primary_track_alias(
+        &self,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.set_primary_track_alias(&cred, track_id, alias_id).await
     }
 
     /// Upload a cover image for an album. Manager+ gated server-side.

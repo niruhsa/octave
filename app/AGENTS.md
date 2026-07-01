@@ -90,6 +90,22 @@ This file owns the **client's** status and detail. When client work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Track title aliases (client).** Managers add/remove/choose alternate spellings of a track title
+from inside the single-track **Edit-metadata modal** ([MetadataEditor.tsx](./src/components/MetadataEditor.tsx)) —
+the reusable [Aliases](./src/components/Aliases.tsx) "Also known as" strip gains a `"track"` kind. The
+displayed title still follows the server's `PRIMARY_LANGUAGE`; aliases load on open via a new
+`libraryListTrackAliases` (single-track read only — no album-list N+1), and refetch after each change.
+- **Transport** ([`transport/{mod,grpc,rest,client}.rs`](./src-tauri/src/transport/) + [`auth/manager.rs`](./src-tauri/src/auth/manager.rs)):
+  `aliases` on the transport `Track`; `add/remove/set_primary_track_alias` (gRPC-primary/REST-fallback,
+  returning `Track`, rejections via `map_mutation_err`) + a `list_track_aliases` read (→ `Vec<AliasInfo>`).
+  Proto stubs regenerate via `build.rs`.
+- **Merged/command/ipc** ([`library/merged.rs`](./src-tauri/src/library/merged.rs) `MergedTrack.aliases` —
+  `from_cache` = `[]`, cache schema unchanged; [`library/service.rs`](./src-tauri/src/library/service.rs) +
+  [`commands/library_commands.rs`](./src-tauri/src/commands/library_commands.rs) 4 `library_*_track_alias`
+  commands; [`ipc.ts`](./src/ipc.ts) `MergedTrack.aliases` + `libraryListTrackAliases`/`libraryAddTrackAlias`/
+  `libraryRemoveTrackAlias`/`librarySetPrimaryTrackAlias`). Bearer Manager+, online only.
+- `npx tsc --noEmit` + `npm run build` + host `cargo test` (**53** lib) + `cargo clippy` clean.
+
 **Album type (Album / EP / Single) + required single song (client).** The [`Album`](./src/routes/Album.tsx)
 route shows the classification as the hero eyebrow badge (ALBUM / EP / SINGLE) and, for Manager+ online,
 a segmented type control. Choosing **Single** requires a main single: it reuses an already-flagged track

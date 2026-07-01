@@ -52,6 +52,7 @@ function reportTrackToMerged(t: ReportTrack): MergedTrack {
     channels: null,
     local_file_path: null,
     is_single_release: false,
+    aliases: [],
     downloaded: false,
   };
 }

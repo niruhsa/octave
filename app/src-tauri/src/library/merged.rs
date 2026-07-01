@@ -93,6 +93,9 @@ pub struct MergedTrack {
     /// `true` when this track is a single release within its album.
     #[serde(default)]
     pub is_single_release: bool,
+    /// Every known title spelling (populated on single-track reads only).
+    #[serde(default)]
+    pub aliases: Vec<AliasInfo>,
     pub downloaded: bool,
 }
 
@@ -178,6 +181,7 @@ impl MergedTrack {
             channels: t.channels,
             local_file_path,
             is_single_release: t.is_single_release,
+            aliases: t.aliases,
             downloaded,
         }
     }
@@ -204,6 +208,8 @@ impl MergedTrack {
             local_file_path: Some(t.local_file_path),
             // The offline cache doesn't track the single-release flag.
             is_single_release: false,
+            // The offline cache doesn't store title aliases.
+            aliases: Vec::new(),
             downloaded: true,
         }
     }

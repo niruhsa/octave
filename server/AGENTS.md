@@ -115,6 +115,25 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Track title aliases (alternate spellings per language).** Mirrors artist/album aliases onto
+individual tracks: every known spelling of a track title, with the displayed `tracks.title`
+following `PRIMARY_LANGUAGE`.
+- **Schema** (migration [`20270301000000_track_aliases.sql`](./migrations/20270301000000_track_aliases.sql)):
+  `track_aliases(track_id, title, language, is_primary, …)` + `UNIQUE(track_id, title)`, backfilled with
+  one primary alias per existing track from its title — a direct copy of `album_aliases`.
+- **Model/repo** ([`db/models.rs`](./src/db/models.rs) `TrackAlias`/`NewTrackAlias`; [`db/repo.rs`](./src/db/repo.rs)/[`db/pg.rs`](./src/db/pg.rs)):
+  `AliasRepo` gains `list/add/get/delete/set_primary_track_alias` (no reassign — tracks aren't merged).
+- **Service** ([`services/library.rs`](./src/services/library.rs)): `list/add/remove/set_primary_track_alias`
+  (Manager+ except list=User+, audited `track.alias.*`) + `seed_track_alias` + `recompute_track_display`
+  (re-points `tracks.title` via the shared `pick_primary_index`). Seeded in `create_track` (covers ingest)
+  and `update_track` (covers direct edits + `MetadataService::edit`), mirroring `update_album`.
+- **Transports** ([`proto/library.proto`](./proto/library.proto) `Track.aliases` + `ListTrackAliases`/
+  `AddTrackAlias`/`RemoveTrackAlias`/`SetPrimaryTrackAlias`, reusing the generic `RemoveAliasRequest`/
+  `SetPrimaryAliasRequest`; [`grpc/library_svc.rs`](./src/grpc/library_svc.rs) + [`rest/library.rs`](./src/rest/library.rs)):
+  REST `/tracks/:id/aliases` (get+post), `/tracks/:id/aliases/:alias_id` (delete),
+  `/tracks/:id/primary-alias` (put); `aliases` on `TrackDto` + a `track_dto_full` attaching them on
+  single-entity reads only (no list N+1).
+
 **Album type (Album / EP / Single) + required single song.** Albums now carry a
 classification alongside the per-track `is_single_release` flag. A `single` album must have at
 least one track flagged `is_single_release` (its main single) — the invariant is enforced in

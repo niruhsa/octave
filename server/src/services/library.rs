@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::auth::Identity;
 use crate::db::models::{
     self as m, Album, AlbumAlias, Artist, ArtistAlias, NewAlbum, NewAlbumAlias, NewArtist,
-    NewArtistAlias, NewAuditEntry, NewTrack, PermissionLevel, Track,
+    NewArtistAlias, NewAuditEntry, NewTrack, NewTrackAlias, PermissionLevel, Track, TrackAlias,
 };
 use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, AuditRepo, FollowRepo, TrackRepo};
 use crate::error::{AppError, Result};
@@ -442,6 +442,7 @@ impl LibraryService {
             return Err(AppError::NotFound(format!("artist {}", new.artist_id)));
         }
         let track = self.tracks.create(new).await?;
+        self.seed_track_alias(&track).await;
         self.audit(
             caller,
             "track.create",
@@ -482,6 +483,14 @@ impl LibraryService {
             .update(id, title, track_no, disc_no, metadata_json)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        // Register the (possibly new) title as the primary spelling; the prior
+        // title is retained as a non-primary alias. Mirrors `update_album`.
+        self.seed_track_alias(&after).await;
+        if let Ok(aliases) = self.aliases.list_track_aliases(id).await
+            && let Some(a) = aliases.iter().find(|a| a.title == after.title)
+        {
+            let _ = self.aliases.set_primary_track_alias(id, a.id).await;
+        }
         self.audit(caller, "track.update", "track", Some(id), Some(&before), Some(&after))
             .await?;
         Ok(after)
@@ -1061,6 +1070,145 @@ impl LibraryService {
         Ok(after)
     }
 
+    // ----- Track aliases -----
+
+    pub async fn list_track_aliases(
+        &self,
+        caller: &Identity,
+        track_id: Uuid,
+    ) -> Result<Vec<TrackAlias>> {
+        caller.require(PermissionLevel::User)?;
+        self.aliases.list_track_aliases(track_id).await
+    }
+
+    pub async fn add_track_alias(
+        &self,
+        caller: &Identity,
+        track_id: Uuid,
+        title: &str,
+        language: Option<&str>,
+    ) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        if title.trim().is_empty() {
+            return Err(AppError::InvalidArgument("alias title is required".into()));
+        }
+        let before = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        self.aliases
+            .add_track_alias(NewTrackAlias {
+                track_id,
+                title: title.to_string(),
+                language: Some(resolve_language(language, title)),
+                is_primary: false,
+            })
+            .await?;
+        self.recompute_track_display(track_id).await?;
+        let after = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        self.audit(caller, "track.alias.add", "track", Some(track_id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    pub async fn remove_track_alias(
+        &self,
+        caller: &Identity,
+        track_id: Uuid,
+        alias_id: Uuid,
+    ) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        let alias = self
+            .aliases
+            .get_track_alias(alias_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("alias {alias_id}")))?;
+        if alias.track_id != track_id {
+            return Err(AppError::InvalidArgument(
+                "alias does not belong to this track".into(),
+            ));
+        }
+        if self.aliases.list_track_aliases(track_id).await?.len() <= 1 {
+            return Err(AppError::InvalidArgument(
+                "cannot remove the only spelling of a track".into(),
+            ));
+        }
+        self.aliases.delete_track_alias(alias_id).await?;
+        self.recompute_track_display(track_id).await?;
+        let after = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        self.audit(caller, "track.alias.remove", "track", Some(track_id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    pub async fn set_primary_track_alias(
+        &self,
+        caller: &Identity,
+        track_id: Uuid,
+        alias_id: Uuid,
+    ) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        let alias = self
+            .aliases
+            .get_track_alias(alias_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("alias {alias_id}")))?;
+        if alias.track_id != track_id {
+            return Err(AppError::InvalidArgument(
+                "alias does not belong to this track".into(),
+            ));
+        }
+        self.aliases.set_primary_track_alias(track_id, alias_id).await?;
+        self.tracks
+            .update(track_id, &alias.title, before.track_no, before.disc_no, &before.metadata_json)
+            .await?;
+        let after = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    /// Seed a track's current title as its primary alias (idempotent upsert).
+    /// Called on create/update so the alias table is always complete.
+    async fn seed_track_alias(&self, track: &Track) {
+        let language = Some(tag::infer_language(&track.title));
+        if let Err(e) = self
+            .aliases
+            .add_track_alias(NewTrackAlias {
+                track_id: track.id,
+                title: track.title.clone(),
+                language,
+                is_primary: true,
+            })
+            .await
+        {
+            warn!(track_id = %track.id, error = %e, "failed to seed track alias");
+        }
+    }
+
     // ----- Display-name resolution -----
 
     /// Re-point `artists.name`/`sort_name` at the spelling whose language
@@ -1107,6 +1255,34 @@ impl LibraryService {
         {
             self.albums
                 .update(id, &chosen.title, cur.release_year, cur.cover_path.as_deref())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Re-point `tracks.title` at the spelling whose language matches
+    /// `primary_language`. When nothing matches, the current primary (or first)
+    /// alias is kept so a manual choice is never clobbered. Mirrors
+    /// [`recompute_album_display`].
+    async fn recompute_track_display(&self, id: Uuid) -> Result<()> {
+        let aliases = self.aliases.list_track_aliases(id).await?;
+        if aliases.is_empty() {
+            return Ok(());
+        }
+        let candidates: Vec<(String, Option<String>)> = aliases
+            .iter()
+            .map(|a| (a.title.clone(), a.language.clone()))
+            .collect();
+        let chosen = match pick_primary_index(&candidates, &self.primary_language) {
+            Some(i) => &aliases[i],
+            None => aliases.iter().find(|a| a.is_primary).unwrap_or(&aliases[0]),
+        };
+        self.aliases.set_primary_track_alias(id, chosen.id).await?;
+        if let Some(cur) = self.tracks.get(id).await?
+            && cur.title != chosen.title
+        {
+            self.tracks
+                .update(id, &chosen.title, cur.track_no, cur.disc_no, &cur.metadata_json)
                 .await?;
         }
         Ok(())

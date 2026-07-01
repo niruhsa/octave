@@ -606,6 +606,41 @@ impl<'a> LibraryService<'a> {
         self.to_merged_album(a).await
     }
 
+    pub async fn list_track_aliases(
+        &self,
+        track_id: &str,
+    ) -> AppResult<Vec<crate::transport::AliasInfo>> {
+        self.auth.list_track_aliases(track_id).await
+    }
+
+    pub async fn add_track_alias(
+        &self,
+        track_id: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> AppResult<MergedTrack> {
+        let t = self.auth.add_track_alias(track_id, title, language).await?;
+        self.to_merged_track(t).await
+    }
+
+    pub async fn remove_track_alias(
+        &self,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<MergedTrack> {
+        let t = self.auth.remove_track_alias(track_id, alias_id).await?;
+        self.to_merged_track(t).await
+    }
+
+    pub async fn set_primary_track_alias(
+        &self,
+        track_id: &str,
+        alias_id: &str,
+    ) -> AppResult<MergedTrack> {
+        let t = self.auth.set_primary_track_alias(track_id, alias_id).await?;
+        self.to_merged_track(t).await
+    }
+
     // ----- helpers -------------------------------------------------------
 
     /// Build a `MergedArtist` from a server row, filling the `downloaded` flag

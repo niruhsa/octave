@@ -49,6 +49,9 @@ pub fn router() -> Router<RestState> {
         .route("/tracks/:id/metadata", patch(edit_track_metadata))
         .route("/tracks/:id/move", post(move_track))
         .route("/tracks/:id/single-release", post(set_track_single_release))
+        .route("/tracks/:id/aliases", get(list_track_aliases).post(add_track_alias))
+        .route("/tracks/:id/aliases/:alias_id", delete(remove_track_alias))
+        .route("/tracks/:id/primary-alias", put(set_primary_track_alias))
         // Storage breakdown (homepage widget)
         .route("/library/storage", get(get_library_storage))
         // Scan
@@ -175,6 +178,8 @@ pub struct TrackDto {
     pub channels: Option<i32>,
     pub metadata_json: String,
     pub is_single_release: bool,
+    #[serde(default)]
+    pub aliases: Vec<AliasDto>,
 }
 fn track_dto(t: m::Track) -> TrackDto {
     TrackDto {
@@ -194,7 +199,29 @@ fn track_dto(t: m::Track) -> TrackDto {
         channels: t.channels,
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        aliases: Vec::new(),
     }
+}
+fn track_alias_dto(a: m::TrackAlias) -> AliasDto {
+    AliasDto {
+        id: a.id.to_string(),
+        name: a.title,
+        sort_name: None,
+        language: a.language,
+        is_primary: a.is_primary,
+    }
+}
+
+/// Build a `TrackDto` with its alias list populated (single-entity paths).
+async fn track_dto_full(
+    state: &RestState,
+    caller: &Identity,
+    t: m::Track,
+) -> Result<TrackDto, ApiError> {
+    let aliases = state.library.list_track_aliases(caller, t.id).await?;
+    let mut dto = track_dto(t);
+    dto.aliases = aliases.into_iter().map(track_alias_dto).collect();
+    Ok(dto)
 }
 
 /// Build an `ArtistDto` with its alias list populated (single-entity paths).
@@ -479,7 +506,7 @@ async fn get_track(
 ) -> Result<Json<TrackDto>, ApiError> {
     let caller = id(&req)?;
     let t = state.library.get_track(&caller, id_path).await?;
-    Ok(Json(track_dto(t)))
+    Ok(Json(track_dto_full(&state, &caller, t).await?))
 }
 
 async fn update_track(
@@ -914,6 +941,63 @@ async fn set_primary_album_alias(
         .set_primary_album_alias(&caller, album_id, body.alias_id)
         .await?;
     Ok(Json(album_dto_full(&state, &caller, a).await?))
+}
+
+#[derive(Deserialize)]
+pub struct AddTrackAliasBody {
+    pub title: String,
+    pub language: Option<String>,
+}
+
+async fn list_track_aliases(
+    State(state): State<RestState>,
+    Path(track_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<Vec<AliasDto>>, ApiError> {
+    let caller = id(&req)?;
+    let rows = state.library.list_track_aliases(&caller, track_id).await?;
+    Ok(Json(rows.into_iter().map(track_alias_dto).collect()))
+}
+
+async fn add_track_alias(
+    State(state): State<RestState>,
+    Path(track_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: AddTrackAliasBody = crate::rest::parse_json(req).await?;
+    let t = state
+        .library
+        .add_track_alias(&caller, track_id, &body.title, body.language.as_deref())
+        .await?;
+    Ok(Json(track_dto_full(&state, &caller, t).await?))
+}
+
+async fn remove_track_alias(
+    State(state): State<RestState>,
+    Path((track_id, alias_id)): Path<(Uuid, Uuid)>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let t = state
+        .library
+        .remove_track_alias(&caller, track_id, alias_id)
+        .await?;
+    Ok(Json(track_dto_full(&state, &caller, t).await?))
+}
+
+async fn set_primary_track_alias(
+    State(state): State<RestState>,
+    Path(track_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: SetPrimaryAliasBody = crate::rest::parse_json(req).await?;
+    let t = state
+        .library
+        .set_primary_track_alias(&caller, track_id, body.alias_id)
+        .await?;
+    Ok(Json(track_dto_full(&state, &caller, t).await?))
 }
 
 // ---------------------------------------------------------------------------

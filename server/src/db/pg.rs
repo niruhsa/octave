@@ -1310,6 +1310,69 @@ impl AliasRepo for PgRepos {
             .map_err(db)?;
         Ok(())
     }
+
+    async fn list_track_aliases(&self, track_id: Uuid) -> Result<Vec<TrackAlias>> {
+        sqlx::query_as::<_, TrackAlias>(
+            r#"SELECT id, track_id, title, language, is_primary, created_at
+               FROM track_aliases WHERE track_id = $1
+               ORDER BY is_primary DESC, created_at"#,
+        )
+        .bind(track_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn add_track_alias(&self, new: NewTrackAlias) -> Result<TrackAlias> {
+        sqlx::query_as::<_, TrackAlias>(
+            r#"INSERT INTO track_aliases (track_id, title, language, is_primary)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (track_id, title)
+               DO UPDATE SET title = track_aliases.title
+               RETURNING id, track_id, title, language, is_primary, created_at"#,
+        )
+        .bind(new.track_id)
+        .bind(&new.title)
+        .bind(&new.language)
+        .bind(new.is_primary)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn get_track_alias(&self, id: Uuid) -> Result<Option<TrackAlias>> {
+        sqlx::query_as::<_, TrackAlias>(
+            r#"SELECT id, track_id, title, language, is_primary, created_at
+               FROM track_aliases WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn delete_track_alias(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM track_aliases WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn set_primary_track_alias(&self, track_id: Uuid, alias_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE track_aliases
+               SET is_primary = (id = $2)
+               WHERE track_id = $1"#,
+        )
+        .bind(track_id)
+        .bind(alias_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

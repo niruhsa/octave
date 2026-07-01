@@ -11,17 +11,20 @@ import {
   type AliasInfo,
   libraryAddAlbumAlias,
   libraryAddArtistAlias,
+  libraryAddTrackAlias,
   libraryRemoveAlbumAlias,
   libraryRemoveArtistAlias,
+  libraryRemoveTrackAlias,
   librarySetPrimaryAlbumAlias,
   librarySetPrimaryArtistAlias,
+  librarySetPrimaryTrackAlias,
 } from "../ipc";
 import { formatError } from "../lib/error";
 import { input } from "../lib/ui";
 import { offlineAttrs } from "./OfflineGate";
 
 type Props = {
-  kind: "artist" | "album";
+  kind: "artist" | "album" | "track";
   entityId: string;
   aliases: AliasInfo[];
   online: boolean;
@@ -62,7 +65,8 @@ export function Aliases({ kind, entityId, aliases, online, isManager, onChanged 
     const lang = language.trim() || undefined;
     await run(async () => {
       if (kind === "artist") await libraryAddArtistAlias(entityId, n, undefined, lang);
-      else await libraryAddAlbumAlias(entityId, n, lang);
+      else if (kind === "album") await libraryAddAlbumAlias(entityId, n, lang);
+      else await libraryAddTrackAlias(entityId, n, lang);
       setName("");
       setLanguage("");
       setAdding(false);
@@ -72,13 +76,17 @@ export function Aliases({ kind, entityId, aliases, online, isManager, onChanged 
     run(() =>
       kind === "artist"
         ? librarySetPrimaryArtistAlias(entityId, aliasId)
-        : librarySetPrimaryAlbumAlias(entityId, aliasId),
+        : kind === "album"
+          ? librarySetPrimaryAlbumAlias(entityId, aliasId)
+          : librarySetPrimaryTrackAlias(entityId, aliasId),
     );
   const remove = (aliasId: string) =>
     run(() =>
       kind === "artist"
         ? libraryRemoveArtistAlias(entityId, aliasId)
-        : libraryRemoveAlbumAlias(entityId, aliasId),
+        : kind === "album"
+          ? libraryRemoveAlbumAlias(entityId, aliasId)
+          : libraryRemoveTrackAlias(entityId, aliasId),
     );
 
   return (

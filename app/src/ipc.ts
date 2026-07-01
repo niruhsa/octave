@@ -220,6 +220,8 @@ export type MergedTrack = {
   local_file_path: string | null;
   /** `true` when this track is a single release within its album. */
   is_single_release: boolean;
+  /** Every known title spelling (populated on single-track reads only). */
+  aliases: AliasInfo[];
   downloaded: boolean;
 };
 
@@ -425,6 +427,23 @@ export const libraryRemoveAlbumAlias = (albumId: string, aliasId: string) =>
 
 export const librarySetPrimaryAlbumAlias = (albumId: string, aliasId: string) =>
   invoke<MergedAlbum>("library_set_primary_album_alias", { albumId, aliasId });
+
+/** List a track's alternate title spellings (single-track read). */
+export const libraryListTrackAliases = (trackId: string) =>
+  invoke<AliasInfo[]>("library_list_track_aliases", { trackId });
+
+export const libraryAddTrackAlias = (trackId: string, title: string, language?: string) =>
+  invoke<MergedTrack>("library_add_track_alias", {
+    trackId,
+    title,
+    language: language ?? null,
+  });
+
+export const libraryRemoveTrackAlias = (trackId: string, aliasId: string) =>
+  invoke<MergedTrack>("library_remove_track_alias", { trackId, aliasId });
+
+export const librarySetPrimaryTrackAlias = (trackId: string, aliasId: string) =>
+  invoke<MergedTrack>("library_set_primary_track_alias", { trackId, aliasId });
 
 /**
  * Upload a cover image (album) / image (artist) from a locally-picked file

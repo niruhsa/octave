@@ -166,6 +166,17 @@ pub struct AlbumAlias {
     pub created_at: OffsetDateTime,
 }
 
+/// One known spelling of a track title (see [`AlbumAlias`]).
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct TrackAlias {
+    pub id: Uuid,
+    pub track_id: Uuid,
+    pub title: String,
+    pub language: Option<String>,
+    pub is_primary: bool,
+    pub created_at: OffsetDateTime,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct Playlist {
     pub id: Uuid,
@@ -390,6 +401,14 @@ pub struct NewArtistAlias {
 #[derive(Debug, Clone)]
 pub struct NewAlbumAlias {
     pub album_id: Uuid,
+    pub title: String,
+    pub language: Option<String>,
+    pub is_primary: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewTrackAlias {
+    pub track_id: Uuid,
     pub title: String,
     pub language: Option<String>,
     pub is_primary: bool,
