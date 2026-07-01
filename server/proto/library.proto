@@ -56,6 +56,8 @@ service LibraryService {
   rpc SetAlbumType(SetAlbumTypeRequest) returns (Album);
   // Toggle a track's single-release flag in place.
   rpc SetTrackSingleRelease(SetSingleReleaseRequest) returns (Track);
+  // Toggle a track's explicit flag in place (recomputes the album rollup).
+  rpc SetTrackExplicit(SetExplicitRequest) returns (Track);
   // Artist alias editing. Each returns the refreshed Artist.
   rpc ListArtistAliases(GetArtistRequest) returns (ListAliasesResponse);
   rpc AddArtistAlias(AddArtistAliasRequest) returns (Artist);
@@ -115,6 +117,8 @@ message Album {
   int64 storage_bytes = 9;
   // Classification: "album" | "ep" | "single".
   string album_type = 10;
+  // True when any track on this album is explicit (denormalized rollup).
+  bool is_explicit = 11;
 }
 
 message Track {
@@ -139,6 +143,8 @@ message Track {
   int32 channels = 18;
   // Alternate title spellings (populated on single-entity reads only).
   repeated AliasInfo aliases = 19;
+  // Explicit content flag (independent of the title text).
+  bool is_explicit = 20;
 }
 
 // The library-storage breakdown (homepage widget). `misc` shown in the UI is
@@ -305,6 +311,11 @@ message MoveTrackRequest {
 message SetSingleReleaseRequest {
   string track_id = 1;
   bool single_release = 2;
+}
+
+message SetExplicitRequest {
+  string track_id = 1;
+  bool explicit = 2;
 }
 
 message SetAlbumTypeRequest {

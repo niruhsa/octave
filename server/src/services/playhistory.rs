@@ -341,6 +341,7 @@ mod tests {
                 channels: None,
                 metadata_json: "{}".into(),
                 is_single_release: false,
+                is_explicit: false,
                 created_at: now(),
                 updated_at: now(),
             };
@@ -388,6 +389,9 @@ mod tests {
             Ok(None)
         }
         async fn set_single_release(&self, _: Uuid, _: bool) -> Result<Option<Track>> {
+            Ok(None)
+        }
+        async fn set_explicit(&self, _: Uuid, _: bool) -> Result<Option<Track>> {
             Ok(None)
         }
         async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>> {

@@ -796,6 +796,7 @@ fn stub_track(track_id: &str) -> MergedTrack {
         channels: None,
         local_file_path: None,
         is_single_release: false,
+        is_explicit: false,
         aliases: Vec::new(),
         downloaded: false,
     }

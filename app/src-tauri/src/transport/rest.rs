@@ -644,6 +644,29 @@ impl RestClient {
         Ok(body.into())
     }
 
+    pub async fn set_track_explicit(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        explicit: bool,
+    ) -> AppResult<Track> {
+        let url = format!("{}/tracks/{track_id}/explicit", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "explicit": explicit }))
+            .send()
+            .await
+            .map_err(rest_err("set_track_explicit"))?;
+        let body: TrackJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_track_explicit decode"))?;
+        Ok(body.into())
+    }
+
     pub async fn set_album_type(
         &self,
         cred: &Credential,
@@ -2256,6 +2279,8 @@ struct AlbumJson {
     release_year: Option<i64>,
     #[serde(default = "super::default_album_type")]
     album_type: String,
+    #[serde(default)]
+    is_explicit: bool,
     cover_path: Option<String>,
     #[serde(default)]
     aliases: Vec<AliasJson>,
@@ -2270,6 +2295,7 @@ impl From<AlbumJson> for Album {
             title: a.title,
             release_year: a.release_year,
             album_type: a.album_type,
+            is_explicit: a.is_explicit,
             cover_path: a.cover_path,
             aliases: a.aliases.into_iter().map(Into::into).collect(),
             storage_bytes: a.storage_bytes,
@@ -2300,6 +2326,8 @@ struct TrackJson {
     #[serde(default)]
     is_single_release: bool,
     #[serde(default)]
+    is_explicit: bool,
+    #[serde(default)]
     aliases: Vec<AliasJson>,
 }
 impl From<TrackJson> for Track {
@@ -2321,6 +2349,7 @@ impl From<TrackJson> for Track {
             channels: t.channels,
             metadata_json: t.metadata_json,
             is_single_release: t.is_single_release,
+            is_explicit: t.is_explicit,
             aliases: t.aliases.into_iter().map(Into::into).collect(),
         }
     }

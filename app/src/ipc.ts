@@ -192,6 +192,8 @@ export type MergedAlbum = {
   title: string;
   release_year: number | null;
   album_type: AlbumType;
+  /** True when any track on this album is explicit. */
+  is_explicit: boolean;
   cover_path: string | null;
   local_cover_path: string | null;
   /** Every known title spelling. See `MergedArtist.aliases`. */
@@ -220,6 +222,8 @@ export type MergedTrack = {
   local_file_path: string | null;
   /** `true` when this track is a single release within its album. */
   is_single_release: boolean;
+  /** `true` when this track is explicit (independent of the title text). */
+  is_explicit: boolean;
   /** Every known title spelling (populated on single-track reads only). */
   aliases: AliasInfo[];
   downloaded: boolean;
@@ -386,6 +390,10 @@ export const libraryMoveTrack = (
 
 export const librarySetTrackSingleRelease = (trackId: string, singleRelease: boolean) =>
   invoke<MergedTrack>("library_set_track_single_release", { trackId, singleRelease });
+
+/** Toggle a track's explicit flag; the album's explicit rollup recomputes server-side. */
+export const librarySetTrackExplicit = (trackId: string, explicit: boolean) =>
+  invoke<MergedTrack>("library_set_track_explicit", { trackId, explicit });
 
 /** Set an album's classification. When setting `single`, pass `singleTrackId`
  * to flag the main single (required unless the album already has one). */

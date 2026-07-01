@@ -238,6 +238,16 @@ pub async fn library_set_track_single_release(
 }
 
 #[tauri::command]
+pub async fn library_set_track_explicit(
+    state: State<'_, AppStateHandle>,
+    track_id: String,
+    explicit: bool,
+) -> AppResult<MergedTrack> {
+    let svc = service(&state).await?;
+    svc.set_track_explicit(&track_id, explicit).await
+}
+
+#[tauri::command]
 pub async fn library_set_album_type(
     state: State<'_, AppStateHandle>,
     album_id: String,

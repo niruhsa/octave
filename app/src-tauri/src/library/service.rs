@@ -539,6 +539,15 @@ impl<'a> LibraryService<'a> {
         self.to_merged_track(t).await
     }
 
+    pub async fn set_track_explicit(
+        &self,
+        track_id: &str,
+        explicit: bool,
+    ) -> AppResult<MergedTrack> {
+        let t = self.auth.set_track_explicit(track_id, explicit).await?;
+        self.to_merged_track(t).await
+    }
+
     pub async fn set_album_type(
         &self,
         album_id: &str,

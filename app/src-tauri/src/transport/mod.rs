@@ -103,6 +103,9 @@ pub struct Album {
     /// Classification: `album` | `ep` | `single`.
     #[serde(default = "default_album_type")]
     pub album_type: String,
+    /// True when any track on this album is explicit.
+    #[serde(default)]
+    pub is_explicit: bool,
     pub cover_path: Option<String>,
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
@@ -141,6 +144,9 @@ pub struct Track {
     /// `true` when this track is a single release within its album.
     #[serde(default)]
     pub is_single_release: bool,
+    /// `true` when this track is explicit (independent of the title text).
+    #[serde(default)]
+    pub is_explicit: bool,
     /// Alternate title spellings (populated on single-entity reads only).
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,

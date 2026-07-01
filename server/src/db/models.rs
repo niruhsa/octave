@@ -105,6 +105,9 @@ pub struct Album {
     /// One of `album` / `ep` / `single`. A `single` album always has at least
     /// one track flagged `is_single_release` (enforced in `LibraryService`).
     pub album_type: String,
+    /// `true` when any track on this album is explicit (denormalized rollup,
+    /// recomputed by `LibraryService`).
+    pub is_explicit: bool,
     pub cover_path: Option<String>,
     /// Sum of the on-disk bytes of every track on this album.
     pub storage_bytes: i64,
@@ -136,6 +139,8 @@ pub struct Track {
     /// `true` when this track is a "single release" within its album — e.g.
     /// it was moved in from a one-track single album via `move_track`.
     pub is_single_release: bool,
+    /// `true` when this track is explicit (independent of the title text).
+    pub is_explicit: bool,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }

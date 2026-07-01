@@ -640,6 +640,15 @@ impl AuthManager {
         self.server.set_track_single_release(&cred, track_id, single_release).await
     }
 
+    pub async fn set_track_explicit(
+        &self,
+        track_id: &str,
+        explicit: bool,
+    ) -> AppResult<Track> {
+        let cred = self.credential().await?;
+        self.server.set_track_explicit(&cred, track_id, explicit).await
+    }
+
     pub async fn set_album_type(
         &self,
         album_id: &str,

@@ -49,6 +49,7 @@ pub fn router() -> Router<RestState> {
         .route("/tracks/:id/metadata", patch(edit_track_metadata))
         .route("/tracks/:id/move", post(move_track))
         .route("/tracks/:id/single-release", post(set_track_single_release))
+        .route("/tracks/:id/explicit", post(set_track_explicit))
         .route("/tracks/:id/aliases", get(list_track_aliases).post(add_track_alias))
         .route("/tracks/:id/aliases/:alias_id", delete(remove_track_alias))
         .route("/tracks/:id/primary-alias", put(set_primary_track_alias))
@@ -142,6 +143,8 @@ pub struct AlbumDto {
     pub release_year: Option<i32>,
     /// Classification: `album` | `ep` | `single`.
     pub album_type: String,
+    /// True when any track on this album is explicit.
+    pub is_explicit: bool,
     pub cover_path: Option<String>,
     pub aliases: Vec<AliasDto>,
     /// Sum of the on-disk bytes of every track on this album.
@@ -154,6 +157,7 @@ fn album_dto(a: m::Album) -> AlbumDto {
         title: a.title,
         release_year: a.release_year,
         album_type: a.album_type,
+        is_explicit: a.is_explicit,
         cover_path: a.cover_path,
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
@@ -178,6 +182,7 @@ pub struct TrackDto {
     pub channels: Option<i32>,
     pub metadata_json: String,
     pub is_single_release: bool,
+    pub is_explicit: bool,
     #[serde(default)]
     pub aliases: Vec<AliasDto>,
 }
@@ -199,6 +204,7 @@ fn track_dto(t: m::Track) -> TrackDto {
         channels: t.channels,
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        is_explicit: t.is_explicit,
         aliases: Vec::new(),
     }
 }
@@ -791,6 +797,25 @@ async fn set_track_single_release(
     let t = state
         .library
         .set_track_single_release(&caller, track_id, body.single_release)
+        .await?;
+    Ok(Json(track_dto(t)))
+}
+
+#[derive(Deserialize)]
+pub struct ExplicitBody {
+    pub explicit: bool,
+}
+
+async fn set_track_explicit(
+    State(state): State<RestState>,
+    Path(track_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<TrackDto>, ApiError> {
+    let caller = id(&req)?;
+    let body: ExplicitBody = crate::rest::parse_json(req).await?;
+    let t = state
+        .library
+        .set_track_explicit(&caller, track_id, body.explicit)
         .await?;
     Ok(Json(track_dto(t)))
 }

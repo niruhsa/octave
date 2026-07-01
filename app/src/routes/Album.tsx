@@ -15,6 +15,7 @@ import {
   libraryMergeAlbums,
   libraryMoveTrack,
   librarySetAlbumType,
+  librarySetTrackExplicit,
   librarySetTrackSingleRelease,
 } from "../ipc";
 import { Cover } from "../components/Cover";
@@ -143,6 +144,19 @@ export default function Album() {
     try {
       await librarySetTrackSingleRelease(track.id, !track.is_single_release);
       await qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] });
+      broadcastInvalidate(["library"]);
+    } catch (e) {
+      alert(formatError(e));
+    }
+  }
+  async function toggleExplicit(track: MergedTrack) {
+    try {
+      await librarySetTrackExplicit(track.id, !track.is_explicit);
+      // Invalidate the album too — its explicit rollup recomputes server-side.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["library", "tracks-by-album", id] }),
+        qc.invalidateQueries({ queryKey: ["library", "album", id] }),
+      ]);
       broadcastInvalidate(["library"]);
     } catch (e) {
       alert(formatError(e));
@@ -301,8 +315,18 @@ export default function Album() {
           )}
         </div>
         <div className="flex min-w-0 flex-col">
-          <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">
-            {(ALBUM_TYPES.find((t) => t.value === (album?.album_type ?? "album"))?.label ?? "Album").toUpperCase()}
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-[11px] tracking-[0.16em] text-oct-accent">
+              {(ALBUM_TYPES.find((t) => t.value === (album?.album_type ?? "album"))?.label ?? "Album").toUpperCase()}
+            </span>
+            {album?.is_explicit && (
+              <span
+                className="rounded-sm bg-oct-subtle/25 px-1 py-px font-mono text-[9px] font-semibold tracking-wide text-oct-muted"
+                title="Contains explicit content"
+              >
+                E
+              </span>
+            )}
           </span>
           <h1 className="mt-1.5 text-3xl font-semibold tracking-tight sm:text-[34px]">{title}</h1>
           <p className="mt-2 flex flex-wrap items-center gap-x-2 text-[13px] text-oct-subtle">
@@ -479,6 +503,14 @@ export default function Album() {
                             SINGLE
                           </span>
                         )}
+                        {t.is_explicit && (
+                          <span
+                            className="shrink-0 rounded-sm bg-oct-subtle/25 px-1 py-px font-mono text-[9px] font-semibold tracking-wide text-oct-muted"
+                            title="Explicit content"
+                          >
+                            E
+                          </span>
+                        )}
                         <DownloadStatus trackId={t.id} downloaded={t.downloaded} pending={batchActive} />
                       </span>
                       {artistName && (
@@ -528,6 +560,13 @@ export default function Album() {
                             className={`text-[15px] leading-none disabled:opacity-30 ${t.is_single_release ? "text-oct-accent hover:text-oct-accent-bright" : "text-oct-dim hover:text-oct-text"}`}
                           >
                             {t.is_single_release ? "★" : "☆"}
+                          </button>
+                          <button
+                            onClick={() => void toggleExplicit(t)}
+                            {...offlineAttrs(online, false, t.is_explicit ? "Unmark explicit" : "Mark as explicit")}
+                            className={`font-mono text-[11px] font-semibold leading-none disabled:opacity-30 ${t.is_explicit ? "text-oct-text" : "text-oct-dim hover:text-oct-text"}`}
+                          >
+                            E
                           </button>
                           <button
                             onClick={() => {
@@ -636,6 +675,7 @@ export default function Album() {
             edit: () => { setSheetTrack(null); setEditTracks([sheetTrack]); },
             move: () => { setSheetTrack(null); setMoveAsSingle(sheetTrack.is_single_release); setMoveTrack(sheetTrack); },
             toggleSingle: () => { setSheetTrack(null); void toggleSingle(sheetTrack); },
+            toggleExplicit: () => { setSheetTrack(null); void toggleExplicit(sheetTrack); },
             del: () => { setSheetTrack(null); void delTrack(sheetTrack); },
             addToPlaylist: () => { setSheetTrack(null); setAddToPlaylist(sheetTrack); },
             info: () => { const t = sheetTrack; setSheetTrack(null); setInfoTrack(t); },
@@ -683,6 +723,7 @@ type SheetActions = {
   removeDownload: () => void;
   edit: () => void;
   toggleSingle: () => void;
+  toggleExplicit: () => void;
   move: () => void;
   del: () => void;
   addToPlaylist: () => void;
@@ -732,6 +773,12 @@ function TrackActionSheet({
             icon={<span className="text-[14px] leading-none">{track.is_single_release ? "★" : "☆"}</span>}
             label={track.is_single_release ? "Unmark single release" : "Mark as single release"}
             onClick={actions.toggleSingle}
+            disabled={!online}
+          />
+          <SheetItem
+            icon={<span className="font-mono text-[13px] font-semibold leading-none">E</span>}
+            label={track.is_explicit ? "Unmark explicit" : "Mark as explicit"}
+            onClick={actions.toggleExplicit}
             disabled={!online}
           />
           <SheetItem icon={<TrashIcon size={16} />} label="Delete from server" onClick={actions.del} disabled={!online} danger />

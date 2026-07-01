@@ -130,6 +130,7 @@ fn album_to_pb(a: m::Album) -> pb::Album {
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
         album_type: a.album_type,
+        is_explicit: a.is_explicit,
     }
 }
 fn track_to_pb(t: m::Track) -> pb::Track {
@@ -153,6 +154,7 @@ fn track_to_pb(t: m::Track) -> pb::Track {
         bit_depth: t.bit_depth.unwrap_or(0),
         channels: t.channels.unwrap_or(0),
         aliases: Vec::new(),
+        is_explicit: t.is_explicit,
     }
 }
 fn library_storage_to_pb(s: m::LibraryStorage) -> pb::LibraryStorage {
@@ -593,6 +595,20 @@ impl pb::library_service_server::LibraryService for LibraryServer {
         let t = self
             .library
             .set_track_single_release(&caller, track_id, b.single_release)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(track_to_pb(t)))
+    }
+    async fn set_track_explicit(
+        &self,
+        req: Request<pb::SetExplicitRequest>,
+    ) -> Result<Response<pb::Track>, Status> {
+        let caller = self.caller(&req).await?;
+        let b = req.into_inner();
+        let track_id = parse_uuid(&b.track_id, "track")?;
+        let t = self
+            .library
+            .set_track_explicit(&caller, track_id, b.explicit)
             .await
             .map_err(map_err)?;
         Ok(Response::new(track_to_pb(t)))

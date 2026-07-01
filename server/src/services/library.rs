@@ -529,7 +529,11 @@ impl LibraryService {
                 self.prune_empty_dirs(parent);
             }
         }
+        let album_id = before_ref.album_id;
         self.tracks.delete(id).await?;
+        // Deleting a track can drop the album's last explicit song → recompute
+        // the rollup (harmless when the album is itself being cascade-deleted).
+        self.albums.recompute_explicit(album_id).await?;
         self.audit(caller, "track.delete", "track", Some(id), before.as_ref(), None::<&()>)
             .await?;
         Ok(true)
@@ -655,6 +659,9 @@ impl LibraryService {
             .await?;
         self.albums.delete(duplicate_id).await?;
 
+        // The duplicate's tracks now belong to the survivor → its explicit
+        // rollup may have gained an explicit song.
+        self.albums.recompute_explicit(survivor_id).await?;
         self.recompute_album_display(survivor_id).await?;
         let after = self
             .albums
@@ -696,6 +703,14 @@ impl LibraryService {
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
         self.audit(caller, "track.move", "track", Some(track_id), Some(&before), Some(&after))
             .await?;
+
+        // The moved track carries its explicit flag across, so both albums'
+        // rollups may change (source may lose its only explicit track; target
+        // may gain one).
+        self.albums.recompute_explicit(target_album_id).await?;
+        if source_album_id != target_album_id {
+            self.albums.recompute_explicit(source_album_id).await?;
+        }
 
         // Prune a now-empty source album (best-effort; the leftover "single").
         if source_album_id != target_album_id
@@ -748,6 +763,32 @@ impl LibraryService {
             .set_single_release(track_id, single_release)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    /// Toggle a track's explicit flag (independent of the title). Audited.
+    /// Manager+. Recomputes the album's `is_explicit` rollup so a song becoming
+    /// (or no longer being) explicit flips the album label accordingly.
+    pub async fn set_track_explicit(
+        &self,
+        caller: &Identity,
+        track_id: Uuid,
+        explicit: bool,
+    ) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .tracks
+            .get(track_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        let after = self
+            .tracks
+            .set_explicit(track_id, explicit)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
+        self.albums.recompute_explicit(after.album_id).await?;
         self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
             .await?;
         Ok(after)

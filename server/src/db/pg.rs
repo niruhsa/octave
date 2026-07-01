@@ -269,7 +269,7 @@ impl AlbumRepo for PgRepos {
         sqlx::query_as::<_, Album>(
             r#"INSERT INTO albums (artist_id, title, release_year, cover_path)
                VALUES ($1, $2, $3, $4)
-               RETURNING id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                          created_at, updated_at"#,
         )
         .bind(new.artist_id)
@@ -283,7 +283,7 @@ impl AlbumRepo for PgRepos {
 
     async fn get(&self, id: Uuid) -> Result<Option<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                        created_at, updated_at
                FROM albums WHERE id = $1"#,
         )
@@ -295,7 +295,7 @@ impl AlbumRepo for PgRepos {
 
     async fn list_by_artist(&self, artist_id: Uuid) -> Result<Vec<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                        created_at, updated_at
                FROM albums WHERE artist_id = $1
                ORDER BY release_year NULLS LAST, title"#,
@@ -308,7 +308,7 @@ impl AlbumRepo for PgRepos {
 
     async fn recent(&self, limit: i64) -> Result<Vec<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                        created_at, updated_at
                FROM albums ORDER BY created_at DESC LIMIT $1"#,
         )
@@ -321,7 +321,7 @@ impl AlbumRepo for PgRepos {
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Album>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                        created_at, updated_at
                FROM albums
                WHERE title ILIKE $1
@@ -347,7 +347,7 @@ impl AlbumRepo for PgRepos {
             r#"UPDATE albums
                SET title = $2, release_year = $3, cover_path = $4, updated_at = now()
                WHERE id = $1
-               RETURNING id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                          created_at, updated_at"#,
         )
         .bind(id)
@@ -364,7 +364,7 @@ impl AlbumRepo for PgRepos {
             r#"UPDATE albums
                SET album_type = $2, updated_at = now()
                WHERE id = $1
-               RETURNING id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                          created_at, updated_at"#,
         )
         .bind(id)
@@ -374,13 +374,29 @@ impl AlbumRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn recompute_explicit(&self, album_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE albums
+               SET is_explicit = EXISTS (
+                       SELECT 1 FROM tracks WHERE album_id = $1 AND is_explicit
+                   ),
+                   updated_at = now()
+               WHERE id = $1"#,
+        )
+        .bind(album_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
     async fn find_by_artist_and_title(
         &self,
         artist_id: Uuid,
         title: &str,
     ) -> Result<Option<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                        created_at, updated_at
                FROM albums WHERE artist_id = $1 AND title = $2 LIMIT 1"#,
         )
@@ -437,7 +453,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(new.album_id)
         .bind(new.artist_id)
@@ -463,7 +479,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at
+                         is_single_release, is_explicit, created_at, updated_at
                FROM tracks WHERE id = $1"#,
         )
         .bind(id)
@@ -477,7 +493,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at
+                         is_single_release, is_explicit, created_at, updated_at
                FROM tracks WHERE album_id = $1
                ORDER BY disc_no NULLS FIRST, track_no NULLS LAST, title"#,
         )
@@ -493,7 +509,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at
+                         is_single_release, is_explicit, created_at, updated_at
                FROM tracks
                WHERE title ILIKE $1
                ORDER BY title
@@ -523,7 +539,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(id)
         .bind(title)
@@ -540,7 +556,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at
+                         is_single_release, is_explicit, created_at, updated_at
                FROM tracks WHERE file_path = $1 LIMIT 1"#,
         )
         .bind(file_path)
@@ -575,7 +591,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(id)
         .bind(duration_ms)
@@ -603,7 +619,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(id)
         .bind(codec)
@@ -645,7 +661,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(id)
         .bind(album_id)
@@ -662,7 +678,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(id)
         .bind(file_path)
@@ -679,10 +695,27 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, created_at, updated_at"#,
+                         is_single_release, is_explicit, created_at, updated_at"#,
         )
         .bind(id)
         .bind(is_single_release)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_explicit(&self, id: Uuid, is_explicit: bool) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET is_explicit = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, is_explicit, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(is_explicit)
         .fetch_optional(&self.pool)
         .await
         .map_err(db)

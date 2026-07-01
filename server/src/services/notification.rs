@@ -858,6 +858,7 @@ mod tests {
             title: title.to_string(),
             release_year: Some(2026),
             album_type: "album".into(),
+            is_explicit: false,
             cover_path: None,
             storage_bytes: 0,
             created_at: now(),

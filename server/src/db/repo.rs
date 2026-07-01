@@ -58,6 +58,9 @@ pub trait AlbumRepo: Send + Sync {
     /// Set the album's classification (`album` / `ep` / `single`). The caller
     /// (service layer) validates the value + the single-song invariant.
     async fn set_album_type(&self, id: Uuid, album_type: &str) -> Result<Option<Album>>;
+    /// Recompute the album's `is_explicit` rollup from its tracks (true when any
+    /// track on the album is explicit). Idempotent.
+    async fn recompute_explicit(&self, album_id: Uuid) -> Result<()>;
     async fn find_by_artist_and_title(
         &self,
         artist_id: Uuid,
@@ -107,6 +110,8 @@ pub trait TrackRepo: Send + Sync {
     }
     /// Set (or clear) the single-release flag on a track. Returns the updated row.
     async fn set_single_release(&self, id: Uuid, is_single_release: bool) -> Result<Option<Track>>;
+    /// Set (or clear) the explicit flag on a track. Returns the updated row.
+    async fn set_explicit(&self, id: Uuid, is_explicit: bool) -> Result<Option<Track>>;
     /// Return every track's (id, file_path, duration_ms) for bulk rescan.
     async fn list_all_ids_paths(&self) -> Result<Vec<TrackIdPath>>;
     /// Overwrite the duration of a single track.  Returns the updated row.

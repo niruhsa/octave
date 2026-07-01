@@ -90,6 +90,16 @@ This file owns the **client's** status and detail. When client work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Explicit flag (client).** A song can be flagged explicit from its track-row menu (mirroring the
+single-release ★ toggle) on the [Album](./src/routes/Album.tsx) route — an `E` toggle in the hover
+toolbar + the long-press action sheet — and an `EXPLICIT`/`E` badge renders on the row and the album
+hero. Toggling invalidates the album query too, so the hero badge reflects the server-recomputed rollup.
+- **Transport/merged/command/ipc:** `is_explicit` on transport `Track`/`Album` → `MergedTrack`/`MergedAlbum`
+  (`from_cache` = `false`); `set_track_explicit` (gRPC-primary/REST-fallback) → `library_set_track_explicit`
+  command; [`ipc.ts`](./src/ipc.ts) `is_explicit` on both types + `librarySetTrackExplicit`. Bearer Manager+,
+  online only.
+- `npx tsc --noEmit` + `npm run build` + host `cargo test` (**53** lib) + `cargo clippy` clean.
+
 **Track title aliases (client).** Managers add/remove/choose alternate spellings of a track title
 from inside the single-track **Edit-metadata modal** ([MetadataEditor.tsx](./src/components/MetadataEditor.tsx)) —
 the reusable [Aliases](./src/components/Aliases.tsx) "Also known as" strip gains a `"track"` kind. The

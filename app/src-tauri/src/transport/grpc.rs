@@ -25,7 +25,7 @@ use super::proto::library::{
     GetLibraryStorageRequest, GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest,
     ListTracksByAlbumRequest,
     MergeRequest, MoveTrackRequest, Pagination, RemoveAliasRequest, SearchRequest,
-    SetAlbumTypeRequest, SetPrimaryAliasRequest, SetSingleReleaseRequest,
+    SetAlbumTypeRequest, SetExplicitRequest, SetPrimaryAliasRequest, SetSingleReleaseRequest,
 };
 use super::proto::playlist::playlist_service_client::PlaylistServiceClient;
 use super::proto::playlist::{
@@ -629,6 +629,26 @@ impl GrpcClient {
             .set_track_single_release(req)
             .await
             .map_err(map_mutation_err("set_track_single_release"))?
+            .into_inner();
+        Ok(track_from_proto(resp))
+    }
+
+    pub async fn set_track_explicit(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        explicit: bool,
+    ) -> AppResult<Track> {
+        let mut req = Request::new(SetExplicitRequest {
+            track_id: track_id.to_string(),
+            explicit,
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .library()
+            .set_track_explicit(req)
+            .await
+            .map_err(map_mutation_err("set_track_explicit"))?
             .into_inner();
         Ok(track_from_proto(resp))
     }
@@ -2150,6 +2170,7 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         title: a.title,
         release_year: opt_i32(a.release_year),
         album_type: normalize_album_type(a.album_type),
+        is_explicit: a.is_explicit,
         cover_path: opt_str(a.cover_path),
         aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
         storage_bytes: a.storage_bytes,
@@ -2336,6 +2357,7 @@ fn track_from_proto(t: super::proto::library::Track) -> Track {
         channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        is_explicit: t.is_explicit,
         aliases: t.aliases.into_iter().map(alias_from_proto).collect(),
     }
 }
@@ -2359,6 +2381,7 @@ fn album_from_fav(a: fpb::FavAlbum) -> Album {
         release_year: opt_i32(a.release_year),
         // The favorites shelf proto carries no classification.
         album_type: "album".to_string(),
+        is_explicit: false,
         cover_path: opt_str(a.cover_path),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
@@ -2383,6 +2406,7 @@ fn track_from_fav(t: fpb::FavTrack) -> Track {
         channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        is_explicit: false,
         aliases: Vec::new(),
     }
 }
@@ -2395,6 +2419,7 @@ fn album_from_disc(a: dpb::DiscAlbum) -> Album {
         release_year: opt_i32(a.release_year),
         // The discover shelf proto carries no classification.
         album_type: "album".to_string(),
+        is_explicit: false,
         cover_path: opt_str(a.cover_path),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
@@ -2419,6 +2444,7 @@ fn track_from_disc(t: dpb::DiscTrack) -> Track {
         channels: opt_i32(t.channels),
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        is_explicit: false,
         aliases: Vec::new(),
     }
 }

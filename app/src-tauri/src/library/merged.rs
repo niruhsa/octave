@@ -54,6 +54,9 @@ pub struct MergedAlbum {
     /// Classification: `album` | `ep` | `single`.
     #[serde(default = "default_album_type")]
     pub album_type: String,
+    /// True when any track on this album is explicit.
+    #[serde(default)]
+    pub is_explicit: bool,
     /// Server-side cover (might be `None`).
     pub cover_path: Option<String>,
     /// Local on-disk cover (from `album_art` table) when present.
@@ -93,6 +96,9 @@ pub struct MergedTrack {
     /// `true` when this track is a single release within its album.
     #[serde(default)]
     pub is_single_release: bool,
+    /// `true` when this track is explicit (independent of the title text).
+    #[serde(default)]
+    pub is_explicit: bool,
     /// Every known title spelling (populated on single-track reads only).
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
@@ -136,6 +142,7 @@ impl MergedAlbum {
             title: a.title,
             release_year: a.release_year,
             album_type: a.album_type,
+            is_explicit: a.is_explicit,
             cover_path: a.cover_path,
             local_cover_path,
             aliases: a.aliases,
@@ -152,6 +159,8 @@ impl MergedAlbum {
             release_year: a.release_year,
             // The offline cache doesn't store the album type.
             album_type: default_album_type(),
+            // The offline cache doesn't track the explicit rollup.
+            is_explicit: false,
             cover_path: None,
             local_cover_path: art.map(|x| x.local_cover_path),
             aliases: Vec::new(),
@@ -181,6 +190,7 @@ impl MergedTrack {
             channels: t.channels,
             local_file_path,
             is_single_release: t.is_single_release,
+            is_explicit: t.is_explicit,
             aliases: t.aliases,
             downloaded,
         }
@@ -208,6 +218,8 @@ impl MergedTrack {
             local_file_path: Some(t.local_file_path),
             // The offline cache doesn't track the single-release flag.
             is_single_release: false,
+            // The offline cache doesn't track the explicit flag.
+            is_explicit: false,
             // The offline cache doesn't store title aliases.
             aliases: Vec::new(),
             downloaded: true,

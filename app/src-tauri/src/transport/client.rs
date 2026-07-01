@@ -498,6 +498,22 @@ impl ServerClient {
         self.rest.set_track_single_release(cred, track_id, single_release).await
     }
 
+    pub async fn set_track_explicit(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        explicit: bool,
+    ) -> AppResult<Track> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_track_explicit(cred, track_id, explicit).await {
+                Ok(t) => return Ok(t),
+                Err(e) if is_transport_error(&e) => fallback_log("set_track_explicit", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_track_explicit(cred, track_id, explicit).await
+    }
+
     pub async fn set_album_type(
         &self,
         cred: &Credential,

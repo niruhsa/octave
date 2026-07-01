@@ -115,6 +115,21 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Explicit flag — per-track, with an album rollup.** A song can be marked explicit independently of
+its title, and an album is labeled explicit when any of its tracks is.
+- **Schema** (migration [`20270401000000_track_explicit.sql`](./migrations/20270401000000_track_explicit.sql)):
+  `tracks.is_explicit` + `albums.is_explicit`, backfilling tracks whose title carries a
+  bracketed/parenthesized explicit marker (`~* '[\[(]\s*explicit\s*[\])]'`) then deriving each album's flag.
+- **Model/repo** ([`db/models.rs`](./src/db/models.rs) `Track.is_explicit`/`Album.is_explicit`;
+  [`db/repo.rs`](./src/db/repo.rs)/[`db/pg.rs`](./src/db/pg.rs)): `is_explicit` in every track + album
+  SELECT/RETURNING; `TrackRepo::set_explicit` + `AlbumRepo::recompute_explicit` (`UPDATE … EXISTS`).
+- **Service** ([`services/library.rs`](./src/services/library.rs)): `set_track_explicit` (Manager+, audited
+  `track.update`) sets the flag then recomputes the album rollup; `recompute_explicit` is also called from
+  `move_track` (both albums), `delete_track`, and `merge_albums` (survivor), so the rollup never drifts.
+- **Transports** ([`proto/library.proto`](./proto/library.proto) `Track.is_explicit=20`/`Album.is_explicit=11`
+  + `SetTrackExplicit`; [`grpc/library_svc.rs`](./src/grpc/library_svc.rs) + [`rest/library.rs`](./src/rest/library.rs)):
+  `POST /tracks/:id/explicit`; `is_explicit` on `TrackDto`/`AlbumDto` + mappers.
+
 **Track title aliases (alternate spellings per language).** Mirrors artist/album aliases onto
 individual tracks: every known spelling of a track title, with the displayed `tracks.title`
 following `PRIMARY_LANGUAGE`.

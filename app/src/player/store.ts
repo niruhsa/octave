@@ -60,6 +60,7 @@ export function episodeToQueueItem(ep: MergedEpisode): QueueItem {
     channels: null,
     local_file_path: ep.local_file_path,
     is_single_release: false,
+    is_explicit: false,
     aliases: [],
     downloaded: ep.downloaded,
     mediaKind: "episode",
@@ -93,6 +94,7 @@ export function serverTrackToQueueItem(t: FavoriteTrack): QueueItem {
     channels: t.channels,
     local_file_path: null,
     is_single_release: t.is_single_release,
+    is_explicit: false,
     aliases: [],
     downloaded: false,
   };

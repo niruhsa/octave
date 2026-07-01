@@ -363,6 +363,13 @@ mod tests {
         ) -> crate::error::Result<Option<crate::db::models::Track>> {
             Ok(None)
         }
+        async fn set_explicit(
+            &self,
+            _: Uuid,
+            _: bool,
+        ) -> crate::error::Result<Option<crate::db::models::Track>> {
+            Ok(None)
+        }
     }
 
     fn svc(root: Option<PathBuf>) -> StreamingService {

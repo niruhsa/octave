@@ -245,6 +245,7 @@ pub fn run() {
             commands::library_commands::library_merge_albums,
             commands::library_commands::library_move_track,
             commands::library_commands::library_set_track_single_release,
+            commands::library_commands::library_set_track_explicit,
             commands::library_commands::library_set_album_type,
             commands::library_commands::library_add_artist_alias,
             commands::library_commands::library_remove_artist_alias,
