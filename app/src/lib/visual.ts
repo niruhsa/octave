@@ -56,10 +56,11 @@ export function sampleRateKHz(hz: number | null | undefined): string | null {
 }
 
 /**
- * Mono quality readout. For lossless formats we show the studio-style
- * bit-depth/sample-rate pair when known (e.g. "Lossless · 24/96"); for lossy
- * formats we show codec + bitrate (e.g. "MP3 320k"). Falls back gracefully
- * when the probe didn't report the finer detail.
+ * Mono quality readout. For lossless formats the studio-style bit-depth/
+ * sample-rate pair (e.g. "24/96") already conveys lossless quality, so we
+ * show it bare — no "Lossless ·" prefix, which only overflows the column.
+ * For lossy formats we show codec + bitrate (e.g. "MP3 320k"). Falls back
+ * gracefully when the probe didn't report the finer detail.
  */
 export function qualityLabel(
   track: Pick<MergedTrack, "codec" | "bitrate_kbps"> &
@@ -68,8 +69,8 @@ export function qualityLabel(
   const codec = (track.codec || "").toUpperCase();
   const khz = sampleRateKHz(track.sample_rate_hz);
   if (isLossless(codec)) {
-    if (track.bit_depth && khz) return `Lossless · ${track.bit_depth}/${khz}`;
-    if (khz) return `Lossless · ${khz}kHz`;
+    if (track.bit_depth && khz) return `${track.bit_depth}/${khz}`;
+    if (khz) return `${khz}kHz`;
     return "Lossless";
   }
   if (track.bitrate_kbps) return `${codec} ${track.bitrate_kbps}k`.trim();

@@ -364,7 +364,7 @@ export default function Album() {
             <p className="text-sm text-oct-subtle">No tracks.</p>
           ) : (
             <>
-              <div className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 border-b border-oct-border px-2 pb-2.5 font-mono text-[10.5px] tracking-[0.1em] text-oct-faint sm:grid-cols-[28px_minmax(0,1fr)_110px_56px]">
+              <div className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 border-b border-oct-border px-2 pb-2.5 font-mono text-[10.5px] tracking-[0.1em] text-oct-faint sm:grid-cols-[28px_minmax(0,1fr)_110px_64px]">
                 <span>#</span>
                 <span>TITLE</span>
                 <span className="hidden sm:block">QUALITY</span>
@@ -390,7 +390,7 @@ export default function Album() {
                     }}
                     onTouchMove={cancelPress}
                     onContextMenu={(e) => e.preventDefault()}
-                    className={`group grid cursor-pointer select-none grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] sm:grid-cols-[28px_minmax(0,1fr)_110px_56px] ${
+                    className={`group relative grid cursor-pointer select-none grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-4 rounded-lg px-2 py-2.5 text-[13.5px] sm:grid-cols-[28px_minmax(0,1fr)_110px_64px] ${
                       active ? "bg-oct-elevated" : "hover:bg-oct-elevated/50"
                     }`}
                   >
@@ -423,60 +423,62 @@ export default function Album() {
                     <span className="hidden font-mono text-[11px] text-oct-subtle sm:block">
                       {qualityLabel(t)}
                     </span>
-                    <span className="flex items-center justify-end gap-2">
+                    <span className="flex items-center justify-end gap-2.5">
                       <FavoriteButton kind="track" id={t.id} size={15} />
-                      <span
-                        className="hidden items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 sm:flex"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          onClick={() => void startTrackRadio(t)}
-                          {...offlineAttrs(online, false, "Start a radio that sounds like this track")}
-                          className="text-oct-dim hover:text-oct-text disabled:opacity-30"
-                        >
-                          <RadioIcon size={14} />
-                        </button>
-                        {t.downloaded ? (
-                          <button onClick={() => void removeTrack(t)} title="Remove download" className="text-oct-accent hover:text-oct-accent-bright">
-                            <DownloadIcon size={14} />
-                          </button>
-                        ) : (
-                          <button onClick={() => void dlTrack(t)} {...offlineAttrs(online, false, "Download")} className="text-oct-dim hover:text-oct-text disabled:opacity-30">
-                            <DownloadIcon size={14} />
-                          </button>
-                        )}
-                        <button onClick={() => setInfoTrack(t)} title="Media information" className="text-oct-dim hover:text-oct-text">
-                          <InfoIcon size={14} />
-                        </button>
-                        {isManager && (
-                          <>
-                            <EditMetaButton online={online} onClick={() => setEditTracks([t])} />
-                            <button
-                              onClick={() => void toggleSingle(t)}
-                              {...offlineAttrs(online, false, t.is_single_release ? "Unmark single release" : "Mark as single release")}
-                              className={`disabled:opacity-30 ${t.is_single_release ? "text-oct-accent hover:text-oct-accent-bright" : "text-oct-dim hover:text-oct-text"}`}
-                            >
-                              {t.is_single_release ? "★" : "☆"}
-                            </button>
-                            <button
-                              onClick={() => {
-                                setMoveAsSingle(t.is_single_release);
-                                setMoveTrack(t);
-                              }}
-                              {...offlineAttrs(online, false, "Move to another album")}
-                              className="text-oct-dim hover:text-oct-text disabled:opacity-30"
-                            >
-                              <DiscIcon size={14} />
-                            </button>
-                            <button onClick={() => void delTrack(t)} {...offlineAttrs(online, false, "Delete from server")} className="text-oct-dim hover:text-oct-danger disabled:opacity-30">
-                              <TrashIcon size={14} />
-                            </button>
-                          </>
-                        )}
-                      </span>
                       <span className="w-9 text-right font-mono text-[11px] text-oct-subtle">
                         {formatDuration(t.duration_ms)}
                       </span>
+                    </span>
+                    {/* floating action toolbar — lifted out of the narrow last
+                        column so the icons have room and never crowd TIME */}
+                    <span
+                      className="pointer-events-none absolute right-[76px] top-1/2 z-10 hidden -translate-y-1/2 items-center gap-2 rounded-lg border border-oct-border bg-oct-elevated px-2.5 py-1.5 opacity-0 shadow-[0_8px_24px_-10px_rgba(0,0,0,0.7)] transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 sm:flex"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        onClick={() => void startTrackRadio(t)}
+                        {...offlineAttrs(online, false, "Start a radio that sounds like this track")}
+                        className="text-oct-dim hover:text-oct-text disabled:opacity-30"
+                      >
+                        <RadioIcon size={15} />
+                      </button>
+                      {t.downloaded ? (
+                        <button onClick={() => void removeTrack(t)} title="Remove download" className="text-oct-accent hover:text-oct-accent-bright">
+                          <DownloadIcon size={15} />
+                        </button>
+                      ) : (
+                        <button onClick={() => void dlTrack(t)} {...offlineAttrs(online, false, "Download")} className="text-oct-dim hover:text-oct-text disabled:opacity-30">
+                          <DownloadIcon size={15} />
+                        </button>
+                      )}
+                      <button onClick={() => setInfoTrack(t)} title="Media information" className="text-oct-dim hover:text-oct-text">
+                        <InfoIcon size={15} />
+                      </button>
+                      {isManager && (
+                        <>
+                          <EditMetaButton online={online} onClick={() => setEditTracks([t])} />
+                          <button
+                            onClick={() => void toggleSingle(t)}
+                            {...offlineAttrs(online, false, t.is_single_release ? "Unmark single release" : "Mark as single release")}
+                            className={`text-[15px] leading-none disabled:opacity-30 ${t.is_single_release ? "text-oct-accent hover:text-oct-accent-bright" : "text-oct-dim hover:text-oct-text"}`}
+                          >
+                            {t.is_single_release ? "★" : "☆"}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setMoveAsSingle(t.is_single_release);
+                              setMoveTrack(t);
+                            }}
+                            {...offlineAttrs(online, false, "Move to another album")}
+                            className="text-oct-dim hover:text-oct-text disabled:opacity-30"
+                          >
+                            <DiscIcon size={15} />
+                          </button>
+                          <button onClick={() => void delTrack(t)} {...offlineAttrs(online, false, "Delete from server")} className="text-oct-dim hover:text-oct-danger disabled:opacity-30">
+                            <TrashIcon size={15} />
+                          </button>
+                        </>
+                      )}
                     </span>
                   </div>
                 );
