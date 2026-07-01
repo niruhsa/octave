@@ -94,6 +94,14 @@ pub trait TrackRepo: Send + Sync {
     /// Move a single track to `album_id` (the "single release" move). Returns
     /// the updated row.
     async fn set_album(&self, id: Uuid, album_id: Uuid) -> Result<Option<Track>>;
+    /// Overwrite a track's `file_path` after the backing file has been moved on
+    /// disk (artist library-language relocation). Returns the updated row.
+    ///
+    /// Default impl is a no-op returning `Ok(None)` so in-memory test fakes that
+    /// never relocate compile unchanged; the Postgres repo overrides it.
+    async fn update_file_path(&self, _id: Uuid, _file_path: &str) -> Result<Option<Track>> {
+        Ok(None)
+    }
     /// Set (or clear) the single-release flag on a track. Returns the updated row.
     async fn set_single_release(&self, id: Uuid, is_single_release: bool) -> Result<Option<Track>>;
     /// Return every track's (id, file_path, duration_ms) for bulk rescan.

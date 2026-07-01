@@ -12,10 +12,12 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, FingerprintStatus,
+    Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
+    FingerprintStatus,
     ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
     Podcast,
-    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerClient, ServerConfig,
+    PodcastCandidate, PodcastEpisode, RefreshReport, RelocateReport, RescanReport, ServerClient,
+    ServerConfig,
     Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
@@ -597,6 +599,26 @@ impl AuthManager {
     pub async fn merge_albums(&self, survivor_id: &str, duplicate_id: &str) -> AppResult<Album> {
         let cred = self.credential().await?;
         self.server.merge_albums(&cred, survivor_id, duplicate_id).await
+    }
+
+    pub async fn list_artist_library_paths(
+        &self,
+        artist_id: &str,
+    ) -> AppResult<ArtistStoragePaths> {
+        let cred = self.credential().await?;
+        self.server.list_artist_library_paths(&cred, artist_id).await
+    }
+
+    pub async fn set_artist_language(
+        &self,
+        artist_id: &str,
+        target_language: &str,
+        target_folder: Option<&str>,
+    ) -> AppResult<RelocateReport> {
+        let cred = self.credential().await?;
+        self.server
+            .set_artist_language(&cred, artist_id, target_language, target_folder)
+            .await
     }
 
     pub async fn move_track(

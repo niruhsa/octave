@@ -240,6 +240,8 @@ pub fn run() {
             commands::library_commands::library_get_album,
             // merge + aliases (Phase 10 — Manager+ gated server-side)
             commands::library_commands::library_merge_artists,
+            commands::library_commands::library_list_artist_library_paths,
+            commands::library_commands::library_set_artist_language,
             commands::library_commands::library_merge_albums,
             commands::library_commands::library_move_track,
             commands::library_commands::library_set_track_single_release,

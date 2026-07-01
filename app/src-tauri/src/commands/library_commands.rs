@@ -13,7 +13,9 @@ use crate::auth::AuthManager;
 use crate::error::{AppError, AppResult};
 use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::library::service::LibraryService;
-use crate::transport::{LibraryStorage, MetadataEdit, RescanReport};
+use crate::transport::{
+    ArtistStoragePaths, LibraryStorage, MetadataEdit, RelocateReport, RescanReport,
+};
 use crate::AppStateHandle;
 
 /// Server default page sizes mirror the server's cap (200) / default (50).
@@ -181,6 +183,27 @@ pub async fn library_merge_artists(
 ) -> AppResult<MergedArtist> {
     let svc = service(&state).await?;
     svc.merge_artists(&survivor_id, &duplicate_id).await
+}
+
+#[tauri::command]
+pub async fn library_list_artist_library_paths(
+    state: State<'_, AppStateHandle>,
+    artist_id: String,
+) -> AppResult<ArtistStoragePaths> {
+    let svc = service(&state).await?;
+    svc.list_artist_library_paths(&artist_id).await
+}
+
+#[tauri::command]
+pub async fn library_set_artist_language(
+    state: State<'_, AppStateHandle>,
+    artist_id: String,
+    target_language: String,
+    target_folder: Option<String>,
+) -> AppResult<RelocateReport> {
+    let svc = service(&state).await?;
+    svc.set_artist_language(&artist_id, &target_language, target_folder.as_deref())
+        .await
 }
 
 #[tauri::command]

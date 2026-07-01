@@ -25,6 +25,8 @@ pub fn router() -> Router<RestState> {
         .route("/artists/:id/albums", get(list_albums_by_artist))
         .route("/artists/:id/image", get(serve_artist_image).post(upload_artist_image))
         .route("/artists/:id/merge", post(merge_artists))
+        .route("/artists/:id/library-paths", get(list_artist_library_paths))
+        .route("/artists/:id/library-language", post(set_artist_language))
         .route("/artists/:id/aliases", get(list_artist_aliases).post(add_artist_alias))
         .route("/artists/:id/aliases/:alias_id", delete(remove_artist_alias))
         .route("/artists/:id/primary-alias", put(set_primary_artist_alias))
@@ -667,6 +669,45 @@ async fn merge_artists(
         .merge_artists(&caller, survivor_id, body.duplicate_id)
         .await?;
     Ok(Json(artist_dto_full(&state, &caller, a).await?))
+}
+
+async fn list_artist_library_paths(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<crate::services::library::ArtistStoragePaths>, ApiError> {
+    let caller = id(&req)?;
+    let paths = state
+        .library
+        .list_artist_library_paths(&caller, artist_id)
+        .await?;
+    Ok(Json(paths))
+}
+
+#[derive(Deserialize)]
+pub struct SetLanguageBody {
+    pub target_language: String,
+    #[serde(default)]
+    pub target_folder: Option<String>,
+}
+
+async fn set_artist_language(
+    State(state): State<RestState>,
+    Path(artist_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<crate::services::library::RelocateReport>, ApiError> {
+    let caller = id(&req)?;
+    let body: SetLanguageBody = crate::rest::parse_json(req).await?;
+    let report = state
+        .library
+        .set_artist_language(
+            &caller,
+            artist_id,
+            &body.target_language,
+            body.target_folder.as_deref(),
+        )
+        .await?;
+    Ok(Json(report))
 }
 
 async fn merge_albums(

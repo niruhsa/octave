@@ -639,6 +639,23 @@ impl TrackRepo for PgRepos {
         .map_err(db)
     }
 
+    async fn update_file_path(&self, id: Uuid, file_path: &str) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET file_path = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(file_path)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
     async fn set_single_release(&self, id: Uuid, is_single_release: bool) -> Result<Option<Track>> {
         sqlx::query_as::<_, Track>(
             r#"UPDATE tracks

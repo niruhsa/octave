@@ -5,7 +5,7 @@
 //! - Mutations: `Manager+`. Every mutation writes an [`audit_log`] row.
 //! - Pagination is capped (`MAX_PAGE_LIMIT`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -20,6 +20,7 @@ use crate::db::models::{
 use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, AuditRepo, FollowRepo, TrackRepo};
 use crate::error::{AppError, Result};
 use crate::services::notification::NotificationService;
+use crate::services::organizer::sanitize;
 use crate::services::tag;
 
 const MAX_PAGE_LIMIT: i64 = 200;
@@ -1021,6 +1022,290 @@ impl LibraryService {
     }
 
     // -----------------------------------------------------------------------
+    // Library storage location (per-artist language folder)
+    // -----------------------------------------------------------------------
+
+    /// List the distinct on-disk `<Language>/<Artist>` directories an artist's
+    /// tracks currently live under, plus the language folders present in the
+    /// library (so the UI can offer "known + existing" targets).
+    ///
+    /// An artist ends up with more than one entry when its tracks were ingested
+    /// under different language tags / name spellings (e.g. `English/aespa` and
+    /// `Korean/에스파`). User+ (read).
+    pub async fn list_artist_library_paths(
+        &self,
+        caller: &Identity,
+        artist_id: Uuid,
+    ) -> Result<ArtistStoragePaths> {
+        caller.require(PermissionLevel::User)?;
+        // Validate the artist exists for a clean 404.
+        if self.artists.get(artist_id).await?.is_none() {
+            return Err(AppError::NotFound(format!("artist {artist_id}")));
+        }
+        let Some(root) = &self.library_root else {
+            // No library root configured — nothing to enumerate.
+            return Ok(ArtistStoragePaths::default());
+        };
+
+        let tracks = self.artist_tracks(artist_id).await?;
+        let mut paths: Vec<ArtistLibraryPath> = Vec::new();
+        for t in &tracks {
+            let Some(rel) = relative_to_root(&t.file_path, root) else {
+                continue;
+            };
+            let Some((language, artist_folder)) = lang_artist_of(&rel) else {
+                continue;
+            };
+            let relative_dir = format!("{language}/{artist_folder}");
+            let bytes = t.file_size.unwrap_or(0);
+            if let Some(g) = paths.iter_mut().find(|g| g.relative_dir == relative_dir) {
+                g.track_count += 1;
+                g.storage_bytes += bytes;
+            } else {
+                paths.push(ArtistLibraryPath {
+                    language,
+                    artist_folder,
+                    relative_dir,
+                    track_count: 1,
+                    storage_bytes: bytes,
+                });
+            }
+        }
+        paths.sort_by(|a, b| a.relative_dir.cmp(&b.relative_dir));
+
+        Ok(ArtistStoragePaths {
+            paths,
+            library_languages: top_level_dirs(root),
+        })
+    }
+
+    /// Move **all** of an artist's tracks so they live under a single
+    /// `<target_language>/<target_folder>` directory, physically relocating the
+    /// files, updating each `file_path`, carrying album covers/sidecars along,
+    /// and pruning the emptied source folders.
+    ///
+    /// `target_folder` (the on-disk artist-folder spelling) is resolved when
+    /// omitted: an existing folder already in `target_language` wins (merge into
+    /// it), else an alias declared in that language, else the artist's most
+    /// common current folder. Storage-only — the display name/aliases are left
+    /// untouched. Manager+, audited (`artist.relocate`).
+    pub async fn set_artist_language(
+        &self,
+        caller: &Identity,
+        artist_id: Uuid,
+        target_language: &str,
+        target_folder: Option<&str>,
+    ) -> Result<RelocateReport> {
+        caller.require(PermissionLevel::Manager)?;
+        if target_language.trim().is_empty() {
+            return Err(AppError::InvalidArgument("target_language is required".into()));
+        }
+        let root = self
+            .library_root
+            .clone()
+            .ok_or_else(|| AppError::Config("LIBRARY_PATH is not set".into()))?;
+        let artist = self
+            .artists
+            .get(artist_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("artist {artist_id}")))?;
+
+        let target_lang = sanitize(target_language);
+        let albums = self.albums.list_by_artist(artist_id).await?;
+        let mut tracks = Vec::new();
+        for al in &albums {
+            tracks.extend(self.tracks.list_by_album(al.id).await?);
+        }
+
+        // Resolve the destination artist-folder spelling.
+        let target_folder = match target_folder {
+            Some(f) if !f.trim().is_empty() => sanitize(f),
+            _ => self
+                .resolve_target_folder(&tracks, &root, &target_lang, &artist)
+                .await,
+        };
+        let target_relative_dir = format!("{target_lang}/{target_folder}");
+
+        // 1. Move every track file into the target dir, updating file_path.
+        let mut report = RelocateReport {
+            target_relative_dir: target_relative_dir.clone(),
+            ..Default::default()
+        };
+        let mut source_album_dirs: Vec<PathBuf> = Vec::new();
+        let mut source_prefixes: Vec<String> = Vec::new();
+        for t in &tracks {
+            let Some(rel) = relative_to_root(&t.file_path, &root) else {
+                report.skipped += 1;
+                continue;
+            };
+            if let Some((lang, folder)) = lang_artist_of(&rel) {
+                let prefix = format!("{lang}/{folder}");
+                if !source_prefixes.contains(&prefix) {
+                    source_prefixes.push(prefix);
+                }
+            }
+            let Some(new_rel) = retarget(&rel, &target_lang, &target_folder) else {
+                report.skipped += 1;
+                continue;
+            };
+            let src_abs = resolve_abs(&t.file_path, &root);
+            let dst_abs = root.join(&new_rel);
+            if dst_abs == src_abs {
+                report.skipped += 1;
+                continue;
+            }
+            match move_file(&src_abs, &dst_abs) {
+                Ok(MoveOutcome::Moved) | Ok(MoveOutcome::AlreadyPresent) => {
+                    self.tracks
+                        .update_file_path(t.id, &dst_abs.to_string_lossy())
+                        .await?;
+                    report.moved += 1;
+                    if let Some(parent) = src_abs.parent() {
+                        let parent = parent.to_path_buf();
+                        if !source_album_dirs.contains(&parent) {
+                            source_album_dirs.push(parent);
+                        }
+                    }
+                }
+                Ok(MoveOutcome::Conflict) => {
+                    warn!(
+                        track = %t.id,
+                        src = %src_abs.display(),
+                        dst = %dst_abs.display(),
+                        "relocate: destination exists with different content, skipping"
+                    );
+                    report.skipped += 1;
+                }
+                Ok(MoveOutcome::Missing) => {
+                    report.skipped += 1;
+                }
+                Err(e) => {
+                    warn!(track = %t.id, error = %e, "relocate: file move failed");
+                    report.skipped += 1;
+                }
+            }
+        }
+
+        // 2. Sweep any leftover files (cover.jpg, artwork, logs) from each
+        //    source album dir into the matching destination album dir so
+        //    nothing is orphaned before pruning.
+        for src_dir in &source_album_dirs {
+            let Some(basename) = src_dir.file_name() else {
+                continue;
+            };
+            let dst_dir = root.join(&target_lang).join(&target_folder).join(basename);
+            if dst_dir == *src_dir {
+                continue;
+            }
+            move_leftover_files(src_dir, &dst_dir);
+        }
+
+        // 3. Re-point album covers that lived under an old prefix at their new
+        //    on-disk location (only when the moved file actually exists).
+        for al in &albums {
+            let Some(cover) = &al.cover_path else { continue };
+            let Some(rel) = relative_to_root(cover, &root) else {
+                continue;
+            };
+            let Some(new_rel) = retarget(&rel, &target_lang, &target_folder) else {
+                continue;
+            };
+            let new_abs = root.join(&new_rel);
+            if new_abs == resolve_abs(cover, &root) || !new_abs.is_file() {
+                continue;
+            }
+            if let Err(e) = self
+                .albums
+                .update(al.id, &al.title, al.release_year, Some(&new_abs.to_string_lossy()))
+                .await
+            {
+                warn!(album = %al.id, error = %e, "relocate: cover_path update failed");
+            }
+        }
+
+        // 4. Prune the now-empty source folders (album → artist → language),
+        //    deleting e.g. `English/aespa` so no dangling folder remains.
+        for src_dir in &source_album_dirs {
+            self.prune_empty_dirs(src_dir);
+        }
+
+        // Audit the move (before = source dirs, after = target dir).
+        let before = serde_json::json!({ "sources": source_prefixes });
+        let after = serde_json::json!({
+            "target": target_relative_dir,
+            "moved": report.moved,
+            "skipped": report.skipped,
+        });
+        self.audit(caller, "artist.relocate", "artist", Some(artist_id), Some(&before), Some(&after))
+            .await?;
+
+        // File sizes are unchanged by a move, so storage aggregates need no
+        // recompute.
+        Ok(report)
+    }
+
+    /// Every track of an artist, gathered across all their albums (reuses the
+    /// existing per-album listing so no new repo method is needed).
+    async fn artist_tracks(&self, artist_id: Uuid) -> Result<Vec<Track>> {
+        let albums = self.albums.list_by_artist(artist_id).await?;
+        let mut tracks = Vec::new();
+        for al in &albums {
+            tracks.extend(self.tracks.list_by_album(al.id).await?);
+        }
+        Ok(tracks)
+    }
+
+    /// Resolve the destination artist-folder spelling for a relocation when the
+    /// caller didn't pin one. Precedence: an existing folder already in the
+    /// target language → an alias declared in that language → the most common
+    /// current folder → the artist's display name.
+    async fn resolve_target_folder(
+        &self,
+        tracks: &[Track],
+        root: &Path,
+        target_lang: &str,
+        artist: &Artist,
+    ) -> String {
+        // 1. Existing folder already under the target language.
+        let mut folder_counts: Vec<(String, usize)> = Vec::new();
+        for t in tracks {
+            let Some(rel) = relative_to_root(&t.file_path, root) else {
+                continue;
+            };
+            let Some((lang, folder)) = lang_artist_of(&rel) else {
+                continue;
+            };
+            if lang.eq_ignore_ascii_case(target_lang) {
+                return folder;
+            }
+            if let Some(e) = folder_counts.iter_mut().find(|(k, _)| *k == folder) {
+                e.1 += 1;
+            } else {
+                folder_counts.push((folder, 1));
+            }
+        }
+        // 2. An alias declared in (or inferred to be) the target language.
+        let target_norm = tag::normalize_language(target_lang);
+        if let Ok(aliases) = self.aliases.list_artist_aliases(artist.id).await {
+            if let Some(a) = aliases.iter().find(|a| {
+                let lang = match &a.language {
+                    Some(s) if !s.trim().is_empty() => tag::normalize_language(s),
+                    _ => tag::infer_language(&a.name),
+                };
+                lang == target_norm
+            }) {
+                return sanitize(&a.name);
+            }
+        }
+        // 3. Most common current folder, else the display name.
+        folder_counts
+            .into_iter()
+            .max_by_key(|(_, n)| *n)
+            .map(|(f, _)| f)
+            .unwrap_or_else(|| sanitize(&artist.name))
+    }
+
+    // -----------------------------------------------------------------------
     // On-disk cleanup
     // -----------------------------------------------------------------------
 
@@ -1157,9 +1442,234 @@ fn pick_primary_index(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Artist library-storage DTOs + path helpers
+// ---------------------------------------------------------------------------
+
+/// One distinct `<Language>/<Artist>` directory an artist's tracks live under.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtistLibraryPath {
+    /// Top-level language folder (first path component), e.g. `"English"`.
+    pub language: String,
+    /// Artist folder spelling (second path component), e.g. `"aespa"`.
+    pub artist_folder: String,
+    /// `"<language>/<artist_folder>"` — the group key shown to the user.
+    pub relative_dir: String,
+    /// Number of the artist's tracks under this directory.
+    pub track_count: u64,
+    /// Sum of those tracks' on-disk bytes.
+    pub storage_bytes: i64,
+}
+
+/// Result of [`LibraryService::list_artist_library_paths`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ArtistStoragePaths {
+    /// Distinct directories the artist currently occupies (a length > 1 is the
+    /// "split across languages" warning the UI surfaces).
+    pub paths: Vec<ArtistLibraryPath>,
+    /// Language folders that already exist at the top of the library, so the UI
+    /// can offer them alongside a known-language list.
+    pub library_languages: Vec<String>,
+}
+
+/// Result of [`LibraryService::set_artist_language`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RelocateReport {
+    /// Tracks whose file was moved (or already present at the target).
+    pub moved: u64,
+    /// Tracks skipped (already at target, unresolvable path, or a conflict).
+    pub skipped: u64,
+    /// `"<language>/<artist_folder>"` the artist now lives under.
+    pub target_relative_dir: String,
+}
+
+/// Outcome of a single file move (see [`move_file`]).
+enum MoveOutcome {
+    /// The file was physically moved.
+    Moved,
+    /// An identical file already existed at the destination (source removed).
+    AlreadyPresent,
+    /// A *different* file exists at the destination — left untouched.
+    Conflict,
+    /// Neither source nor destination exists.
+    Missing,
+}
+
+/// Strip `root` from a stored `file_path`, yielding the library-relative path.
+/// Handles both absolute (the ingest default) and already-relative values.
+fn relative_to_root(file_path: &str, root: &Path) -> Option<PathBuf> {
+    let p = Path::new(file_path);
+    if p.is_absolute() {
+        p.strip_prefix(root).ok().map(Path::to_path_buf)
+    } else {
+        Some(p.to_path_buf())
+    }
+}
+
+/// Resolve a stored `file_path` to an absolute path against `root`.
+fn resolve_abs(file_path: &str, root: &Path) -> PathBuf {
+    let p = Path::new(file_path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    }
+}
+
+/// Extract `(language, artist_folder)` from a library-relative track path.
+/// Requires at least three components (`<lang>/<artist>/<album…>/<file>`).
+fn lang_artist_of(rel: &Path) -> Option<(String, String)> {
+    let mut it = rel.components();
+    let language = it.next()?.as_os_str().to_str()?.to_string();
+    let artist = it.next()?.as_os_str().to_str()?.to_string();
+    it.next()?; // ensure there's a track/album component beyond the artist dir
+    Some((language, artist))
+}
+
+/// Rewrite a library-relative path so its first two components become
+/// `<target_language>/<target_folder>`, preserving the album+file suffix.
+/// Returns `None` when the path has fewer than three components.
+fn retarget(rel: &Path, target_language: &str, target_folder: &str) -> Option<PathBuf> {
+    let comps: Vec<_> = rel.components().collect();
+    if comps.len() < 3 {
+        return None;
+    }
+    let mut out = PathBuf::from(target_language);
+    out.push(target_folder);
+    for c in &comps[2..] {
+        out.push(c.as_os_str());
+    }
+    Some(out)
+}
+
+/// Immediate sub-directory names of `root` (the existing language folders).
+fn top_level_dirs(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                && let Some(name) = entry.file_name().to_str()
+                && !name.starts_with('.')
+            {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Move `src` to `dst`, creating parent dirs and falling back to copy+remove
+/// across filesystems. Never overwrites a differing destination file.
+fn move_file(src: &Path, dst: &Path) -> std::io::Result<MoveOutcome> {
+    let src_exists = src.exists();
+    let dst_exists = dst.exists();
+    if !src_exists {
+        return Ok(if dst_exists {
+            MoveOutcome::AlreadyPresent
+        } else {
+            MoveOutcome::Missing
+        });
+    }
+    if dst_exists {
+        let s = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+        let d = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(u64::MAX);
+        if s == d {
+            // Identical file already there — drop the redundant source copy.
+            std::fs::remove_file(src)?;
+            return Ok(MoveOutcome::AlreadyPresent);
+        }
+        return Ok(MoveOutcome::Conflict);
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(MoveOutcome::Moved),
+        Err(_) => {
+            // Cross-device rename fails on Windows/Unix alike — copy then remove.
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)?;
+            Ok(MoveOutcome::Moved)
+        }
+    }
+}
+
+/// Move every plain file remaining in `src_dir` into `dst_dir` (covers, stray
+/// artwork, logs) so the album folder can be pruned cleanly. Best-effort.
+fn move_leftover_files(src_dir: &Path, dst_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(src_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name() else { continue };
+        let dst = dst_dir.join(name);
+        if let Err(e) = move_file(&path, &dst) {
+            warn!(
+                src = %path.display(),
+                dst = %dst.display(),
+                error = %e,
+                "relocate: leftover file move failed"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{pick_primary_index, resolve_language};
+    use super::{lang_artist_of, pick_primary_index, relative_to_root, resolve_language, retarget};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn relative_to_root_handles_absolute_and_relative() {
+        // Use temp_dir() as the base so the "absolute" arm is genuinely
+        // absolute on both Windows (drive-letter) and Unix.
+        let root = std::env::temp_dir().join("octave-relroot-test");
+        let abs = root.join("English/aespa/Album/01.flac");
+        assert_eq!(
+            relative_to_root(&abs.to_string_lossy(), &root),
+            Some(PathBuf::from("English/aespa/Album/01.flac"))
+        );
+        // Already relative → returned as-is.
+        assert_eq!(
+            relative_to_root("Korean/에스파/Album/01.flac", &root),
+            Some(PathBuf::from("Korean/에스파/Album/01.flac"))
+        );
+        // Absolute but outside the root → None (can't reorganize).
+        let outside = std::env::temp_dir().join("octave-other/x/y/z.flac");
+        assert_eq!(relative_to_root(&outside.to_string_lossy(), &root), None);
+    }
+
+    #[test]
+    fn lang_artist_of_needs_three_components() {
+        assert_eq!(
+            lang_artist_of(Path::new("English/aespa/Album/01.flac")),
+            Some(("English".into(), "aespa".into()))
+        );
+        // lang/artist/file (no album) still counts — three components.
+        assert_eq!(
+            lang_artist_of(Path::new("Korean/에스파/track.flac")),
+            Some(("Korean".into(), "에스파".into()))
+        );
+        // Only two components → not a real track path.
+        assert_eq!(lang_artist_of(Path::new("English/aespa")), None);
+    }
+
+    #[test]
+    fn retarget_replaces_language_and_artist_keeps_suffix() {
+        let rel = Path::new("English/aespa/Armageddon/01 - Supernova.flac");
+        assert_eq!(
+            retarget(rel, "Korean", "에스파"),
+            Some(PathBuf::from("Korean/에스파/Armageddon/01 - Supernova.flac"))
+        );
+        // Fewer than three components → nothing to retarget.
+        assert_eq!(retarget(Path::new("English/aespa"), "Korean", "에스파"), None);
+    }
+
 
     fn cand(name: &str, lang: Option<&str>) -> (String, Option<String>) {
         (name.to_string(), lang.map(str::to_string))

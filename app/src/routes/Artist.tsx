@@ -18,6 +18,7 @@ import { Cover } from "../components/Cover";
 import { BlurUpImage } from "../components/BlurUpImage";
 import { ImageUploader } from "../components/ImageUploader";
 import { Aliases } from "../components/Aliases";
+import { LibraryLocation } from "../components/LibraryLocation";
 import { EntityPicker } from "../components/EntityPicker";
 import { SavedBadge, SourceBadge, StreamBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
@@ -197,6 +198,10 @@ export default function Artist() {
           onChanged={refreshArtist}
         />
       )}
+
+      {/* Storage location — warn + consolidate when files are split across
+          multiple language folders (manager relocation controls inside). */}
+      <LibraryLocation artistId={id} online={online} isManager={isManager} onChanged={refreshArtist} />
 
       {/* actions (manager) */}
       {isManager && (

@@ -10,9 +10,10 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
+    Album, ArchiveUploadResult, Artist, ArtistStat, ArtistStoragePaths, ChunkAck, Credential,
+    DiscoverSection,
     EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, PermissionTier,
-    PlayEvent,
+    PlayEvent, RelocateReport,
     PlayHistoryPage, PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig, SingleUploadResult,
     Track, TrackStat, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
@@ -525,6 +526,52 @@ impl RestClient {
             .await
             .map_err(rest_err("merge_artists decode"))?;
         Ok(body.into())
+    }
+
+    pub async fn list_artist_library_paths(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<ArtistStoragePaths> {
+        let url = format!("{}/artists/{artist_id}/library-paths", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_artist_library_paths"))?;
+        check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_artist_library_paths decode"))
+    }
+
+    pub async fn set_artist_language(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        target_language: &str,
+        target_folder: Option<&str>,
+    ) -> AppResult<RelocateReport> {
+        let url = format!("{}/artists/{artist_id}/library-language", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({
+                "target_language": target_language,
+                "target_folder": target_folder,
+            }))
+            .send()
+            .await
+            .map_err(rest_err("set_artist_language"))?;
+        check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_artist_language decode"))
     }
 
     pub async fn merge_albums(

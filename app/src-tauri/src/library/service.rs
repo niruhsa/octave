@@ -499,6 +499,27 @@ impl<'a> LibraryService<'a> {
         self.to_merged_album(a).await
     }
 
+    /// List the on-disk `<Language>/<Artist>` directories an artist occupies,
+    /// plus the library's existing language folders.
+    pub async fn list_artist_library_paths(
+        &self,
+        artist_id: &str,
+    ) -> AppResult<crate::transport::ArtistStoragePaths> {
+        self.auth.list_artist_library_paths(artist_id).await
+    }
+
+    /// Move all of an artist's tracks under a single language folder.
+    pub async fn set_artist_language(
+        &self,
+        artist_id: &str,
+        target_language: &str,
+        target_folder: Option<&str>,
+    ) -> AppResult<crate::transport::RelocateReport> {
+        self.auth
+            .set_artist_language(artist_id, target_language, target_folder)
+            .await
+    }
+
     pub async fn move_track(
         &self,
         track_id: &str,

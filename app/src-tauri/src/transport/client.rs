@@ -11,11 +11,13 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    Album, Artist, ChunkAck, Credential, DiscoverSection, EpisodeProgress, FingerprintStatus,
+    Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
+    FingerprintStatus,
     LibraryStorage, ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
     PlayInput,
     Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport,
-    RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter,
+    RelocateReport, RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest,
+    UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
 use crate::error::{AppError, AppResult};
@@ -421,6 +423,30 @@ impl ServerClient {
             }
         }
         self.rest.merge_artists(cred, survivor_id, duplicate_id).await
+    }
+
+    /// List an artist's on-disk `<Language>/<Artist>` directories. REST-only
+    /// (no gRPC surface yet).
+    pub async fn list_artist_library_paths(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<ArtistStoragePaths> {
+        self.rest.list_artist_library_paths(cred, artist_id).await
+    }
+
+    /// Move all of an artist's tracks under a single language folder. REST-only
+    /// (no gRPC surface yet).
+    pub async fn set_artist_language(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        target_language: &str,
+        target_folder: Option<&str>,
+    ) -> AppResult<RelocateReport> {
+        self.rest
+            .set_artist_language(cred, artist_id, target_language, target_folder)
+            .await
     }
 
     pub async fn merge_albums(

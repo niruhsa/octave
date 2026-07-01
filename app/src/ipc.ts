@@ -317,6 +317,57 @@ export const libraryEditTrackMetadata = (id: string, edit: MetadataEdit) =>
 export const libraryMergeArtists = (survivorId: string, duplicateId: string) =>
   invoke<MergedArtist>("library_merge_artists", { survivorId, duplicateId });
 
+// ---------------------------------------------------------------------------
+// Artist storage location (per-artist language folder)
+//
+// An artist's tracks can end up split across several `<Language>/<Artist>`
+// folders on disk (different language tags / spellings at ingest). These let a
+// manager see the split and consolidate every track under one language folder.
+// ---------------------------------------------------------------------------
+
+/** One distinct `<Language>/<Artist>` directory an artist occupies on disk. */
+export type ArtistLibraryPath = {
+  language: string;
+  artist_folder: string;
+  /** `"<language>/<artist_folder>"` — the group key shown to the user. */
+  relative_dir: string;
+  track_count: number;
+  storage_bytes: number;
+};
+
+export type ArtistStoragePaths = {
+  paths: ArtistLibraryPath[];
+  /** Language folders already present at the top of the library. */
+  library_languages: string[];
+};
+
+export type RelocateReport = {
+  moved: number;
+  skipped: number;
+  target_relative_dir: string;
+};
+
+/** List the on-disk language/artist folders an artist occupies (server-only). */
+export const libraryListArtistLibraryPaths = (id: string) =>
+  invoke<ArtistStoragePaths>("library_list_artist_library_paths", { artistId: id });
+
+/**
+ * Move all of an artist's tracks under a single `<targetLanguage>/…` folder.
+ * `targetFolder` pins the on-disk artist-folder spelling; omit it to let the
+ * server resolve one (existing folder in that language → alias in that language
+ * → current folder). Manager+ gated server-side.
+ */
+export const librarySetArtistLanguage = (
+  id: string,
+  targetLanguage: string,
+  targetFolder?: string,
+) =>
+  invoke<RelocateReport>("library_set_artist_language", {
+    artistId: id,
+    targetLanguage,
+    targetFolder: targetFolder ?? null,
+  });
+
 export const libraryMergeAlbums = (survivorId: string, duplicateId: string) =>
   invoke<MergedAlbum>("library_merge_albums", { survivorId, duplicateId });
 

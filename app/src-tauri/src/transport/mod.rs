@@ -60,6 +60,38 @@ pub struct Artist {
     pub storage_bytes: i64,
 }
 
+/// One distinct `<Language>/<Artist>` directory an artist's tracks live under
+/// on the server's disk (artist storage-language consolidation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistLibraryPath {
+    pub language: String,
+    pub artist_folder: String,
+    pub relative_dir: String,
+    pub track_count: u64,
+    pub storage_bytes: i64,
+}
+
+/// Response of the artist library-paths query: the directories the artist
+/// occupies plus the language folders already present in the library.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStoragePaths {
+    #[serde(default)]
+    pub paths: Vec<ArtistLibraryPath>,
+    #[serde(default)]
+    pub library_languages: Vec<String>,
+}
+
+/// Result of relocating an artist into a single language folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelocateReport {
+    #[serde(default)]
+    pub moved: u64,
+    #[serde(default)]
+    pub skipped: u64,
+    #[serde(default)]
+    pub target_relative_dir: String,
+}
+
 /// Server's view of an album. `cover_path` is server-relative — not yet
 /// a local file; downloads land in Phase 6.
 #[derive(Debug, Clone, Serialize, Deserialize)]
