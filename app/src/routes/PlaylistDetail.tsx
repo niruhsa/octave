@@ -16,6 +16,8 @@ import {
   playlistReorderTrack,
   type FavoriteTrack,
   type MergedPlaylistEntry,
+  type MergedTrack,
+  type PlaylistDetailView,
 } from "../ipc";
 import { DownloadedDot, SourceBadge } from "../components/SourceBadge";
 import { DownloadStatus } from "../components/DownloadStatus";
@@ -34,6 +36,8 @@ import {
 import { formatDuration } from "../lib/format";
 import { formatError } from "../lib/error";
 import { gradientFor } from "../lib/visual";
+import { trackMetaLine } from "../lib/trackMeta";
+import { useTrackNames } from "../lib/useTrackNames";
 import { serverTrackToQueueItem, usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
 import { useAppStore } from "../store";
@@ -98,6 +102,13 @@ export default function PlaylistDetail() {
     broadcastInvalidate(["playlists", "detail", id]);
     return qc.invalidateQueries({ queryKey: ["playlists", "detail", id] });
   }
+  // Add/remove/reorder return the already-refreshed detail view, so write it
+  // straight into the cache — the list updates instantly with no refetch round
+  // trip. Other windows still get nudged to re-read.
+  function applyDetail(view: PlaylistDetailView) {
+    qc.setQueryData(["playlists", "detail", id], view);
+    broadcastInvalidate(["playlists", "detail", id]);
+  }
   async function guard<T>(fn: () => Promise<T>): Promise<T | null> {
     setErr(null);
     try { return await fn(); } catch (e) { setErr(formatError(e)); return null; }
@@ -131,23 +142,44 @@ export default function PlaylistDetail() {
       window.history.back();
     }
   }
-  async function addTrack(trackId: string) {
+  async function addTrack(track: MergedTrack | FavoriteTrack) {
     if (!playlist) return;
+    // Optimistically append the row so it shows the instant you click — then
+    // reconcile with the authoritative view (real positions + metadata) when
+    // the call returns, or roll back by refetching if it failed.
+    const entryTrack: MergedTrack = {
+      ...track,
+      local_file_path: "local_file_path" in track ? track.local_file_path : null,
+      downloaded: "downloaded" in track ? track.downloaded : false,
+    } as MergedTrack;
+    qc.setQueryData<PlaylistDetailView | null>(["playlists", "detail", id], (prev) =>
+      prev
+        ? {
+            ...prev,
+            entries: [
+              ...prev.entries,
+              { position: prev.entries.length + 1, added_at: new Date().toISOString(), track: entryTrack },
+            ],
+          }
+        : prev,
+    );
     setBusy(true);
-    await guard(async () => { await playlistAddTrack(playlist.id, trackId, 0); await refresh(); });
+    const view = await guard(() => playlistAddTrack(playlist.id, track.id, 0));
+    if (view) applyDetail(view);
+    else await refresh();
     setBusy(false);
     setAddQuery("");
   }
   async function removeAt(position: number) {
     if (!playlist) return;
     setBusy(true);
-    await guard(async () => { await playlistRemoveTrack(playlist.id, position); await refresh(); });
+    await guard(async () => { applyDetail(await playlistRemoveTrack(playlist.id, position)); });
     setBusy(false);
   }
   async function move(from: number, to: number) {
     if (!playlist || from === to) return;
     setBusy(true);
-    await guard(async () => { await playlistReorderTrack(playlist.id, from, to); await refresh(); });
+    await guard(async () => { applyDetail(await playlistReorderTrack(playlist.id, from, to)); });
     setBusy(false);
   }
   function playAll(shuffle = false) {
@@ -201,6 +233,16 @@ export default function PlaylistDetail() {
     [recs, entryIds],
   );
 
+  // Batch-resolve artist/album names for the inline track listings. These are
+  // hooks (useQueries internally) so they MUST run unconditionally, before any
+  // early return. `?? []`-guarded so they're safe before data loads. Resolving
+  // the whole entry list *once* here (and passing the getter to each row) keeps
+  // it to a single batched `useQueries` — a per-row hook would otherwise spin up
+  // one observer set per track and flood the page with re-renders on load.
+  const entryNames = useTrackNames(entries.map((e) => e.track));
+  const recNames = useTrackNames(recVisible);
+  const addNames = useTrackNames(search.data?.items?.slice(0, 20) ?? []);
+
   async function loadRecs() {
     const seedIds = entries.map((e) => e.track.id);
     if (seedIds.length === 0) { setRecs([]); return; }
@@ -217,9 +259,9 @@ export default function PlaylistDetail() {
 
   async function addRec(t: FavoriteTrack) {
     // Optimistically drop it from the pool so the next recommendation slides in;
-    // `addTrack` adds it to the playlist + refreshes (it's then a future seed).
+    // `addTrack` optimistically appends it to the playlist (it's then a future seed).
     setRecs((prev) => (prev ? prev.filter((r) => r.id !== t.id) : prev));
-    await addTrack(t.id);
+    await addTrack(t);
   }
 
   if (q.isLoading)
@@ -317,15 +359,22 @@ export default function PlaylistDetail() {
           />
           {search.data && search.data.items.length > 0 && (
             <ul className="oct-scroll mt-2 max-h-52 divide-y divide-oct-border overflow-auto">
-              {search.data.items.slice(0, 20).map((t) => (
-                <li key={t.id} className="flex items-center gap-2 px-1.5 py-2 text-sm hover:bg-oct-elevated/50">
-                  <DownloadedDot downloaded={t.downloaded} />
-                  <span className="flex-1 truncate">{t.title}</span>
-                  <button onClick={() => addTrack(t.id)} disabled={busy} className={btnGhostSm}>
-                    <PlusIcon size={12} /> add
-                  </button>
-                </li>
-              ))}
+              {search.data.items.slice(0, 20).map((t) => {
+                const m = addNames(t);
+                const sub = trackMetaLine(m.artistName, m.albumTitle);
+                return (
+                  <li key={t.id} className="flex items-center gap-2 px-1.5 py-2 text-sm hover:bg-oct-elevated/50">
+                    <DownloadedDot downloaded={t.downloaded} />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{t.title}</span>
+                      {sub && <span className="mt-0.5 truncate text-[11px] text-oct-subtle">{sub}</span>}
+                    </span>
+                    <button onClick={() => addTrack(t)} disabled={busy} className={btnGhostSm}>
+                      <PlusIcon size={12} /> add
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -348,6 +397,7 @@ export default function PlaylistDetail() {
                 entry={e}
                 index={i}
                 total={entries.length}
+                names={entryNames}
                 canEdit={canEdit}
                 busy={busy}
                 online={online}
@@ -393,6 +443,8 @@ export default function PlaylistDetail() {
             <div className="flex flex-col divide-y divide-oct-border/60">
               {recVisible.map((t, i) => {
                 const active = t.id === currentId;
+                const m = recNames(t);
+                const sub = trackMetaLine(m.artistName, m.albumTitle);
                 return (
                   <div
                     key={t.id}
@@ -413,8 +465,11 @@ export default function PlaylistDetail() {
                           <PlayIcon size={12} className="text-white/85 opacity-70 group-hover:opacity-100" />
                         )}
                       </span>
-                      <span className={`truncate text-[13.5px] ${active ? "text-oct-accent" : ""}`}>
-                        {t.title}
+                      <span className="flex min-w-0 flex-col">
+                        <span className={`truncate text-[13.5px] ${active ? "text-oct-accent" : ""}`}>
+                          {t.title}
+                        </span>
+                        {sub && <span className="mt-0.5 truncate text-[11px] text-oct-subtle">{sub}</span>}
                       </span>
                     </button>
                     <span className="font-mono text-[11px] text-oct-subtle">
@@ -505,11 +560,12 @@ export default function PlaylistDetail() {
 }
 
 function PlaylistEntryRow({
-  entry, index, total, canEdit, busy, online, active, playing, batchActive, onLongPress, onPlay, onRemove, onUp, onDown,
+  entry, index, total, names, canEdit, busy, online, active, playing, batchActive, onLongPress, onPlay, onRemove, onUp, onDown,
 }: {
   entry: MergedPlaylistEntry;
   index: number;
   total: number;
+  names: (t: MergedPlaylistEntry["track"]) => { artistName: string | null; albumTitle: string | null };
   canEdit: boolean;
   busy: boolean;
   online: boolean;
@@ -524,6 +580,8 @@ function PlaylistEntryRow({
 }) {
   const t = entry.track;
   const unavailable = !t.downloaded && !online;
+  const meta = names(entry.track);
+  const sub = trackMetaLine(meta.artistName, meta.albumTitle);
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
   function startPress() {
@@ -566,8 +624,11 @@ function PlaylistEntryRow({
       </span>
       <span className="flex min-w-0 items-center gap-2">
         <DownloadStatus trackId={t.id} downloaded={t.downloaded} pending={batchActive} streamDot />
-        <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
-          {t.title || <span className="italic text-oct-faint">{unavailable ? "not available offline" : "(unknown track)"}</span>}
+        <span className="flex min-w-0 flex-col">
+          <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
+            {t.title || <span className="italic text-oct-faint">{unavailable ? "not available offline" : "(unknown track)"}</span>}
+          </span>
+          {sub && <span className="truncate text-[12px] text-oct-subtle">{sub}</span>}
         </span>
       </span>
       <span className="flex items-center justify-end gap-2">

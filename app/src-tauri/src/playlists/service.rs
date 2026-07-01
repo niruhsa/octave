@@ -40,6 +40,10 @@ use crate::transport::{Credential, PlaylistTrack, ServerClient};
 /// principle means we don't cache the resolved metadata for non-downloaded
 /// tracks anyway, so a bounded fetch keeps the view responsive.
 const FETCH_TRACK_CAP: usize = 200;
+/// Max concurrent `get_track` round-trips when enriching a playlist's
+/// stream-only entries. Keeps a long playlist responsive without flooding the
+/// server with one connection per track.
+const FETCH_CONCURRENCY: usize = 16;
 
 pub struct PlaylistService<'a> {
     pool: &'a SqlitePool,
@@ -178,6 +182,36 @@ impl<'a> PlaylistService<'a> {
         }))
     }
 
+    /// Build the detail view after a successful *online* mutation. The mutation
+    /// has already mirrored the junction rows into the cache, but a freshly
+    /// added track (e.g. an acoustic recommendation the user never browsed) has
+    /// no row in the local `tracks` table — a pure cache read would stub it (and
+    /// every other not-yet-cached entry) to "(unknown track)". So enrich the
+    /// mirrored rows *online*, fetching missing metadata from the server exactly
+    /// as `get_playlist` does on a fresh load.
+    async fn get_refreshed_online(&self, id: &str) -> AppResult<PlaylistDetailView> {
+        let p = repo::list_playlists(self.pool)
+            .await?
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| AppError::Internal("playlist vanished from cache after mutation".into()))?;
+        let rows = repo::list_playlist_tracks(self.pool, id).await?;
+        let tracks: Vec<PlaylistTrack> = rows
+            .iter()
+            .map(|r| PlaylistTrack {
+                playlist_id: id.to_string(),
+                track_id: r.track_id.clone(),
+                position: r.position,
+            })
+            .collect();
+        let entries = self.enrich_entries(&tracks, /*online=*/ true).await?;
+        Ok(PlaylistDetailView {
+            source: LibrarySource::Server,
+            playlist: MergedPlaylist::from_cache(p),
+            entries,
+        })
+    }
+
     /// Build `MergedPlaylistEntry` rows from a list of (position, track_id,
     /// added_at). Cache lookup first; for misses, when `online`, fetch via
     /// `server.get_track` (bounded); when offline, emit a stub.
@@ -186,13 +220,13 @@ impl<'a> PlaylistService<'a> {
         tracks: &[PlaylistTrack],
         online: bool,
     ) -> AppResult<Vec<MergedPlaylistEntry>> {
+        use futures_util::StreamExt;
+
         // Pull every cached track in one IN-list query — much cheaper than
         // N `get_track` round-trips through the repo.
         let ids: Vec<&str> = tracks.iter().map(|t| t.track_id.as_str()).collect();
         let cached = self.cached_tracks_map(&ids).await?;
 
-        let mut entries = Vec::with_capacity(tracks.len());
-        let mut fetched = 0usize;
         let cred_holder;
         let cred = if online {
             cred_holder = self.cred().await?;
@@ -201,28 +235,52 @@ impl<'a> PlaylistService<'a> {
             None
         };
 
-        for t in tracks {
-            let track = if let Some(c) = cached.get(&t.track_id) {
-                MergedTrack::from_cache(c.clone())
-            } else if fetched < FETCH_TRACK_CAP {
-                if let Some(cred) = cred {
-                    fetched += 1;
-                    match self.server().get_track(cred, &t.track_id).await? {
-                        Some(srv) => MergedTrack::from_server(srv, None),
-                        None => stub_track(&t.track_id),
-                    }
-                } else {
-                    stub_track(&t.track_id)
+        // Resolve cache misses from the server *concurrently* (bounded). Tracks
+        // are never persisted to the offline `tracks` table (that's downloads-
+        // only), so a stream-only playlist re-fetches every entry's metadata on
+        // each load and each add/remove/reorder. Doing those round-trips one at
+        // a time cost seconds of lag per mutation; `buffer_unordered` overlaps
+        // them while capping in-flight requests.
+        let mut fetched: HashMap<String, MergedTrack> = HashMap::new();
+        if let Some(cred) = cred {
+            let server = self.server();
+            // Unique misses, capped — dedupes a playlist that repeats a track.
+            let miss_ids: Vec<String> = tracks
+                .iter()
+                .map(|t| t.track_id.clone())
+                .filter(|id| !cached.contains_key(id))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .take(FETCH_TRACK_CAP)
+                .collect();
+            let results: Vec<(String, AppResult<Option<_>>)> = futures_util::stream::iter(miss_ids)
+                .map(|id| async move {
+                    let r = server.get_track(cred, &id).await;
+                    (id, r)
+                })
+                .buffer_unordered(FETCH_CONCURRENCY)
+                .collect()
+                .await;
+            for (id, res) in results {
+                if let Some(srv) = res? {
+                    fetched.insert(id, MergedTrack::from_server(srv, None));
                 }
-            } else {
-                stub_track(&t.track_id)
-            };
-            entries.push(MergedPlaylistEntry {
+            }
+        }
+
+        let entries = tracks
+            .iter()
+            .map(|t| MergedPlaylistEntry {
                 position: t.position,
                 added_at: now_iso(),
-                track,
-            });
-        }
+                track: cached
+                    .get(&t.track_id)
+                    .cloned()
+                    .map(MergedTrack::from_cache)
+                    .or_else(|| fetched.get(&t.track_id).cloned())
+                    .unwrap_or_else(|| stub_track(&t.track_id)),
+            })
+            .collect();
         Ok(entries)
     }
 
@@ -469,9 +527,7 @@ impl<'a> PlaylistService<'a> {
             return self.add_offline(playlist_id, track_id, position).await;
         }
         match self.try_server_add(playlist_id, track_id, position).await {
-            Ok(()) => self.get_from_cache(playlist_id).await?.ok_or_else(|| {
-                AppError::Internal("playlist vanished from cache after add".into())
-            }),
+            Ok(()) => self.get_refreshed_online(playlist_id).await,
             Err(e) if is_offline_signal(&e) => {
                 tracing::info!(err = %e, "add_track: server unavailable, queuing");
                 self.add_offline(playlist_id, track_id, position).await
@@ -564,9 +620,7 @@ impl<'a> PlaylistService<'a> {
             return self.remove_offline(playlist_id, position).await;
         }
         match self.try_server_remove(playlist_id, position).await {
-            Ok(()) => self.get_from_cache(playlist_id).await?.ok_or_else(|| {
-                AppError::Internal("playlist vanished from cache after remove".into())
-            }),
+            Ok(()) => self.get_refreshed_online(playlist_id).await,
             Err(e) if is_offline_signal(&e) => {
                 tracing::info!(err = %e, "remove_track: server unavailable, queuing");
                 self.remove_offline(playlist_id, position).await
@@ -631,9 +685,7 @@ impl<'a> PlaylistService<'a> {
             return self.reorder_offline(playlist_id, from_position, to_position).await;
         }
         match self.try_server_reorder(playlist_id, from_position, to_position).await {
-            Ok(()) => self.get_from_cache(playlist_id).await?.ok_or_else(|| {
-                AppError::Internal("playlist vanished from cache after reorder".into())
-            }),
+            Ok(()) => self.get_refreshed_online(playlist_id).await,
             Err(e) if is_offline_signal(&e) => {
                 tracing::info!(err = %e, "reorder_track: server unavailable, queuing");
                 self.reorder_offline(playlist_id, from_position, to_position).await

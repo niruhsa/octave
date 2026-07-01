@@ -26,6 +26,7 @@ import { EntityPicker } from "../components/EntityPicker";
 import { EqBars } from "../components/EqBars";
 import { byteSize, formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
+import { useTrackNames } from "../lib/useTrackNames";
 import { formatError } from "../lib/error";
 import { serverTrackToQueueItem, usePlayerStore } from "../player/store";
 import { useDownloadsStore } from "../downloads/useDownloads";
@@ -144,6 +145,7 @@ export default function Album() {
   }
 
   const items = q.data?.items ?? [];
+  const trackNames = useTrackNames(items);
   const totalMs = items.reduce((s, t) => s + t.duration_ms, 0);
   const anyDownloaded = items.some((t) => t.downloaded);
   const title = album?.title ?? meta.data?.title ?? "Album";
@@ -370,6 +372,7 @@ export default function Album() {
               </div>
               {items.map((t, i) => {
                 const active = t.id === currentId;
+                const artistName = trackNames(t).artistName;
                 return (
                   <div
                     key={t.id}
@@ -398,19 +401,24 @@ export default function Album() {
                         <span className="font-mono text-xs text-oct-faint">{t.track_no ?? i + 1}</span>
                       )}
                     </span>
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
-                        {t.title}
-                      </span>
-                      {t.is_single_release && (
-                        <span
-                          className="shrink-0 rounded-full border border-oct-accent/40 bg-oct-accent/10 px-1.5 py-px font-mono text-[9px] tracking-wide text-oct-accent"
-                          title="Single release within this album"
-                        >
-                          SINGLE
+                    <span className="flex min-w-0 flex-col">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
+                          {t.title}
                         </span>
+                        {t.is_single_release && (
+                          <span
+                            className="shrink-0 rounded-full border border-oct-accent/40 bg-oct-accent/10 px-1.5 py-px font-mono text-[9px] tracking-wide text-oct-accent"
+                            title="Single release within this album"
+                          >
+                            SINGLE
+                          </span>
+                        )}
+                        <DownloadStatus trackId={t.id} downloaded={t.downloaded} pending={batchActive} />
+                      </span>
+                      {artistName && (
+                        <span className="truncate text-[12px] text-oct-subtle">{artistName}</span>
                       )}
-                      <DownloadStatus trackId={t.id} downloaded={t.downloaded} pending={batchActive} />
                     </span>
                     <span className="hidden font-mono text-[11px] text-oct-subtle sm:block">
                       {qualityLabel(t)}

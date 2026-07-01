@@ -17,8 +17,14 @@
 //!   event, and Linux can fire `Modify(Data)` without a preceding `Create`
 //!   when files arrive via `mv` from the same filesystem.
 //! - `.uploading` staging files (REST upload temp path) are skipped.
-//! - Each path is debounced via an in-flight `HashSet`; a 500 ms settle
-//!   delay lets large writes finish before `lofty` probes them.
+//! - Ingest is **folder-grouped**: a file event enqueues the file's *parent
+//!   directory*, and the whole directory is ingested as a single album (see
+//!   [`IngestService::organize_dir`]). This is what stops a 5-file album from
+//!   fragmenting into 5 single-track albums. Directories are debounced via an
+//!   in-flight `HashSet`; a 500 ms settle delay lets large writes finish
+//!   before `lofty` probes them, and because `organize_dir` is idempotent a
+//!   later file landing in the same folder simply re-runs it and adds the
+//!   stragglers.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -78,6 +84,8 @@ pub fn start(ingest: IngestService) -> Result<RecommendedWatcher> {
         });
     }
 
+    // The channel carries *directories* to ingest (one album per folder), not
+    // individual files.
     let (tx, mut rx) = mpsc::channel::<PathBuf>(256);
     let debounce: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
 
@@ -94,7 +102,15 @@ pub fn start(ingest: IngestService) -> Result<RecommendedWatcher> {
                 return;
             }
             for path in event.paths {
-                if tx.blocking_send(path).is_err() {
+                // Only audio files trigger ingest; enqueue their *parent
+                // directory* so the whole folder is grouped into one album.
+                if !should_process(&path) {
+                    continue;
+                }
+                let Some(dir) = path.parent().map(Path::to_path_buf) else {
+                    continue;
+                };
+                if tx.blocking_send(dir).is_err() {
                     return; // receiver dropped
                 }
             }
@@ -110,14 +126,11 @@ pub fn start(ingest: IngestService) -> Result<RecommendedWatcher> {
     info!(path = %root.display(), "ingest folder watcher started");
 
     tokio::spawn(async move {
-        while let Some(path) = rx.recv().await {
-            if !should_process(&path) {
-                continue;
-            }
-            // Debounce: skip if already in flight.
+        while let Some(dir) = rx.recv().await {
+            // Debounce: skip if this directory is already in flight.
             {
                 let mut pending = debounce.lock().await;
-                if !pending.insert(path.clone()) {
+                if !pending.insert(dir.clone()) {
                     continue;
                 }
             }
@@ -125,8 +138,8 @@ pub fn start(ingest: IngestService) -> Result<RecommendedWatcher> {
             let debounce = debounce.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(SETTLE).await;
-                handle_path(&ingest, &path).await;
-                debounce.lock().await.remove(&path);
+                handle_dir(&ingest, &dir).await;
+                debounce.lock().await.remove(&dir);
             });
         }
         info!("ingest watcher channel closed; task exiting");
@@ -135,9 +148,12 @@ pub fn start(ingest: IngestService) -> Result<RecommendedWatcher> {
     Ok(watcher)
 }
 
-/// Walk `root` once and feed every audio file through the ingest pipeline.
+/// Walk `root` once and ingest every folder that holds audio files, grouping
+/// each folder into a single album (the "dropped while offline" catch-up).
 async fn scan_existing(ingest: &IngestService, root: &Path) {
-    let mut count = 0u64;
+    // Collect the distinct parent directories of every processable audio file,
+    // preserving first-seen order for deterministic logging.
+    let mut dirs: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
         if !entry.file_type().is_file() {
             continue;
@@ -146,44 +162,50 @@ async fn scan_existing(ingest: &IngestService, root: &Path) {
         if !should_process(&path) {
             continue;
         }
-        handle_path(ingest, &path).await;
-        count += 1;
+        if let Some(parent) = path.parent() {
+            let parent = parent.to_path_buf();
+            if !dirs.contains(&parent) {
+                dirs.push(parent);
+            }
+        }
     }
-    if count > 0 {
-        info!(scanned = count, root = %root.display(), "ingest pre-scan complete");
+    for dir in &dirs {
+        handle_dir(ingest, dir).await;
+    }
+    if !dirs.is_empty() {
+        info!(dirs = dirs.len(), root = %root.display(), "ingest pre-scan complete");
     }
 }
 
-async fn handle_path(ingest: &IngestService, path: &Path) {
-    if !path.exists() {
-        debug!(path = %path.display(), "watch: file disappeared, skipping");
+/// Ingest a single directory as one album (copy-only; sources untouched).
+async fn handle_dir(ingest: &IngestService, dir: &Path) {
+    if !dir.is_dir() {
+        debug!(dir = %dir.display(), "watch: directory disappeared, skipping");
         return;
     }
-    // Source remains untouched — copy-only ingest.
-    match ingest
-        .organize_and_index(&Identity::SecretKey, path)
-        .await
-    {
-        Ok(result) if result.already_indexed => {
-            debug!(
-                path = %path.display(),
-                dest = %result.dest.display(),
-                "watch: already indexed, no-op"
-            );
-        }
-        Ok(result) => {
+    match ingest.organize_dir(&Identity::SecretKey, dir).await {
+        Ok(result) if result.ingested > 0 => {
             info!(
-                track_id = %result.track_id,
-                src = %path.display(),
-                dest = %result.dest.display(),
-                "watch: ingested"
+                dir = %dir.display(),
+                ingested = result.ingested,
+                already_indexed = result.already_indexed,
+                errors = result.errors,
+                "watch: album ingested"
             );
-            // A new track landed via the ingest folder — refresh the cheap
-            // storage aggregates so the stats track it.
+            // New tracks landed via the ingest folder — refresh the cheap
+            // storage aggregates so the stats track them.
             ingest.scan.recompute_storage_aggregates().await;
         }
+        Ok(result) => {
+            debug!(
+                dir = %dir.display(),
+                already_indexed = result.already_indexed,
+                errors = result.errors,
+                "watch: nothing new in directory"
+            );
+        }
         Err(e) => {
-            warn!(path = %path.display(), error = %e, "watch: ingest failed");
+            warn!(dir = %dir.display(), error = %e, "watch: dir ingest failed");
         }
     }
 }

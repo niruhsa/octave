@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 
 import { discoverSimilar } from "../ipc";
 import { serverTrackToQueueItem, usePlayerStore } from "../player/store";
+import { trackMetaLine } from "../lib/trackMeta";
+import { useTrackNames } from "../lib/useTrackNames";
 import { Cover } from "./Cover";
 import { RadioIcon } from "./icons";
 
@@ -35,6 +37,7 @@ export function SoundsLikeShelf({
   });
 
   const tracks = q.data ?? [];
+  const trackNames = useTrackNames(tracks);
   if (tracks.length === 0) return null;
 
   return (
@@ -43,19 +46,26 @@ export function SoundsLikeShelf({
         <RadioIcon size={13} /> {title.toUpperCase()}
       </h2>
       <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-6">
-        {tracks.map((t, i) => (
-          <button
-            key={t.id}
-            onClick={() => playQueue(tracks.map(serverTrackToQueueItem), i)}
-            className="group flex flex-col gap-2 text-left"
-            title={`Play "${t.title}"`}
-          >
-            <Cover album={{ id: t.album_id }} tryCover className="w-full" />
-            <span className="truncate text-[12.5px] font-medium group-hover:text-white">
-              {t.title}
-            </span>
-          </button>
-        ))}
+        {tracks.map((t, i) => {
+          const m = trackNames(t);
+          const sub = trackMetaLine(m.artistName, m.albumTitle);
+          return (
+            <button
+              key={t.id}
+              onClick={() => playQueue(tracks.map(serverTrackToQueueItem), i)}
+              className="group flex flex-col gap-2 text-left"
+              title={`Play "${t.title}"`}
+            >
+              <Cover album={{ id: t.album_id }} tryCover className="w-full" />
+              <span className="min-w-0">
+                <span className="block truncate text-[12.5px] font-medium group-hover:text-white">
+                  {t.title}
+                </span>
+                {sub && <span className="block truncate text-[11px] text-oct-subtle">{sub}</span>}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

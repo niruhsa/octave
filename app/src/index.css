@@ -175,6 +175,47 @@ body {
   animation: octpulse 2.4s ease-in-out infinite;
 }
 
+/* Listening stats (chart bars + KPI cards) — lifted from the OCTAVE
+   Listening comp. Vertical bars grow from the baseline, horizontal meters
+   from the left, and KPI cards pop up on mount. */
+@keyframes octbar {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes octbarx {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes octstatpop {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-octbar {
+  animation: octbar 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+  transform-origin: bottom;
+}
+.animate-octbarx {
+  animation: octbarx 0.5s ease-out both;
+  transform-origin: left;
+}
+.animate-octstatpop {
+  animation: octstatpop 0.3s ease-out both;
+}
+
 /* ── Custom scrollbars (OCTAVE) ─────────────────────────────────────────── */
 .oct-scroll::-webkit-scrollbar {
   width: 10px;

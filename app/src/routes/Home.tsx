@@ -16,6 +16,8 @@ import { useSyncStore } from "../sync/useSync";
 import { useQuickSearchStore } from "../quicksearch/store";
 import { btnPrimary, card } from "../lib/ui";
 import { byteSize } from "../lib/format";
+import { trackMetaLine } from "../lib/trackMeta";
+import { useTrackNames } from "../lib/useTrackNames";
 import { Skeleton } from "../components/Skeleton";
 import {
   DiscIcon,
@@ -275,6 +277,7 @@ function RecentlyPlayed({ events }: { events: PlayEvent[] }) {
     rows.push(e);
     if (rows.length >= 8) break;
   }
+  const trackNames = useTrackNames(rows);
   if (rows.length === 0) return null;
 
   return (
@@ -287,13 +290,16 @@ function RecentlyPlayed({ events }: { events: PlayEvent[] }) {
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {rows.map((e) => {
+          const sub = trackMetaLine(e.artist_name, trackNames(e).albumTitle);
           const inner = (
             <>
               <span className="min-w-0">
                 <span className="block truncate text-[14px] font-medium">{e.track_title}</span>
-                <span className="block truncate font-mono text-[11px] text-oct-subtle">
-                  {e.artist_name}
-                </span>
+                {sub && (
+                  <span className="block truncate font-mono text-[11px] text-oct-subtle">
+                    {sub}
+                  </span>
+                )}
               </span>
             </>
           );

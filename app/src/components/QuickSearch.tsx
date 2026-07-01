@@ -41,6 +41,8 @@ import {
 } from "../quicksearch/match";
 import { qualityLabel } from "../lib/visual";
 import { formatDuration } from "../lib/format";
+import { trackMetaLine } from "../lib/trackMeta";
+import { useTrackNames } from "../lib/useTrackNames";
 import {
   ArtistIcon,
   DiscIcon,
@@ -259,6 +261,10 @@ export default function QuickSearch() {
     enabled: open && dq.active.podcast,
   });
 
+  // Resolve Artist • Album names for the track results (batched + deduped).
+  // Must run unconditionally at the top level, before any early return.
+  const trackNames = useTrackNames(tracksQ.data?.items ?? []);
+
   // ---- assemble rows, split into device / server groups ----
   const { deviceRows, serverRows, anyLoading } = useMemo(() => {
     const device: Row[] = [];
@@ -290,11 +296,13 @@ export default function QuickSearch() {
     if (dq.active.track) {
       for (const tr of tracksQ.data?.items ?? []) {
         if (!passes(tr.title)) continue;
+        const m = trackNames(tr);
+        const sub = trackMetaLine(m.artistName, m.albumTitle) ?? qualityLabel(tr);
         push({
           cat: "track",
           id: tr.id,
           title: tr.title,
-          subtitle: qualityLabel(tr),
+          subtitle: sub,
           detail: formatDuration(tr.duration_ms),
           downloaded: tr.downloaded,
           data: tr,
@@ -340,6 +348,7 @@ export default function QuickSearch() {
     tracksQ.data, tracksQ.isLoading,
     playlistsQ.data, playlistsQ.isLoading,
     podcastsQ.data, podcastsQ.isLoading,
+    trackNames,
   ]);
 
   const flat = useMemo(() => [...deviceRows, ...serverRows], [deviceRows, serverRows]);

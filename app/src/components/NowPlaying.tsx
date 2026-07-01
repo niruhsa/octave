@@ -15,6 +15,8 @@ import { usePlayerUi } from "../player/ui";
 import { useNowPlayingMeta } from "../player/useNowPlayingMeta";
 import { formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
+import { trackMetaLine } from "../lib/trackMeta";
+import { useTrackNames } from "../lib/useTrackNames";
 import { Cover } from "./Cover";
 import { EqBars } from "./EqBars";
 import {
@@ -143,9 +145,9 @@ export default function NowPlaying() {
               <div className="line-clamp-2 text-[23px] font-semibold leading-tight tracking-tight">
                 {current.title}
               </div>
-              {(meta.artistName || meta.albumTitle) && (
+              {trackMetaLine(meta.artistName, meta.albumTitle) && (
                 <div className="mt-1.5 truncate text-sm text-oct-muted">
-                  {meta.artistName ?? meta.albumTitle}
+                  {trackMetaLine(meta.artistName, meta.albumTitle)}
                 </div>
               )}
               <div className="mt-2.5 flex items-center justify-center gap-2">
@@ -266,11 +268,19 @@ function QueueList({
   isPlaying,
   onPick,
 }: {
-  queue: { id: string; title: string; duration_ms: number; downloaded: boolean }[];
+  queue: {
+    id: string;
+    title: string;
+    duration_ms: number;
+    downloaded: boolean;
+    album_id?: string;
+    artist_id?: string;
+  }[];
   currentIndex: number;
   isPlaying: boolean;
   onPick: (index: number) => void;
 }) {
+  const trackNames = useTrackNames(queue);
   return (
     <div className="oct-scroll mt-2 w-full flex-1 overflow-y-auto">
       <div className="mb-2 font-mono text-[10.5px] tracking-[0.16em] text-oct-faint">
@@ -279,6 +289,8 @@ function QueueList({
       <div className="flex flex-col">
         {queue.map((t, i) => {
           const active = i === currentIndex;
+          const m = trackNames(t);
+          const sub = trackMetaLine(m.artistName, m.albumTitle);
           return (
             <button
               key={`${t.id}-${i}`}
@@ -294,13 +306,16 @@ function QueueList({
                   <span className="font-mono text-xs text-oct-faint">{i + 1}</span>
                 )}
               </span>
-              <span className="flex min-w-0 items-center gap-2">
-                <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
-                  {t.title}
+              <span className="flex min-w-0 flex-col">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className={`truncate ${active ? "font-medium text-oct-accent" : ""}`}>
+                    {t.title}
+                  </span>
+                  {t.downloaded && (
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-oct-accent" title="downloaded" />
+                  )}
                 </span>
-                {t.downloaded && (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-oct-accent" title="downloaded" />
-                )}
+                {sub && <span className="truncate text-[11px] text-oct-subtle">{sub}</span>}
               </span>
               <span className="font-mono text-[11px] text-oct-subtle">
                 {formatDuration(t.duration_ms)}

@@ -259,6 +259,10 @@ async fn ingest_scan(
     let mut files_skipped: u64 = 0;
     let mut errors: u64 = 0;
 
+    // Collect the distinct parent directories of every audio file, then ingest
+    // each folder as a single album (matching the watcher's folder-grouped
+    // behaviour) instead of one album per file.
+    let mut dirs: Vec<PathBuf> = Vec::new();
     for entry in walkdir::WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
@@ -280,16 +284,24 @@ async fn ingest_scan(
         {
             continue;
         }
-        match ingest.organize_and_index(&caller, path).await {
-            Ok(_) => files_processed += 1,
+        if let Some(parent) = path.parent() {
+            let parent = parent.to_path_buf();
+            if !dirs.contains(&parent) {
+                dirs.push(parent);
+            }
+        }
+    }
+
+    for dir in &dirs {
+        match ingest.organize_dir(&caller, dir).await {
+            Ok(r) => {
+                files_processed += r.ingested;
+                files_skipped += r.already_indexed;
+                errors += r.errors;
+            }
             Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("already indexed") {
-                    files_skipped += 1;
-                } else {
-                    tracing::warn!(path = %path.display(), error = %e, "ingest scan: failed");
-                    errors += 1;
-                }
+                tracing::warn!(dir = %dir.display(), error = %e, "ingest scan: failed");
+                errors += 1;
             }
         }
     }

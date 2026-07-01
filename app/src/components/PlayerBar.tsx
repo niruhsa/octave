@@ -6,6 +6,7 @@ import { useMediaSession } from "../player/useMediaSession";
 import { useNativeMediaSession } from "../player/useNativeMediaSession";
 import { formatDuration } from "../lib/format";
 import { qualityLabel } from "../lib/visual";
+import { trackMetaLine } from "../lib/trackMeta";
 import { Thumb } from "./Cover";
 import { SavedPill } from "./SourceBadge";
 import { FavoriteButton } from "./FavoriteButton";
@@ -118,7 +119,7 @@ export default function PlayerBar() {
                 {current?.downloaded && <SavedPill />}
               </div>
               <div className="mt-0.5 truncate font-mono text-[11px] text-oct-subtle">
-                {meta.artistName ?? (current ? qualityLabel(current) : "")}
+                {trackMetaLine(meta.artistName, meta.albumTitle) ?? (current ? qualityLabel(current) : "")}
               </div>
             </div>
             <span className="text-oct-faint opacity-0 transition-opacity group-hover:opacity-100">

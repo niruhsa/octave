@@ -16,6 +16,7 @@ import {
 import { formatBytes, useDownloadsStore } from "../downloads/useDownloads";
 import { formatError } from "../lib/error";
 import { formatDuration } from "../lib/format";
+import { trackMetaLine } from "../lib/trackMeta";
 import { broadcastInvalidate } from "../App";
 import { card, errorBox } from "../lib/ui";
 import { Thumb } from "../components/Cover";
@@ -314,10 +315,15 @@ export default function Downloads() {
       {/* ── Songs ── */}
       {tracks.data && allTracks.length > 0 && filter === "songs" && (
         <div className={`${card} divide-y divide-oct-border`}>
-          {allTracks.map((t) => (
+          {allTracks.map((t) => {
+            const sub = trackMetaLine(artistName.get(t.artist_id), albumMeta.get(t.album_id)?.title);
+            return (
             <div key={t.id} className="flex items-center gap-3 px-3 py-2.5 text-sm first:rounded-t-xl last:rounded-b-xl">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-oct-accent" />
-              <span className="flex-1 truncate">{t.title}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{t.title}</span>
+                {sub && <span className="block truncate text-[11px] text-oct-subtle">{sub}</span>}
+              </span>
               <span className="hidden font-mono text-[10.5px] text-oct-subtle sm:block">{t.codec?.toUpperCase()}</span>
               <span className="w-10 text-right font-mono text-[11px] text-oct-subtle">{formatDuration(t.duration_ms)}</span>
               <span className="w-16 text-right font-mono text-[11px] text-oct-accent">{t.file_size ? formatBytes(t.file_size) : "—"}</span>
@@ -325,7 +331,8 @@ export default function Downloads() {
                 <TrashIcon size={15} />
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -331,6 +331,60 @@ impl ScanService {
         Ok(Some(track.id))
     }
 
+    /// Index a single audio file into an **already-resolved** album/artist.
+    ///
+    /// Unlike [`index_file`], this does **not** re-derive the artist/album from
+    /// the file's own tags — the caller supplies the ids. This is what lets
+    /// folder-grouped ingest ([`crate::services::ingest::IngestService::organize_dir`])
+    /// pin every track in a folder to the one album it decided on, instead of
+    /// each file minting its own album from its (possibly inconsistent) tags.
+    ///
+    /// Returns `Ok(None)` when the file was already indexed (same `file_path`),
+    /// or `Ok(Some(track_id))` on a fresh insert.
+    pub async fn index_file_into(
+        &self,
+        caller: &Identity,
+        path: &Path,
+        album_id: uuid::Uuid,
+        artist_id: uuid::Uuid,
+    ) -> Result<Option<uuid::Uuid>> {
+        let file_path = path.to_string_lossy().to_string();
+
+        if self
+            .library
+            .tracks
+            .find_by_file_path(&file_path)
+            .await?
+            .is_some()
+        {
+            debug!(path = %path.display(), "index_file_into: already indexed, skipping");
+            return Ok(None);
+        }
+
+        let mut info = tag::read_tags(path)?;
+        info.duration_ms = reconcile_duration(path, info.duration_ms);
+
+        let new = NewTrack {
+            album_id,
+            artist_id,
+            title: info.title,
+            track_no: info.track_no,
+            disc_no: info.disc_no,
+            duration_ms: info.duration_ms,
+            codec: info.codec,
+            bitrate_kbps: info.bitrate_kbps,
+            file_path,
+            file_size: info.file_size,
+            sample_rate_hz: info.sample_rate_hz,
+            bit_depth: info.bit_depth,
+            channels: info.channels,
+            metadata_json: "{}".to_string(),
+        };
+        let track = self.library.create_track(caller, new).await?;
+        debug!(path = %path.display(), track_id = %track.id, "index_file_into: indexed");
+        Ok(Some(track.id))
+    }
+
     /// Refresh the duration of every track in the library.
     ///
     /// Walks all tracks in the DB, opens each file, measures actual audio
@@ -540,5 +594,32 @@ impl ScanService {
         // the storage stats too.
         self.recompute_storage_full().await;
         Ok(report)
+    }
+}
+
+/// Cross-validate a tag-reported duration against the actual decoded length.
+///
+/// Returns the measured duration when it diverges from the tag value by more
+/// than 1% **and** 500 ms (the same threshold used inline by [`ScanService::index_file`]);
+/// otherwise the tag value is kept. Falls back to the tag value when the
+/// format isn't measurable by Symphonia.
+fn reconcile_duration(path: &Path, tag_ms: i64) -> i64 {
+    let Some(actual) = duration::measure_duration(path) else {
+        return tag_ms;
+    };
+    let actual_ms = actual.as_millis() as i64;
+    let diff = (tag_ms - actual_ms).abs();
+    let threshold = (tag_ms.max(1) / 100).max(500);
+    if diff > threshold {
+        tracing::info!(
+            path = %path.display(),
+            tag_ms,
+            actual_ms,
+            diff_ms = diff,
+            "duration corrected: tag was inaccurate"
+        );
+        actual_ms
+    } else {
+        tag_ms
     }
 }
