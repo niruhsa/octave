@@ -115,7 +115,7 @@ message Album {
   repeated AliasInfo aliases = 8;  // see Artist.aliases
   // Sum of the on-disk bytes of every track on this album.
   int64 storage_bytes = 9;
-  // Classification: "album" | "ep" | "single".
+  // Classification: "album" | "ep" | "single" | "live".
   string album_type = 10;
   // True when any track on this album is explicit (denormalized rollup).
   bool is_explicit = 11;
@@ -320,7 +320,7 @@ message SetExplicitRequest {
 
 message SetAlbumTypeRequest {
   string album_id = 1;
-  string album_type = 2;        // "album" | "ep" | "single"
+  string album_type = 2;        // "album" | "ep" | "single" | "live"
   string single_track_id = 3;   // optional; "" = none (main single for a single)
 }
 

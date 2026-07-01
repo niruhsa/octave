@@ -183,8 +183,9 @@ export type MergedArtist = {
 };
 
 /** Album classification. A `single` album always has at least one track
- * flagged `is_single_release` (enforced server-side). */
-export type AlbumType = "album" | "ep" | "single";
+ * flagged `is_single_release` (enforced server-side); `album`/`ep`/`live` are
+ * unrestricted. */
+export type AlbumType = "album" | "ep" | "single" | "live";
 
 export type MergedAlbum = {
   id: string;

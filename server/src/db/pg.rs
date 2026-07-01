@@ -184,11 +184,20 @@ impl ArtistRepo for PgRepos {
 
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Artist>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        // Match the canonical name/sort_name OR any known alias spelling, so a
+        // search in a non-primary language (e.g. a Kanji name whose display is
+        // the English one) still finds the artist. EXISTS keeps one row per
+        // artist regardless of how many aliases match.
         sqlx::query_as::<_, Artist>(
             r#"SELECT id, name, sort_name, image_path, storage_bytes, created_at, updated_at
-               FROM artists
-               WHERE name ILIKE $1 OR sort_name ILIKE $1
-               ORDER BY name ASC
+               FROM artists a
+               WHERE a.name ILIKE $1 OR a.sort_name ILIKE $1
+                  OR EXISTS (
+                       SELECT 1 FROM artist_aliases al
+                       WHERE al.artist_id = a.id
+                         AND (al.name ILIKE $1 OR al.sort_name ILIKE $1)
+                     )
+               ORDER BY a.name ASC
                LIMIT $2 OFFSET $3"#,
         )
         .bind(&pattern)
@@ -320,12 +329,18 @@ impl AlbumRepo for PgRepos {
 
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Album>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        // Match the canonical title OR any known alias spelling, so a search in
+        // a non-primary language still finds the album (see artist search).
         sqlx::query_as::<_, Album>(
             r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
                        created_at, updated_at
-               FROM albums
-               WHERE title ILIKE $1
-               ORDER BY title
+               FROM albums a
+               WHERE a.title ILIKE $1
+                  OR EXISTS (
+                       SELECT 1 FROM album_aliases al
+                       WHERE al.album_id = a.id AND al.title ILIKE $1
+                     )
+               ORDER BY a.title
                LIMIT $2 OFFSET $3"#,
         )
         .bind(&pattern)
@@ -505,14 +520,20 @@ impl TrackRepo for PgRepos {
 
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Track>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        // Match the canonical title OR any known alias spelling, so a search in
+        // a non-primary language still finds the track (see artist search).
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
                          is_single_release, is_explicit, created_at, updated_at
-               FROM tracks
-               WHERE title ILIKE $1
-               ORDER BY title
+               FROM tracks t
+               WHERE t.title ILIKE $1
+                  OR EXISTS (
+                       SELECT 1 FROM track_aliases al
+                       WHERE al.track_id = t.id AND al.title ILIKE $1
+                     )
+               ORDER BY t.title
                LIMIT $2 OFFSET $3"#,
         )
         .bind(&pattern)

@@ -1719,8 +1719,8 @@ fn paginate(limit: Option<i64>, offset: Option<i64>) -> (i64, i64) {
     (limit, offset)
 }
 
-/// The three valid album classifications.
-const ALBUM_TYPES: [&str; 3] = ["album", "ep", "single"];
+/// The valid album classifications.
+const ALBUM_TYPES: [&str; 4] = ["album", "ep", "single", "live"];
 
 /// Normalize + validate an album-type string, returning the canonical lowercase
 /// value or an `InvalidArgument` listing the allowed values.
@@ -1730,13 +1730,14 @@ fn parse_album_type(raw: &str) -> Result<String> {
         Ok(t)
     } else {
         Err(AppError::InvalidArgument(format!(
-            "album_type must be one of album, ep, single (got {raw:?})"
+            "album_type must be one of album, ep, single, live (got {raw:?})"
         )))
     }
 }
 
 /// The single-song invariant: only a `single` album requires at least one of
-/// its tracks to be flagged `is_single_release`. `ep`/`album` are unrestricted.
+/// its tracks to be flagged `is_single_release`. `album`/`ep`/`live` are
+/// unrestricted.
 fn single_song_rule_satisfied(album_type: &str, single_track_count: usize) -> bool {
     album_type != "single" || single_track_count >= 1
 }
@@ -2056,6 +2057,7 @@ mod tests {
         assert_eq!(parse_album_type("album").unwrap(), "album");
         assert_eq!(parse_album_type("EP").unwrap(), "ep"); // case-insensitive
         assert_eq!(parse_album_type("  Single ").unwrap(), "single"); // trimmed
+        assert_eq!(parse_album_type("Live").unwrap(), "live");
         assert!(parse_album_type("mixtape").is_err());
         assert!(parse_album_type("").is_err());
     }

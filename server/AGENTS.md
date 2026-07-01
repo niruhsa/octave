@@ -115,6 +115,20 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Alias-aware search (cross-language).** Artist/album/track search now matches **every known
+spelling**, not just the primary-language display name, so a Japanese artist shown under an
+English name (or vice-versa) is still found by their Kanji spelling and vice-versa.
+- **Repo** ([`db/pg.rs`](./src/db/pg.rs)): each `search` (`ArtistRepo`/`AlbumRepo`/`TrackRepo`)
+  keeps its canonical `name`/`title ILIKE` match and adds an `EXISTS` subquery over the matching
+  alias table (`artist_aliases`/`album_aliases`/`track_aliases`, seeded in
+  [`20260501000000_metadata_aliases.sql`](./migrations/20260501000000_metadata_aliases.sql) +
+  [`20270301000000_track_aliases.sql`](./migrations/20270301000000_track_aliases.sql)). `EXISTS`
+  (not a JOIN) keeps one row per entity no matter how many aliases match; the returned rows still
+  carry the canonical primary-language display name, so results look unchanged — only the reach of
+  the match widened. Artist search also checks alias `sort_name`. No service/transport change (the
+  service just delegates to the repo). The client's offline SQLite cache carries no aliases, so its
+  fallback search still matches display names only — a pre-existing cache limitation, unchanged.
+
 **Explicit flag — per-track, with an album rollup.** A song can be marked explicit independently of
 its title, and an album is labeled explicit when any of its tracks is.
 - **Schema** (migration [`20270401000000_track_explicit.sql`](./migrations/20270401000000_track_explicit.sql)):
@@ -149,13 +163,15 @@ following `PRIMARY_LANGUAGE`.
   `/tracks/:id/primary-alias` (put); `aliases` on `TrackDto` + a `track_dto_full` attaching them on
   single-entity reads only (no list N+1).
 
-**Album type (Album / EP / Single) + required single song.** Albums now carry a
+**Album type (Album / EP / Single / Live) + required single song.** Albums now carry a
 classification alongside the per-track `is_single_release` flag. A `single` album must have at
 least one track flagged `is_single_release` (its main single) — the invariant is enforced in
-`LibraryService` (it can't be a row-local CHECK).
+`LibraryService` (it can't be a row-local CHECK); `album`/`ep`/`live` are unrestricted.
 - **Schema** (migration [`20270201000000_album_type.sql`](./migrations/20270201000000_album_type.sql)):
   `albums.album_type TEXT NOT NULL DEFAULT 'album' CHECK (album_type IN ('album','ep','single'))`.
   Backfill defaults every existing album to `album` (managers reclassify; no auto-classification).
+  Migration [`20270501000000_album_type_live.sql`](./migrations/20270501000000_album_type_live.sql)
+  later widens the CHECK to add `'live'`.
 - **Model/repo** ([`db/models.rs`](./src/db/models.rs) `Album.album_type`; [`db/repo.rs`](./src/db/repo.rs)/[`db/pg.rs`](./src/db/pg.rs)):
   `album_type` in every album `SELECT`/`RETURNING` + a new `AlbumRepo::set_album_type`.
 - **Service** ([`services/library.rs`](./src/services/library.rs)): `set_album_type(caller, album_id, album_type, single_track_id?)`

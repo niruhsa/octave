@@ -102,8 +102,9 @@ pub struct Album {
     pub artist_id: Uuid,
     pub title: String,
     pub release_year: Option<i32>,
-    /// One of `album` / `ep` / `single`. A `single` album always has at least
-    /// one track flagged `is_single_release` (enforced in `LibraryService`).
+    /// One of `album` / `ep` / `single` / `live`. A `single` album always has
+    /// at least one track flagged `is_single_release` (enforced in
+    /// `LibraryService`); the others are unrestricted.
     pub album_type: String,
     /// `true` when any track on this album is explicit (denormalized rollup,
     /// recomputed by `LibraryService`).

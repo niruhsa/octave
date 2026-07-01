@@ -265,6 +265,13 @@ input[type="range"].oct-range::-moz-range-thumb {
   background: var(--color-oct-accent);
 }
 
+/* Disc "play" button (Album page, per-disc separator) — amber on hover to
+   echo the accent used by the primary Play pill. */
+.oct-disc-play:hover {
+  color: var(--color-oct-accent);
+  border-color: var(--color-oct-accent);
+}
+
 /* Native select dark styling for the few dropdowns (account admin). */
 select option {
   background: var(--color-oct-surface);
