@@ -20,7 +20,13 @@ import {
   type CommandId,
 } from "../settings/keybinds";
 import { btnGhostSm, card, label } from "../lib/ui";
-import { KeyIcon, NetworkIcon, PodcastIcon, SearchIcon } from "../components/icons";
+import {
+  KeyIcon,
+  NetworkIcon,
+  PlayIcon,
+  PodcastIcon,
+  SearchIcon,
+} from "../components/icons";
 import { useQuickSearchStore } from "../quicksearch/store";
 import { usePodcastPrefsStore } from "../podcasts/prefs";
 import {
@@ -29,10 +35,12 @@ import {
   MIN_CHUNK_CONCURRENCY,
   useNetworkPrefsStore,
 } from "../settings/network";
+import { MAX_CROSSFADE_SEC, usePlaybackPrefsStore } from "../settings/playback";
 
-type SectionId = "keybinds" | "quicksearch" | "podcasts" | "networking";
+type SectionId = "player" | "keybinds" | "quicksearch" | "podcasts" | "networking";
 
 const SECTIONS: { id: SectionId; label: string; Icon: typeof KeyIcon }[] = [
+  { id: "player", label: "Player", Icon: PlayIcon },
   { id: "keybinds", label: "Keybinds & Hotkeys", Icon: KeyIcon },
   { id: "quicksearch", label: "Quick Search", Icon: SearchIcon },
   { id: "podcasts", label: "Podcasts", Icon: PodcastIcon },
@@ -67,6 +75,7 @@ export default function Settings() {
 
         {/* content */}
         <div className="min-w-0 flex-1">
+          {section === "player" && <PlayerSection />}
           {section === "keybinds" && <KeybindsSection />}
           {section === "quicksearch" && <QuickSearchSection />}
           {section === "podcasts" && <PodcastsSection />}
@@ -218,6 +227,89 @@ function KeybindRow({ cmd }: { cmd: CommandDef }) {
         >
           Reset
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Player section
+// ---------------------------------------------------------------------------
+
+function PlayerSection() {
+  const prefs = usePlaybackPrefsStore((s) => s.prefs);
+  const setPref = usePlaybackPrefsStore((s) => s.setPref);
+  const fadeOn = prefs.gaplessEnabled && prefs.crossfadeSec > 0;
+
+  return (
+    <div className="flex flex-col gap-5">
+      <p className="text-[13px] leading-relaxed text-oct-subtle">
+        How one track hands off to the next. Gapless preloads the upcoming
+        track and starts it the instant the current one ends; crossfade blends
+        them into each other instead. Changes apply from the next track change.
+      </p>
+
+      <div className="flex flex-col gap-2">
+        <div className={label}>TRANSITIONS</div>
+        <div className={`${card} divide-y divide-oct-border`}>
+          <ToggleRow
+            title="Gapless playback"
+            desc="Preload the next track so playback continues without a gap. Turning this off restores the old load-at-the-boundary behavior (and disables crossfade)."
+            on={prefs.gaplessEnabled}
+            onChange={(v) => setPref("gaplessEnabled", v)}
+          />
+
+          {/* crossfade duration */}
+          <div className="flex flex-col gap-3 px-4 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div
+                  className={`text-[13.5px] ${prefs.gaplessEnabled ? "text-oct-text" : "text-oct-faint"}`}
+                >
+                  Crossfade between tracks
+                </div>
+                <div className="text-[11.5px] text-oct-faint">
+                  Fade the ending track out while the next fades in
+                  (equal-power, so loudness stays level). Off = gapless cut.
+                  Podcast episodes never crossfade.
+                </div>
+              </div>
+              <span className="shrink-0 rounded-lg bg-oct-elevated px-2.5 py-1 font-mono text-[13px] text-oct-text">
+                {fadeOn ? `${prefs.crossfadeSec} s` : "Off"}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={MAX_CROSSFADE_SEC}
+              step={1}
+              value={prefs.crossfadeSec}
+              disabled={!prefs.gaplessEnabled}
+              onChange={(e) => setPref("crossfadeSec", Number(e.target.value))}
+              className="oct-range flex-1 disabled:opacity-40"
+              aria-label="Crossfade duration (seconds)"
+            />
+            <div className="flex justify-between font-mono text-[10.5px] text-oct-faint">
+              <span>Off (gapless)</span>
+              <span>{MAX_CROSSFADE_SEC} s</span>
+            </div>
+          </div>
+
+          <ToggleRow
+            title="Crossfade on manual skip"
+            desc="Also fade briefly when you press next/previous or jump to a track."
+            on={prefs.crossfadeOnManualSkip}
+            disabled={!fadeOn}
+            onChange={(v) => setPref("crossfadeOnManualSkip", v)}
+          />
+          <ToggleRow
+            title="Album-aware gapless"
+            desc="Consecutive tracks of the same album always transition gaplessly — continuous albums and live sets are never faded."
+            on={prefs.smartAlbumGapless}
+            disabled={!fadeOn}
+            onChange={(v) => setPref("smartAlbumGapless", v)}
+          />
+        </div>
       </div>
     </div>
   );
@@ -423,14 +515,19 @@ function ToggleRow({
   desc,
   on,
   onChange,
+  disabled = false,
 }: {
   title: string;
   desc: string;
   on: boolean;
   onChange: (v: boolean) => void;
+  /** Grey the row out and ignore taps (e.g. a pref gated behind another). */
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
+    <div
+      className={`flex items-center justify-between gap-4 px-4 py-3 ${disabled ? "opacity-40" : ""}`}
+    >
       <div className="min-w-0">
         <div className="text-[13.5px] text-oct-text">{title}</div>
         <div className="text-[11.5px] text-oct-faint">{desc}</div>
@@ -438,6 +535,7 @@ function ToggleRow({
       <button
         role="switch"
         aria-checked={on}
+        disabled={disabled}
         onClick={() => onChange(!on)}
         className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${
           on ? "bg-oct-accent" : "bg-oct-border-strong"

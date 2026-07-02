@@ -91,6 +91,35 @@ This file owns the **client's** status and detail. When client work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Gapless playback & crossfade (client).** Track boundaries no longer tear down and reload a single
+`<audio>` element (an audible 50–300 ms gap): a **dual-element playback deck**
+([`player/deck.ts`](./src/player/deck.ts), design in [`GAPLESS_CROSSFADE.md`](./GAPLESS_CROSSFADE.md))
+keeps an *active* element (drives store state) and a *standby* that silently preloads the upcoming
+track, then swaps at the boundary — a **gapless** cut at `ended`, or an opt-in **equal-power
+crossfade** (wall-clock-corrected `setInterval` ramps — never rAF, which freezes screen-off; the
+UI flips to the incoming track at fade start while the outgoing tail fades). Manual skips can fade
+too (capped 1.5 s), an **album-aware guard** keeps consecutive same-album tracks gapless (continuous
+albums are never smeared), episodes never crossfade, and iOS (volume writes ignored) forces gapless.
+Every boundary the deck can't take (standby not ready, feature off, errors) falls back to the legacy
+load path unchanged.
+- **Standby arming is double-download-safe:** a streamed track is only preloaded once the Rust
+  prefetcher has it on disk — a new `player-prefetch-ready` event ([`player/prefetch.rs`](./src-tauri/src/player/prefetch.rs))
+  + `player_prefetch_is_ready` command ([`commands/player_commands.rs`](./src-tauri/src/commands/player_commands.rs))
+  tell the deck when (mirrored in [`ipc.ts`](./src/ipc.ts)); downloaded tracks arm immediately.
+- **Store refactor** ([`player/store.ts`](./src/player/store.ts)): `_bind(a, b)` constructs the deck
+  ([`PlayerBar.tsx`](./src/components/PlayerBar.tsx) mounts both persistent elements); element events
+  route through deck callbacks keyed to the active element; `nextIndexFor` is shared by the Rust
+  prefetch chain + standby preload; play-history stays exact — the per-listen guard migrates to a
+  retiring slot at each swap so a listen the 30 s/50 % threshold already counted is never
+  double-recorded, and the Android wake-lock pause guard + episode resume/checkpoints carry over.
+- **Settings → Player** ([`routes/Settings.tsx`](./src/routes/Settings.tsx) + a persisted
+  [`settings/playback.ts`](./src/settings/playback.ts) prefs store): gapless on/off (off = legacy
+  boundary behavior), crossfade 0–12 s slider (0 = off), crossfade-on-manual-skip + album-aware-gapless
+  toggles (gated while inapplicable). The deck reads prefs live — changes apply at the next boundary.
+- `npm run build` (tsc + vite) + host `cargo test` (**54** lib, incl. a new prefetch-readiness test) +
+  `cargo clippy` clean (remaining warnings pre-date this change); Settings → Player verified live
+  (slider/toggles persist + gate correctly, both deck elements mount, console clean).
+
 **Explicit flag (client).** A song can be flagged explicit from its track-row menu (mirroring the
 single-release ★ toggle) on the [Album](./src/routes/Album.tsx) route — an `E` toggle in the hover
 toolbar + the long-press action sheet — and an `EXPLICIT`/`E` badge renders on the row and the album

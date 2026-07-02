@@ -1017,6 +1017,27 @@ export const playerActionUrlBase = () =>
 export const playerPrefetch = (trackId: string) =>
   invoke<void>("player_prefetch", { trackId });
 
+/**
+ * True when the prefetcher holds a *complete* local copy of `trackId`. The
+ * playback deck checks this before arming its standby `<audio>` element for a
+ * streamed track — arming earlier would proxy-stream the track in parallel
+ * with the prefetch download (see `GAPLESS_CROSSFADE.md`).
+ */
+export const playerPrefetchIsReady = (trackId: string) =>
+  invoke<boolean>("player_prefetch_is_ready", { trackId });
+
+/**
+ * Subscribe to prefetch completions (payload = track id). The playback deck
+ * re-arms its standby element on each — this is the async half of
+ * `playerPrefetchIsReady`. Returns an unlisten fn.
+ */
+export async function onPrefetchReady(
+  cb: (trackId: string) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("player-prefetch-ready", (e) => cb(e.payload));
+}
+
 // ---------------------------------------------------------------------------
 // native media session (Android system notification + lock screen)
 //

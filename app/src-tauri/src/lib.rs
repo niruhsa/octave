@@ -321,6 +321,7 @@ pub fn run() {
             commands::player_commands::player_cover_url,
             commands::player_commands::player_action_url_base,
             commands::player_commands::player_prefetch,
+            commands::player_commands::player_prefetch_is_ready,
             // native media session (Android notification + lock screen)
             media_session::media_session_update,
             media_session::media_session_set_playback,

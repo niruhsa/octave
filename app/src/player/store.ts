@@ -1,23 +1,30 @@
 // Playback state (Phase 4).
 //
-// Owns the queue, current index, shuffle/repeat, and the `<audio>` element
-// ref. Keeps a single HTMLAudioElement alive for the app's lifetime so
-// track switches don't tear down/recreate the pipeline (better for
-// gapless-ish transitions and for OS media-session integration).
+// Owns the queue, current index, shuffle/repeat, and the playback *deck* —
+// two persistent HTMLAudioElements with swappable active/standby roles (see
+// `player/deck.ts` + GAPLESS_CROSSFADE.md). The active element drives store
+// state; the standby preloads the upcoming track so boundaries are gapless
+// (or crossfaded, per Settings → Player). Both elements live for the app's
+// lifetime so track switches never tear down the pipeline.
 //
-// Source resolution lives in Rust (`media://` protocol): we just ask for
-// the URL per track id and hand it to the element. The protocol serves the
-// local file when downloaded, else proxies the server stream with auth.
+// Source resolution lives in Rust (loopback media server): we just ask for
+// the URL per track id and hand it to the deck. The loopback serves the
+// local file when downloaded (or prefetched), else proxies the server
+// stream with auth.
 
 import { create } from "zustand";
 import type { FavoriteTrack, MergedEpisode, MergedTrack } from "../ipc";
 import {
+  onPrefetchReady,
   playerMediaUrl,
   playerPrefetch,
+  playerPrefetchIsReady,
   playHistoryFlush,
   playHistoryRecord,
   podcastRecordProgress,
 } from "../ipc";
+import { MANUAL_FADE_MAX_SEC, Deck, type DeckCallbacks } from "./deck";
+import { playbackPrefs } from "../settings/playback";
 import { useAppStore } from "../store";
 
 export type RepeatMode = "off" | "all" | "one";
@@ -116,7 +123,8 @@ export type PlayerState = {
   /** Human-readable error from the last `<audio>` error event, if any. */
   error: string | null;
 
-  // internal: the live HTMLAudioElement, kept out of the serialized state.
+  // internal: the deck's live *active* element (re-pointed on every handoff),
+  // kept out of the serialized state. Consumers treat it as "the" element.
   audio: HTMLAudioElement | null;
 
   // actions
@@ -132,8 +140,8 @@ export type PlayerState = {
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   clearQueue: () => void;
-  /** Called by the `<audio>` event listeners — not for UI use. */
-  _bind: (el: HTMLAudioElement) => () => void;
+  /** Binds the two deck `<audio>` elements — not for UI use. */
+  _bind: (a: HTMLAudioElement, b: HTMLAudioElement) => () => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -228,39 +236,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const { queue } = get();
     if (index < 0 || index >= queue.length) return;
     set({ error: null });
-    loadAndPlay(get, set, index);
+    loadAndPlay(get, set, index, manualFadeSec());
   },
 
   togglePlay: () => {
-    const { audio, isPlaying } = get();
-    if (!audio) return;
+    const { isPlaying } = get();
+    if (!_deck) return;
     if (isPlaying) {
-      audio.pause();
+      _deck.pause();
     } else {
-      void audio.play().catch((e) => reportPlayError(set, e));
+      void _deck.resume().catch((e) => reportPlayError(set, e));
     }
   },
 
   next: () => {
-    const { queue, currentIndex, repeat } = get();
-    if (queue.length === 0) return;
-    if (repeat === "one") {
-      // Replay the same track.
-      loadAndPlay(get, set, currentIndex);
-      return;
-    }
-    let nextIdx = currentIndex + 1;
-    if (nextIdx >= queue.length) {
-      if (repeat === "all") nextIdx = 0;
-      else {
-        // End of queue, no repeat → stop.
-        const audio = get().audio;
-        if (audio) audio.pause();
-        set({ isPlaying: false });
-        return;
-      }
-    }
-    loadAndPlay(get, set, nextIdx);
+    advance(get, set, { manual: true });
   },
 
   prev: () => {
@@ -273,18 +263,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
     let prevIdx = currentIndex - 1;
     if (prevIdx < 0) prevIdx = get().repeat === "all" ? queue.length - 1 : 0;
-    loadAndPlay(get, set, prevIdx);
+    loadAndPlay(get, set, prevIdx, manualFadeSec());
   },
 
   seekTo: (sec) => {
-    const audio = get().audio;
-    if (audio) audio.currentTime = sec;
+    _deck?.seekTo(sec);
   },
 
   setVolume: (v) => {
     const clamped = Math.max(0, Math.min(1, v));
-    const audio = get().audio;
-    if (audio) audio.volume = clamped;
+    _deck?.setMasterVolume(clamped);
     set({ volume: clamped });
   },
 
@@ -301,11 +289,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         // Re-derive so currentIndex still points at `current`.
         set({ shuffle: nowShuffling, queue: newQueue, currentIndex: i });
         prefetchNext(get); // upcoming track changed — re-prime the look-ahead
+        armPreload(get);
         return;
       }
     }
     set({ shuffle: nowShuffling });
     prefetchNext(get);
+    armPreload(get);
   },
 
   cycleRepeat: () => {
@@ -316,75 +306,143 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     };
     set({ repeat: next[get().repeat] });
     prefetchNext(get); // what plays next may have changed (e.g. repeat-one)
+    armPreload(get);
   },
 
   clearQueue: () => {
-    const audio = get().audio;
-    if (audio) {
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-    }
+    _deck?.reset();
     set({ queue: [], currentIndex: -1, isPlaying: false, positionSec: 0, durationSec: 0 });
   },
 
-  _bind: (el) => {
-    // Wire `<audio>` events into store state. Returns an unbind fn.
-    set({ audio: el });
-    el.volume = get().volume; // apply restored (or default) volume to the element
-    primeRestored(get, el); // load a restored track at its saved position, paused
-    const onPlay = () => set({ isPlaying: true });
-    const onPause = () => {
-      // A track reaching its end fires `pause` right before `ended`. Ignore that
-      // one: next() is about to load the next track, and flipping isPlaying=false
-      // here makes the native MediaService drop its wake/WiFi lock + foreground
-      // status — so Android kills the screen-off process in the ~20ms gap before
-      // the next track starts. Genuine pauses are unaffected: a user tap pauses
-      // mid-track (not ended), and end-of-queue sets isPlaying=false in next().
-      if (el.ended || (el.duration > 0 && el.currentTime >= el.duration - 0.5)) return;
+  _bind: (a, b) => {
+    // The two persistent elements form the playback deck. Rebinds (StrictMode
+    // double-mount, HMR) tear the old deck down first — construction is
+    // idempotent, and the deck adopts whichever element is already sounding.
+    _deck?.destroy();
+    const deck = new Deck(a, b, deckCallbacks(get, set));
+    _deck = deck;
+    set({ audio: deck.active });
+    deck.setMasterVolume(get().volume); // apply restored (or default) volume
+    hookPrefetchReady();
+    primeRestored(get, deck.active); // load a restored track at its saved position, paused
+    return () => {
+      if (_deck === deck) _deck = null;
+      deck.destroy();
+    };
+  },
+}));
+
+// ---------------------------------------------------------------------------
+// the deck
+//
+// Module-level so helpers outside the store body (armPreload, the
+// prefetch-ready hook) can reach it. Only `_bind` writes it.
+// ---------------------------------------------------------------------------
+
+let _deck: Deck | null = null;
+
+/** Wire deck events into store state + the recording hooks. */
+function deckCallbacks(get: Get, set: Set): DeckCallbacks {
+  return {
+    onPlay: () => {
+      set({ isPlaying: true });
+      // A restored session resumes without ever passing loadAndPlay — make
+      // sure the look-ahead (Rust prefetch + standby preload) is primed.
+      prefetchNext(get);
+      armPreload(get);
+    },
+
+    onPause: (atEnd, posSec, durSec) => {
+      // A track reaching its end fires `pause` right before `ended`. Ignore
+      // that one (the deck/fallback is about to start the next track):
+      // flipping isPlaying=false here makes the native MediaService drop its
+      // wake/WiFi lock + foreground status — so Android kills the screen-off
+      // process in the ~20ms gap before the next track starts. Genuine pauses
+      // are unaffected: a user tap pauses mid-track (not ended), and
+      // end-of-queue sets isPlaying=false in advance().
+      if (atEnd) return;
       set({ isPlaying: false });
       // A genuine pause is a good moment to checkpoint episode progress.
       const s = get();
-      recordEpisodeProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
-    };
-    const onTime = () => {
-      set({ positionSec: el.currentTime, durationSec: el.duration || 0 });
+      recordEpisodeProgress(s.queue[s.currentIndex], posSec, durSec);
+    },
+
+    onTime: (posSec, durSec) => {
+      set({ positionSec: posSec, durationSec: durSec });
       const s = get();
-      maybeRecordProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
-      maybeRecordPlay(s.queue[s.currentIndex], el.currentTime, el.duration || 0);
-    };
-    const onDuration = () => set({ durationSec: el.duration || 0 });
-    const onEnded = () => {
-      // Mark the finished episode listened + count the track play before advancing.
-      const s = get();
-      recordEpisodeProgress(s.queue[s.currentIndex], el.currentTime, el.duration || 0, true);
-      recordPlay(s.queue[s.currentIndex], el.currentTime, true);
-      get().next();
-    };
-    const onErr = () => {
-      const code = el.error?.code;
+      maybeRecordProgress(s.queue[s.currentIndex], posSec, durSec);
+      maybeRecordPlay(s.queue[s.currentIndex], posSec, durSec);
+    },
+
+    onDurationChange: (durSec) => set({ durationSec: durSec }),
+
+    onActiveError: (code) => {
       const msg =
         code === 4
           ? "track not available (offline and not downloaded?)"
           : `audio error (code ${code})`;
       set({ error: msg, isPlaying: false });
-    };
-    el.addEventListener("play", onPlay);
-    el.addEventListener("pause", onPause);
-    el.addEventListener("timeupdate", onTime);
-    el.addEventListener("durationchange", onDuration);
-    el.addEventListener("ended", onEnded);
-    el.addEventListener("error", onErr);
-    return () => {
-      el.removeEventListener("play", onPlay);
-      el.removeEventListener("pause", onPause);
-      el.removeEventListener("timeupdate", onTime);
-      el.removeEventListener("durationchange", onDuration);
-      el.removeEventListener("ended", onEnded);
-      el.removeEventListener("error", onErr);
-    };
-  },
-}));
+    },
+
+    onPlayRejected: (e) => reportPlayError(set, e),
+
+    onSwapped: (index, item) => {
+      // The outgoing listen's play-record guard migrates to the retiring slot
+      // so its onRetired can tell "already counted at threshold" from "never
+      // counted"; the incoming listen starts counting fresh.
+      _retiringPlayRecordedId = _playRecordedId;
+      _playRecordedId = null;
+      const s = get();
+      // The armed index may have gone stale if the queue mutated while the
+      // boundary was in flight — re-locate the item by id if so.
+      const idx =
+        s.queue[index]?.id === item.id
+          ? index
+          : s.queue.findIndex((t) => t.id === item.id);
+      set({
+        currentIndex: idx >= 0 ? idx : index,
+        positionSec: 0,
+        durationSec: item.duration_ms / 1000,
+        error: null,
+        audio: _deck?.active ?? s.audio,
+      });
+      prefetchNext(get);
+      armPreload(get);
+    },
+
+    onRetired: (item, posSec, durSec, reachedEnd) => {
+      recordEpisodeProgress(item, posSec, durSec, reachedEnd);
+      // Mirror the legacy guarded `ended` record: the threshold recorder
+      // (maybeRecordPlay) usually already counted this listen — only record
+      // here if it never did. Post-swap retires (crossfade tail) check the
+      // migrated guard; pre-swap ones (gapless, same tick as the swap) were
+      // migrated a moment ago and land on the same field.
+      const counted =
+        _retiringPlayRecordedId === item.id || _playRecordedId === item.id;
+      _retiringPlayRecordedId = null;
+      if (!counted) submitPlay(item, posSec, reachedEnd);
+    },
+
+    onAdvanceFallback: () => {
+      // Natural end with no usable standby — exactly the pre-deck `ended`
+      // path: record the finished listen from state, then advance.
+      const s = get();
+      const el = _deck?.active;
+      const pos = el?.currentTime ?? s.positionSec;
+      const dur = el?.duration ?? s.durationSec;
+      recordEpisodeProgress(s.queue[s.currentIndex], pos, dur || 0, true);
+      recordPlay(s.queue[s.currentIndex], pos, true);
+      advance(get, set, { manual: false });
+    },
+
+    onRecover: () => {
+      // A gapless swap announced itself but its play() was rejected — reload
+      // the (already swapped-to) current track through the legacy path.
+      const s = get();
+      if (s.currentIndex >= 0) loadAndPlay(get, set, s.currentIndex);
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // persistence wiring
@@ -496,16 +554,33 @@ function maybeRecordProgress(item: QueueItem | undefined, posSec: number, durSec
 // PLAY_COUNT_MIN_FRACTION of it (whichever first), or plays it to the end. We
 // record at most one play per listen (`_playRecordedId`, reset on each load),
 // so a paused/resumed track isn't double-counted but a repeat replays a new
-// play. Only a bearer *user* session records — play history is per-user, and a
-// SECRET_KEY session has no user to own it (the server would reject it).
+// play. Deck handoffs extend a listen past the track switch (the outgoing
+// track keeps fading after the UI moves on), so at each swap the guard
+// migrates to `_retiringPlayRecordedId` — the retire hook consults it to
+// avoid double-counting a listen the threshold already recorded. Only a
+// bearer *user* session records — play history is per-user, and a SECRET_KEY
+// session has no user to own it (the server would reject it).
 // ---------------------------------------------------------------------------
 
 const PLAY_COUNT_MIN_SEC = 30;
 const PLAY_COUNT_MIN_FRACTION = 0.5;
 let _playRecordedId: string | null = null;
+let _retiringPlayRecordedId: string | null = null;
 
 function isBearerUser(): boolean {
   return useAppStore.getState().session?.kind === "bearer";
+}
+
+/** Fire-and-forget push of one play event (no per-listen guard — see callers). */
+function submitPlay(item: QueueItem, posSec: number, completed: boolean) {
+  if (item.mediaKind === "episode") return;
+  if (!isBearerUser()) return;
+  const msPlayed = Math.max(0, Math.round(posSec * 1000));
+  // Queue locally, then opportunistically flush (both fire-and-forget — an
+  // offline failure leaves the play queued for the sync scheduler).
+  void playHistoryRecord(item.id, msPlayed, completed)
+    .then(() => playHistoryFlush())
+    .catch(() => {});
 }
 
 /** Record a track play once per listen (no-op for episodes / non-user sessions). */
@@ -514,12 +589,7 @@ function recordPlay(item: QueueItem | undefined, posSec: number, completed: bool
   if (_playRecordedId === item.id) return;
   if (!isBearerUser()) return;
   _playRecordedId = item.id;
-  const msPlayed = Math.max(0, Math.round(posSec * 1000));
-  // Queue locally, then opportunistically flush (both fire-and-forget — an
-  // offline failure leaves the play queued for the sync scheduler).
-  void playHistoryRecord(item.id, msPlayed, completed)
-    .then(() => playHistoryFlush())
-    .catch(() => {});
+  submitPlay(item, posSec, completed);
 }
 
 /** From the `timeupdate` firehose: count a play once it crosses the threshold. */
@@ -530,27 +600,6 @@ function maybeRecordPlay(item: QueueItem | undefined, posSec: number, durSec: nu
     posSec >= PLAY_COUNT_MIN_SEC ||
     (durSec > 0 && posSec / durSec >= PLAY_COUNT_MIN_FRACTION);
   if (crossed) recordPlay(item, posSec, false);
-}
-
-/** Seek the element to `sec` once it has enough metadata to honor it. */
-function seekOnReady(el: HTMLAudioElement, sec: number) {
-  if (sec <= 0) return;
-  const apply = () => {
-    try {
-      el.currentTime = sec;
-    } catch {
-      /* metadata not ready — leave at 0 */
-    }
-  };
-  if (el.readyState >= 1) {
-    apply();
-  } else {
-    const once = () => {
-      el.removeEventListener("loadedmetadata", once);
-      apply();
-    };
-    el.addEventListener("loadedmetadata", once);
-  }
 }
 
 /**
@@ -587,16 +636,59 @@ function primeRestored(get: Get, el: HTMLAudioElement) {
     });
 }
 
-/** Load the track at `index`, set it as src, and start playback. */
-function loadAndPlay(_get: Get, set: Set, index: number) {
-  const { audio, queue, currentIndex } = _get();
+/**
+ * The manual-skip fade duration per current prefs: crossfade must be on
+ * (which requires gapless on) plus the manual-skip toggle, capped short so
+ * skips feel snappy. 0 = instant cut (the default and legacy behavior).
+ */
+function manualFadeSec(): number {
+  const prefs = playbackPrefs();
+  if (!prefs.gaplessEnabled || !(prefs.crossfadeSec > 0) || !prefs.crossfadeOnManualSkip) {
+    return 0;
+  }
+  return Math.min(prefs.crossfadeSec, MANUAL_FADE_MAX_SEC);
+}
+
+/**
+ * Move to the track after the current one, honoring repeat semantics.
+ * `manual` distinguishes a user skip (may crossfade, per prefs) from a
+ * natural end-of-track advance on the fallback path (always an instant cut —
+ * the deck handles fading natural boundaries itself).
+ */
+function advance(get: Get, set: Set, opts: { manual: boolean }) {
+  const { queue, currentIndex, repeat } = get();
+  if (queue.length === 0) return;
+  const fadeSec = opts.manual ? manualFadeSec() : 0;
+  if (repeat === "one") {
+    // Replay the same track.
+    loadAndPlay(get, set, currentIndex, fadeSec);
+    return;
+  }
+  let nextIdx = currentIndex + 1;
+  if (nextIdx >= queue.length) {
+    if (repeat === "all") nextIdx = 0;
+    else {
+      // End of queue, no repeat → stop.
+      _deck?.pause();
+      set({ isPlaying: false });
+      return;
+    }
+  }
+  loadAndPlay(get, set, nextIdx, fadeSec);
+}
+
+/** Load the track at `index` onto the deck and start playback. */
+function loadAndPlay(_get: Get, set: Set, index: number, fadeSec = 0) {
+  const { queue, currentIndex } = _get();
   const track = queue[index];
-  if (!track || !audio) return;
+  const deck = _deck;
+  if (!track || !deck) return;
   // Checkpoint the outgoing episode (if any) before we switch away from it, so
   // its resume position is saved even on a manual skip.
   const outgoing = queue[currentIndex];
   if (outgoing && outgoing.id !== track.id) {
-    recordEpisodeProgress(outgoing, audio.currentTime, audio.duration || 0);
+    const el = deck.active;
+    recordEpisodeProgress(outgoing, el.currentTime, el.duration || 0);
   }
   set({ currentIndex: index, positionSec: 0, durationSec: 0, error: null });
   // New listen → allow this track to count a fresh play (repeat re-counts).
@@ -608,13 +700,10 @@ function loadAndPlay(_get: Get, set: Set, index: number) {
     .then((url: string) => {
       // Guard against races: a rapid skip could have moved currentIndex.
       if (_get().queue[_get().currentIndex]?.id !== track.id) return;
-      audio.src = url;
-      audio.currentTime = 0;
-      // Resume an in-progress episode where the listener left off.
-      if (track.mediaKind === "episode" && track.resumeMs && track.resumeMs > 0) {
-        seekOnReady(audio, track.resumeMs / 1000);
-      }
-      void audio.play().catch((e: unknown) => reportPlayError(set, e));
+      deck.playNow(track, index, url, { fadeSec });
+      // A manual-skip fade moves the active element without an onSwapped.
+      set({ audio: deck.active });
+      armPreload(_get);
     })
     .catch((e) => set({ error: formatErr(e) }));
 }
@@ -632,6 +721,20 @@ function resolveSrc(item: QueueItem): Promise<string> {
 }
 
 /**
+ * The index that plays after the current track (repeat rules applied), or -1
+ * when playback stops there. Shared by the Rust prefetch chain and the deck's
+ * standby preload so they always agree on "what's next".
+ */
+function nextIndexFor(s: Pick<PlayerState, "queue" | "currentIndex" | "repeat">): number {
+  const { queue, currentIndex, repeat } = s;
+  if (currentIndex < 0 || queue.length === 0) return -1;
+  if (repeat === "one") return currentIndex;
+  const n = currentIndex + 1;
+  if (n >= queue.length) return repeat === "all" ? 0 : -1;
+  return n;
+}
+
+/**
  * Fire-and-forget prefetch of the track that will play after the current one,
  * so a *streamed* queue can advance with the screen off. A hidden WebView won't
  * start a network media load, but it will load a local file — and Rust fetches
@@ -640,19 +743,58 @@ function resolveSrc(item: QueueItem): Promise<string> {
  * prefetch the current track, since it reloads at `ended` (also screen-off).
  */
 function prefetchNext(_get: Get) {
-  const { queue, currentIndex, repeat } = _get();
-  if (currentIndex < 0 || queue.length === 0) return;
-  let n: number;
-  if (repeat === "one") {
-    n = currentIndex;
-  } else {
-    n = currentIndex + 1;
-    if (n >= queue.length) n = repeat === "all" ? 0 : -1;
-  }
+  const n = nextIndexFor(_get());
   if (n < 0) return;
-  const next = queue[n];
+  const next = _get().queue[n];
   // Prefetch is track-specific (it pulls `/tracks/{id}/stream`); skip episodes.
   if (next && next.mediaKind !== "episode") void playerPrefetch(next.id).catch(() => {});
+}
+
+/**
+ * Arm (or clear) the deck's standby element for the upcoming track. Local
+ * sources arm immediately; a streamed track only once the Rust prefetcher has
+ * it on disk — arming earlier would proxy-stream it in parallel with the
+ * prefetch download. Re-invoked by the `player-prefetch-ready` event for the
+ * "completes later" case. Idempotent (the deck no-ops on a same-id re-arm).
+ */
+function armPreload(_get: Get) {
+  const deck = _deck;
+  if (!deck) return;
+  if (!playbackPrefs().gaplessEnabled) {
+    deck.syncPreload(null, -1, null);
+    return;
+  }
+  const s = _get();
+  const n = nextIndexFor(s);
+  const item = n >= 0 ? s.queue[n] : null;
+  if (!item) {
+    deck.syncPreload(null, -1, null);
+    return;
+  }
+  void (async () => {
+    let local = item.downloaded || (item.streamUrl ?? null) != null;
+    if (!local && item.mediaKind !== "episode") {
+      local = await playerPrefetchIsReady(item.id).catch(() => false);
+    }
+    if (!local) return; // the prefetch-ready event re-invokes us
+    const url = await resolveSrc(item);
+    const st = _get();
+    // Re-check: the queue (or what's next) may have changed while resolving.
+    if (nextIndexFor(st) === n && st.queue[n]?.id === item.id) {
+      deck.syncPreload(item, n, url);
+    }
+  })().catch(() => {});
+}
+
+let _prefetchReadyHooked = false;
+
+/** Re-arm the standby whenever the Rust prefetcher lands a file (once, lazily). */
+function hookPrefetchReady() {
+  if (_prefetchReadyHooked) return;
+  _prefetchReadyHooked = true;
+  onPrefetchReady(() => armPreload(usePlayerStore.getState)).catch(() => {
+    /* non-Tauri browser dev — the deck just falls back at boundaries */
+  });
 }
 
 /**

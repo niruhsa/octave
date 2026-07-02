@@ -6,7 +6,10 @@
 //! (not re-exported) so the `generate_handler!` macro can find the
 //! `__cmd__player_media_url` shim it generates.
 
+use tauri::Manager;
+
 use crate::error::AppResult;
+use crate::player::prefetch::PrefetchCache;
 use crate::player::server::{MediaServer, action_base_url, cover_url, episode_media_url, media_url};
 
 /// Return the webview-loadable URL for a track (or podcast episode) id. It
@@ -53,4 +56,17 @@ pub async fn player_action_url_base(
 pub async fn player_prefetch(app: tauri::AppHandle, track_id: String) -> AppResult<()> {
     crate::player::prefetch::spawn(app, track_id);
     Ok(())
+}
+
+/// True when the prefetcher holds a *complete* local copy of `track_id`. The
+/// playback deck checks this before arming its standby `<audio>` element for a
+/// streamed track — arming earlier would proxy-stream the track in parallel
+/// with the prefetch download (see `GAPLESS_CROSSFADE.md`). The async case
+/// (completes later) is covered by the `player-prefetch-ready` event.
+#[tauri::command]
+pub async fn player_prefetch_is_ready(app: tauri::AppHandle, track_id: String) -> AppResult<bool> {
+    Ok(app
+        .try_state::<PrefetchCache>()
+        .map(|c| c.ready(&track_id).is_some())
+        .unwrap_or(false))
 }

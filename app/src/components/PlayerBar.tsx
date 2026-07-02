@@ -25,16 +25,19 @@ import {
 } from "./icons";
 
 /**
- * Persistent now-playing bar + hidden `<audio>` element (OCTAVE styling).
+ * Persistent now-playing bar + the two hidden `<audio>` elements that form
+ * the playback deck (OCTAVE styling).
  *
- * One `<audio>` lives for the app's lifetime (mounted here, always in the
- * tree); the store owns its src/play/pause. This component renders the
- * controls (full bar on md+, condensed mini-player on mobile) and mirrors
- * state into the OS Media Session API so platform media keys / lock-screen /
- * Bluetooth controls drive the same store.
+ * Both elements live for the app's lifetime (mounted here, always in the
+ * tree); the store's deck owns their src/play/pause and swaps which one is
+ * audible at track boundaries (gapless/crossfade — see player/deck.ts). This
+ * component renders the controls (full bar on md+, condensed mini-player on
+ * mobile) and mirrors state into the OS Media Session API so platform media
+ * keys / lock-screen / Bluetooth controls drive the same store.
  */
 export default function PlayerBar() {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioARef = useRef<HTMLAudioElement | null>(null);
+  const audioBRef = useRef<HTMLAudioElement | null>(null);
   const bind = usePlayerStore((s) => s._bind);
 
   const queue = usePlayerStore((s) => s.queue);
@@ -62,8 +65,8 @@ export default function PlayerBar() {
   const meta = useNowPlayingMeta(current);
 
   useEffect(() => {
-    if (!audioRef.current) return;
-    return bind(audioRef.current);
+    if (!audioARef.current || !audioBRef.current) return;
+    return bind(audioARef.current, audioBRef.current);
   }, [bind]);
 
   // Drive the OS media controls from the shared player state. `useMediaSession`
@@ -79,17 +82,19 @@ export default function PlayerBar() {
   // Hour-plus tracks read as `H:MM:SS`; widen the readouts so they don't clip.
   const longForm = dur >= 3600;
 
-  // One persistent <audio>, mounted once at a stable position regardless of
-  // `empty`, so a re-render never removes it from the document. It used to be
-  // rendered in two separate return branches (bare <audio> when empty vs.
-  // <div><audio>…</div> when playing); the empty → playing transition that
-  // happens when you start an album made React tear the element down and build
-  // a new one mid-play, which on Chromium rejects the pending play() with
-  // "AbortError: … media was removed from the document". Only the visible
-  // chrome toggles on whether something is queued.
+  // Two persistent <audio> elements (the deck pair), mounted once at a stable
+  // position regardless of `empty`, so a re-render never removes them from
+  // the document. The single element used to be rendered in two separate
+  // return branches (bare <audio> when empty vs. <div><audio>…</div> when
+  // playing); the empty → playing transition that happens when you start an
+  // album made React tear the element down and build a new one mid-play,
+  // which on Chromium rejects the pending play() with "AbortError: … media
+  // was removed from the document". Only the visible chrome toggles on
+  // whether something is queued — the same rule now covers both elements.
   return (
     <>
-      <audio ref={audioRef} preload="auto" className="hidden" />
+      <audio ref={audioARef} preload="auto" className="hidden" />
+      <audio ref={audioBRef} preload="auto" className="hidden" />
       {!empty && (
     <div className="shrink-0 border-t border-oct-border bg-oct-surface">
       {error && (

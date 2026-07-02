@@ -26,7 +26,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use axum::http::header;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 use crate::AppStateHandle;
@@ -187,6 +187,11 @@ async fn run(app: tauri::AppHandle, track_id: String) {
             Ok(content_type) => {
                 cache.mark_complete(&track_id, content_type);
                 tracing::debug!(track = %track_id, "prefetched next track");
+                // Tell the playback deck its standby source is now a local
+                // file. The deck must not preload a streamed track before
+                // this: the loopback would proxy-stream it in parallel with
+                // this download (see GAPLESS_CROSSFADE.md §1).
+                let _ = app.emit("player-prefetch-ready", &track_id);
                 return;
             }
             Err(e) => last_err = Some(e),
@@ -246,4 +251,37 @@ fn file_stem(track_id: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ready()` (what `player_prefetch_is_ready` exposes to the deck) must
+    /// only surface *complete* files: never a fresh claim (in-progress
+    /// download) and never a discarded one.
+    #[test]
+    fn ready_only_after_complete() {
+        let dir = std::env::temp_dir().join(format!(
+            "octave-prefetch-test-{}",
+            std::process::id()
+        ));
+        let cache = PrefetchCache::new(dir.clone());
+
+        assert!(cache.ready("t1").is_none(), "unknown id is not ready");
+
+        let path = cache.claim("t1").expect("fresh claim yields a path");
+        assert!(cache.claim("t1").is_none(), "double-claim is refused");
+        assert!(cache.ready("t1").is_none(), "in-progress is not ready");
+
+        cache.mark_complete("t1", Some("audio/flac".into()));
+        let (p, ct) = cache.ready("t1").expect("complete file is ready");
+        assert_eq!(p, path);
+        assert_eq!(ct, "audio/flac");
+
+        cache.discard("t1");
+        assert!(cache.ready("t1").is_none(), "discarded is not ready");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
