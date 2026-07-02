@@ -2960,3 +2960,161 @@ impl StorageRepo for PgRepos {
         .map_err(db)
     }
 }
+
+// ---------------------------------------------------------------------------
+// DiscographyRepo (Phase 14)
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl DiscographyRepo for PgRepos {
+    async fn get_state(&self, artist_id: Uuid) -> Result<Option<ArtistDiscoState>> {
+        sqlx::query_as::<_, ArtistDiscoState>(
+            r#"SELECT artist_id, mbid, match_status, synced_at
+               FROM artist_discography WHERE artist_id = $1"#,
+        )
+        .bind(artist_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn upsert_state(
+        &self,
+        artist_id: Uuid,
+        mbid: Option<Uuid>,
+        match_status: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO artist_discography (artist_id, mbid, match_status)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (artist_id) DO UPDATE
+                   SET mbid = EXCLUDED.mbid, match_status = EXCLUDED.match_status"#,
+        )
+        .bind(artist_id)
+        .bind(mbid)
+        .bind(match_status)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn touch_synced(&self, artist_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO artist_discography (artist_id, synced_at)
+               VALUES ($1, now())
+               ON CONFLICT (artist_id) DO UPDATE SET synced_at = now()"#,
+        )
+        .bind(artist_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn list_states(&self) -> Result<Vec<ArtistDiscoState>> {
+        sqlx::query_as::<_, ArtistDiscoState>(
+            r#"SELECT artist_id, mbid, match_status, synced_at FROM artist_discography"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn upsert_report(&self, r: NewStoredReport) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO discography_reports
+                 (artist_id, provider, missing_releases, incomplete_albums,
+                  provider_snapshot, missing_release_count, incomplete_album_count, generated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+               ON CONFLICT (artist_id) DO UPDATE SET
+                 provider = EXCLUDED.provider,
+                 missing_releases = EXCLUDED.missing_releases,
+                 incomplete_albums = EXCLUDED.incomplete_albums,
+                 provider_snapshot = EXCLUDED.provider_snapshot,
+                 missing_release_count = EXCLUDED.missing_release_count,
+                 incomplete_album_count = EXCLUDED.incomplete_album_count,
+                 generated_at = now()"#,
+        )
+        .bind(r.artist_id)
+        .bind(&r.provider)
+        .bind(&r.missing_releases)
+        .bind(&r.incomplete_albums)
+        .bind(&r.provider_snapshot)
+        .bind(r.missing_release_count)
+        .bind(r.incomplete_album_count)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn get_report(&self, artist_id: Uuid) -> Result<Option<StoredReport>> {
+        sqlx::query_as::<_, StoredReport>(
+            r#"SELECT provider, missing_releases, incomplete_albums, provider_snapshot,
+                      missing_release_count, incomplete_album_count, generated_at
+               FROM discography_reports WHERE artist_id = $1"#,
+        )
+        .bind(artist_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn add_ignore(&self, new: NewDiscographyIgnore) -> Result<()> {
+        // ON CONFLICT DO NOTHING (no target) covers both partial unique indexes,
+        // so re-ignoring the same release/track is a harmless no-op.
+        sqlx::query(
+            r#"INSERT INTO discography_ignores
+                 (artist_id, scope, release_group_id, recording_id, title_key, label, created_by)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT DO NOTHING"#,
+        )
+        .bind(new.artist_id)
+        .bind(&new.scope)
+        .bind(new.release_group_id)
+        .bind(new.recording_id)
+        .bind(&new.title_key)
+        .bind(&new.label)
+        .bind(new.created_by)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn get_ignore(&self, id: Uuid) -> Result<Option<DiscographyIgnore>> {
+        sqlx::query_as::<_, DiscographyIgnore>(
+            r#"SELECT id, artist_id, scope, release_group_id, recording_id,
+                      title_key, label, created_at
+               FROM discography_ignores WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn remove_ignore(&self, artist_id: Uuid, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM discography_ignores WHERE id = $1 AND artist_id = $2")
+            .bind(id)
+            .bind(artist_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn list_ignores(&self, artist_id: Uuid) -> Result<Vec<DiscographyIgnore>> {
+        sqlx::query_as::<_, DiscographyIgnore>(
+            r#"SELECT id, artist_id, scope, release_group_id, recording_id,
+                      title_key, label, created_at
+               FROM discography_ignores WHERE artist_id = $1
+               ORDER BY created_at DESC"#,
+        )
+        .bind(artist_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+}

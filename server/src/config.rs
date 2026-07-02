@@ -92,6 +92,10 @@ pub struct Config {
     /// radio). `Some` when `FINGERPRINT_ENABLED` is on. The server boots + the
     /// radio stays purely behavioral when this is `None`.
     pub fingerprint: Option<FingerprintConfig>,
+    /// Optional discography-sync subsystem (Phase 14). `Some` when
+    /// `DISCOGRAPHY_ENABLED` is on. The server boots + the discography endpoints
+    /// report `enabled = false` when this is `None`.
+    pub discography: Option<DiscographyConfig>,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
@@ -143,6 +147,28 @@ pub struct FingerprintConfig {
     pub concurrency: usize,
     /// Similarity-search backend (`FINGERPRINT_INDEX`, default `bruteforce`).
     pub index_kind: IndexKind,
+}
+
+/// Discography-sync config (Phase 14). Enabled by `DISCOGRAPHY_ENABLED`.
+/// Reconciles each artist against an online metadata provider (MusicBrainz) so
+/// managers can see missing releases + missing tracks. See DISCOGRAPHY_SYNC.md.
+#[derive(Debug, Clone)]
+pub struct DiscographyConfig {
+    /// Metadata provider id (`musicbrainz` today; future `discogs`).
+    pub provider: String,
+    /// Optional contact string appended to the MusicBrainz `User-Agent`
+    /// (MusicBrainz etiquette so they can reach the operator).
+    pub contact: Option<String>,
+    /// Background sync-all cadence in seconds. 0 = manual only (the default —
+    /// a whole-library reconcile is heavy at ~1 req/s).
+    pub sync_interval_secs: u64,
+    /// Artist auto-accept score (0–100): the top provider candidate is accepted
+    /// automatically only at or above this.
+    pub match_threshold: u8,
+    /// Fuzzy title-match ratio (0–1) for album/track matching.
+    pub title_sim: f32,
+    /// Release types to report (mapped `album_type`s): `album`/`ep`/`single`/`live`.
+    pub include_types: Vec<String>,
 }
 
 /// Firebase Cloud Messaging config (Phase 10 — real-time push). The credentials
@@ -213,6 +239,7 @@ impl Config {
 
         let podcast = load_podcast(&anchor, library_path.as_ref())?;
         let fingerprint = load_fingerprint(&anchor);
+        let discography = load_discography();
 
         // Image optimization knobs (sensible defaults; all overridable).
         let image_max_dim = env_u64("IMAGE_MAX_DIM", 800).clamp(64, 8192) as u32;
@@ -256,6 +283,7 @@ impl Config {
             fcm,
             podcast,
             fingerprint,
+            discography,
             config_anchor: anchor,
         })
     }
@@ -491,6 +519,58 @@ fn load_fingerprint(anchor: &Path) -> Option<FingerprintConfig> {
         interval_secs,
         concurrency,
         index_kind,
+    })
+}
+
+/// Optional discography sync (Phase 14). Enabled by `DISCOGRAPHY_ENABLED`.
+/// `DISCOGRAPHY_SYNC_INTERVAL_SECS` (default 0 = manual only),
+/// `DISCOGRAPHY_MATCH_THRESHOLD` (default 90), `DISCOGRAPHY_TITLE_SIM`
+/// (default 0.9), and `DISCOGRAPHY_INCLUDE_TYPES` (default the four
+/// release types) tune matching + the background pass.
+fn load_discography() -> Option<DiscographyConfig> {
+    if !env_flag("DISCOGRAPHY_ENABLED") {
+        return None;
+    }
+    let provider = env::var("DISCOGRAPHY_PROVIDER")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| "musicbrainz".to_string());
+    let contact = env::var("DISCOGRAPHY_CONTACT")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let sync_interval_secs = env_u64("DISCOGRAPHY_SYNC_INTERVAL_SECS", 0);
+    let match_threshold = env_u64("DISCOGRAPHY_MATCH_THRESHOLD", 90).min(100) as u8;
+    let title_sim = env::var("DISCOGRAPHY_TITLE_SIM")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .unwrap_or(0.9)
+        .clamp(0.0, 1.0);
+    let include_types = env::var("DISCOGRAPHY_INCLUDE_TYPES")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            vec![
+                "album".to_string(),
+                "ep".to_string(),
+                "single".to_string(),
+                "live".to_string(),
+            ]
+        });
+    Some(DiscographyConfig {
+        provider,
+        contact,
+        sync_interval_secs,
+        match_threshold,
+        title_sim,
+        include_types,
     })
 }
 

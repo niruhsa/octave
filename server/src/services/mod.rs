@@ -5,11 +5,13 @@
 
 pub mod archive;
 pub mod artwork;
+pub mod discography;
 pub mod duration;
 pub mod favorites;
 pub mod fcm;
 pub mod feed;
 pub mod fingerprint;
+pub mod musicbrainz;
 pub mod image_opt;
 pub mod ingest;
 pub mod library;
@@ -32,6 +34,10 @@ pub mod watch;
 
 pub use archive::{extract as extract_archive, ArchiveKind};
 pub use artwork::{ArtworkService, CoverArtArchive, CoverArtSource, CoverImage};
+pub use discography::{
+    build_provider as build_discography_provider, ArtistCandidate, DiscographyCfg,
+    DiscographyProvider, DiscographyService, DiscographyStatus, IgnoreRequest, SyncOutcome,
+};
 pub use favorites::FavoritesService;
 pub use fcm::{FcmSender, PushOutcome, PushSender};
 pub use feed::{parse_feed, ParsedEpisode, ParsedFeed};

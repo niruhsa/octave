@@ -3,6 +3,7 @@
 //! All routes use the shared `AuthService` to gate access. `AppError` is
 //! mapped into HTTP statuses by `ApiError`.
 
+pub mod discography;
 pub mod discover;
 pub mod favorites;
 pub mod ingest;
@@ -41,10 +42,10 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::time_fmt::rfc3339;
 use crate::services::{
-    ArtworkService, FavoritesService, FingerprintService, ImageOptimizer, IngestService,
-    LibraryService, MetadataService, NotificationService, PlayHistoryService, PlaylistService,
-    PodcastService, RecommendationService, ScanService, StorageService, StreamingService,
-    UploadHub, UploadsService,
+    ArtworkService, DiscographyService, FavoritesService, FingerprintService, ImageOptimizer,
+    IngestService, LibraryService, MetadataService, NotificationService, PlayHistoryService,
+    PlaylistService, PodcastService, RecommendationService, ScanService, StorageService,
+    StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -63,6 +64,9 @@ pub struct RestState {
     /// Acoustic fingerprinting (Phase 12). `None` when `FINGERPRINT_ENABLED` is
     /// off — `/fingerprint/status` then reports `enabled = false`.
     pub fingerprint: Option<FingerprintService>,
+    /// Discography sync (Phase 14). `None` when `DISCOGRAPHY_ENABLED` is off —
+    /// `/discography/status` then reports `enabled = false`.
+    pub discography: Option<DiscographyService>,
     /// Podcast subsystem (None when no `PODCAST_PATH` is configured).
     pub podcasts: Option<PodcastService>,
     pub ingest: Option<IngestService>,
@@ -103,6 +107,7 @@ pub async fn serve(addr: SocketAddr, tls: Option<TlsConfig>, state: RestState) -
         .merge(playhistory::router())
         .merge(favorites::router())
         .merge(discover::router())
+        .merge(discography::router())
         .merge(podcast::router())
         .merge(streaming::router())
         .merge(ingest::router())

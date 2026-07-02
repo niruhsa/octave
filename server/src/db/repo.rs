@@ -680,3 +680,38 @@ pub trait PodcastSubscriptionRepo: Send + Sync {
         podcast_id: Uuid,
     ) -> Result<Vec<EpisodeProgress>>;
 }
+
+/// Discography sync (Phase 14). One combined trait covering the three side
+/// tables (resolution state, cached reports, suppression list) — they're all
+/// discography-scoped and only the `DiscographyService` uses them, so a single
+/// narrow trait keeps the wiring to one `Arc`. Mutations are Manager+ at the
+/// service layer. See DISCOGRAPHY_SYNC.md.
+#[async_trait]
+pub trait DiscographyRepo: Send + Sync {
+    // ----- Resolution state (`artist_discography`) -----
+    async fn get_state(&self, artist_id: Uuid) -> Result<Option<ArtistDiscoState>>;
+    /// Insert or update the artist's resolved id + status (leaves `synced_at`).
+    async fn upsert_state(
+        &self,
+        artist_id: Uuid,
+        mbid: Option<Uuid>,
+        match_status: &str,
+    ) -> Result<()>;
+    /// Bump `synced_at` to now (after a successful sync). Upserts the row.
+    async fn touch_synced(&self, artist_id: Uuid) -> Result<()>;
+    /// Every resolution-state row (drives sync-all + the status endpoint).
+    async fn list_states(&self) -> Result<Vec<ArtistDiscoState>>;
+
+    // ----- Cached reports (`discography_reports`) -----
+    async fn upsert_report(&self, r: NewStoredReport) -> Result<()>;
+    async fn get_report(&self, artist_id: Uuid) -> Result<Option<StoredReport>>;
+
+    // ----- Suppression list (`discography_ignores`) -----
+    /// Add an ignore. Idempotent (`ON CONFLICT DO NOTHING`).
+    async fn add_ignore(&self, new: NewDiscographyIgnore) -> Result<()>;
+    async fn get_ignore(&self, id: Uuid) -> Result<Option<DiscographyIgnore>>;
+    /// Remove an ignore scoped to its artist (so a caller can't touch another
+    /// artist's row via a guessed id).
+    async fn remove_ignore(&self, artist_id: Uuid, id: Uuid) -> Result<()>;
+    async fn list_ignores(&self, artist_id: Uuid) -> Result<Vec<DiscographyIgnore>>;
+}

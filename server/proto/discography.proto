@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package music.discography.v1;
+
+// Discography sync (Phase 14). Reconcile each artist against an online metadata
+// provider (MusicBrainz) so managers can see missing albums/EPs/singles and
+// missing tracks. Every RPC is Manager-gated at the service layer. Slim entity
+// messages (own copies) avoid a cross-proto import. See DISCOGRAPHY_SYNC.md.
+service DiscographyService {
+  // The cached gap report (has_report=false when never synced).
+  rpc GetReport(ArtistIdRequest) returns (GetReportResponse);
+  // Resolve (if needed) → fetch → diff → persist. Returns a report, or a
+  // candidate list to disambiguate when the artist can't be auto-matched.
+  rpc SyncArtist(ArtistIdRequest) returns (SyncResponse);
+  // Provider artist candidates for the disambiguation UI.
+  rpc GetCandidates(ArtistIdRequest) returns (CandidateList);
+  // Pin the artist ↔ provider match by hand, or set it to 'ignored' (empty mbid).
+  rpc Resolve(ResolveRequest) returns (OkResponse);
+  // The artist's suppression list (the "Ignored" management view).
+  rpc ListIgnores(ArtistIdRequest) returns (IgnoreList);
+  // Suppress a release/track; returns the re-filtered report (network-free).
+  rpc AddIgnore(AddIgnoreRequest) returns (GetReportResponse);
+  // Remove a suppression; returns the re-filtered report.
+  rpc RemoveIgnore(RemoveIgnoreRequest) returns (GetReportResponse);
+  // Library-wide coverage (enabled=false when DISCOGRAPHY_ENABLED is off).
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // Background-style re-sync of every matched artist (rate-limited).
+  rpc SyncAll(SyncAllRequest) returns (SyncAllResponse);
+}
+
+message ArtistIdRequest { string artist_id = 1; }
+
+// A release the library is missing entirely.
+message MissingRelease {
+  string title = 1;
+  string album_type = 2;  // album | ep | single | live
+  int32 year = 3;         // 0 = unknown
+  string provider_id = 4; // release-group id — echo back to ignore the release
+}
+
+// A track missing from an owned album.
+message MissingTrack {
+  string title = 1;
+  int32 position = 2;      // 0 = unknown
+  int32 disc_no = 3;       // 0 = unknown
+  string recording_id = 4; // empty when the provider has none
+  string title_key = 5;    // normalized key — echo back to ignore the track
+}
+
+// An owned album missing one or more tracks.
+message IncompleteAlbum {
+  string album_id = 1;
+  string title = 2;
+  string release_group_id = 3;
+  repeated MissingTrack missing_tracks = 4;
+}
+
+message DiscographyReport {
+  string artist_id = 1;
+  string provider = 2;
+  repeated MissingRelease missing_releases = 3;
+  repeated IncompleteAlbum incomplete_albums = 4;
+  int32 missing_release_count = 5;
+  int32 incomplete_album_count = 6;
+  string generated_at = 7; // RFC-3339
+}
+
+message GetReportResponse {
+  bool has_report = 1;
+  DiscographyReport report = 2;
+}
+
+message Candidate {
+  string provider_id = 1;
+  string name = 2;
+  string disambiguation = 3; // empty when none
+  uint32 score = 4;          // 0..100
+}
+message CandidateList { repeated Candidate candidates = 1; }
+
+message SyncResponse {
+  string status = 1;                 // "report" | "needs_resolution"
+  DiscographyReport report = 2;      // set when status = "report"
+  repeated Candidate candidates = 3; // set when status = "needs_resolution"
+}
+
+message ResolveRequest {
+  string artist_id = 1;
+  string mbid = 2; // empty => set the artist to 'ignored'
+}
+message OkResponse { bool ok = 1; }
+
+message Ignore {
+  string id = 1;
+  string artist_id = 2;
+  string scope = 3;            // "release" | "track"
+  string release_group_id = 4;
+  string recording_id = 5;     // empty when absent
+  string title_key = 6;        // empty when absent
+  string label = 7;
+  string created_at = 8;       // RFC-3339
+}
+message IgnoreList { repeated Ignore ignores = 1; }
+
+message AddIgnoreRequest {
+  string artist_id = 1;
+  string scope = 2;            // "release" | "track"
+  string release_group_id = 3;
+  string recording_id = 4;     // optional (track scope)
+  string title_key = 5;        // optional (track scope)
+  string label = 6;
+}
+message RemoveIgnoreRequest {
+  string artist_id = 1;
+  string ignore_id = 2;
+}
+
+message StatusRequest {}
+message StatusResponse {
+  bool enabled = 1;
+  string provider = 2;
+  int64 artists_total = 3;
+  int64 matched = 4;
+  int64 unresolved = 5;
+  int64 ignored = 6;
+}
+
+message SyncAllRequest {}
+message SyncAllResponse {
+  uint64 synced = 1;
+  uint64 skipped_fresh = 2;
+  uint64 failed = 3;
+  uint64 total = 4;
+}

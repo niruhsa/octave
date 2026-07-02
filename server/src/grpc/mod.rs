@@ -4,6 +4,7 @@
 //! intentionally unauthenticated.
 
 pub mod auth_svc;
+pub mod discography_svc;
 pub mod discover_svc;
 pub mod favorite_svc;
 pub mod interceptor;
@@ -25,12 +26,13 @@ use crate::config::TlsConfig;
 use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
-    ArtworkService, FavoritesService, FingerprintService, IngestService, LibraryService,
-    MetadataService, NotificationService, PlayHistoryService, PlaylistService, PodcastService,
-    RecommendationService, ScanService, StorageService, UploadHub, UploadsService,
+    ArtworkService, DiscographyService, FavoritesService, FingerprintService, IngestService,
+    LibraryService, MetadataService, NotificationService, PlayHistoryService, PlaylistService,
+    PodcastService, RecommendationService, ScanService, StorageService, UploadHub, UploadsService,
 };
 
 pub use auth_svc::AuthServer;
+pub use discography_svc::DiscographyServer;
 pub use discover_svc::DiscoverServer;
 pub use favorite_svc::FavoriteServer;
 pub use interceptor::AuthInterceptor;
@@ -58,6 +60,7 @@ pub async fn serve(
     favorites: FavoritesService,
     discover: RecommendationService,
     fingerprint: Option<FingerprintService>,
+    discography: Option<DiscographyService>,
     podcasts: Option<PodcastService>,
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
@@ -92,6 +95,9 @@ pub async fn serve(
         .await;
     health_reporter
         .set_serving::<proto::discover::discover_service_server::DiscoverServiceServer<DiscoverServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::discography::discography_service_server::DiscographyServiceServer<DiscographyServer>>()
         .await;
 
     let interceptor = AuthInterceptor::new(auth.clone());
@@ -140,6 +146,11 @@ pub async fn serve(
         interceptor: interceptor.clone(),
     }
     .into_service();
+    let discography_server = DiscographyServer {
+        discography,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
     let upload_server = UploadServer {
         ingest,
         uploads,
@@ -174,6 +185,7 @@ pub async fn serve(
         .add_service(play_history_server)
         .add_service(favorite_server)
         .add_service(discover_server)
+        .add_service(discography_server)
         .add_service(upload_server)
         .serve_with_shutdown(addr, shutdown_signal)
         .await

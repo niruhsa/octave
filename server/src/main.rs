@@ -12,13 +12,13 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    build_extractor, build_index, run_optimize_pass, ArtworkService, CoverArtArchive,
-    CoverArtSource, DebouncedWarmer, FavoritesService, FcmSender, FingerprintService,
-    ImageOptimizer, IngestService, ItunesDirectory, LibraryService, MetadataService,
-    NotificationService, PlaylistRecWarmer, PlayHistoryService, PlaylistService, PodcastDirectory,
-    PodcastIndexDirectory, PodcastService, PushSender, RecommendationCache, RecommendationService,
-    ScanService, StorageService, StreamingService, UploadHub, UploadsService, REC_CACHE_MAX,
-    REC_CACHE_TTL, REC_WARM_DEBOUNCE,
+    build_discography_provider, build_extractor, build_index, run_optimize_pass, ArtworkService,
+    CoverArtArchive, CoverArtSource, DebouncedWarmer, DiscographyCfg, DiscographyService,
+    FavoritesService, FcmSender, FingerprintService, ImageOptimizer, IngestService,
+    ItunesDirectory, LibraryService, MetadataService, NotificationService, PlaylistRecWarmer,
+    PlayHistoryService, PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService,
+    PushSender, RecommendationCache, RecommendationService, ScanService, StorageService,
+    StreamingService, UploadHub, UploadsService, REC_CACHE_MAX, REC_CACHE_TTL, REC_WARM_DEBOUNCE,
 };
 use server::db::repo::TrackFeatureRepo;
 use server::auth::Identity;
@@ -345,6 +345,31 @@ async fn main() -> Result<()> {
         );
     }
 
+    // Discography sync (Phase 14) — optional external metadata reconciliation.
+    // Manager-gated; when disabled the endpoints report `enabled = false`.
+    let discography = config.discography.as_ref().map(|dc| {
+        let provider = build_discography_provider(dc);
+        info!(
+            provider = %dc.provider,
+            interval_secs = dc.sync_interval_secs,
+            "discography sync enabled"
+        );
+        DiscographyService::new(
+            Arc::new(repos.clone()), // artists
+            Arc::new(repos.clone()), // albums
+            Arc::new(repos.clone()), // tracks
+            Arc::new(repos.clone()), // aliases (album/track spellings for matching)
+            Arc::new(repos.clone()), // discography state / reports / ignores
+            provider,
+            DiscographyCfg::from(dc),
+        )
+    });
+    // Background sync-all poller (0 = manual only; no startup pass so we never
+    // hammer the provider at ~1 req/s on boot).
+    if let (Some(d), Some(dc)) = (&discography, &config.discography) {
+        Arc::new(d.clone()).spawn_poller(dc.sync_interval_secs);
+    }
+
     // One shutdown signal fans out to both transports and the live streams.
     // A dedicated listener flips it on the first SIGINT/SIGTERM.
     let (shutdown_tx, shutdown_rx) = server::shutdown::channel();
@@ -366,6 +391,7 @@ async fn main() -> Result<()> {
         favorites: favorites.clone(),
         discover: discover.clone(),
         fingerprint: fingerprint.clone(),
+        discography: discography.clone(),
         podcasts: podcasts.clone(),
         ingest: ingest.clone(),
         metadata: metadata.clone(),
@@ -391,6 +417,7 @@ async fn main() -> Result<()> {
         favorites,
         discover,
         fingerprint,
+        discography,
         podcasts,
         ingest,
         uploads,

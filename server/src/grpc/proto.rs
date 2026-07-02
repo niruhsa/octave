@@ -32,6 +32,10 @@ pub mod discover {
     tonic::include_proto!("music.discover.v1");
 }
 
+pub mod discography {
+    tonic::include_proto!("music.discography.v1");
+}
+
 pub mod upload {
     tonic::include_proto!("music.upload.v1");
 }

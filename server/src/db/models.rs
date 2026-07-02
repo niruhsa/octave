@@ -737,3 +737,125 @@ pub struct NewPodcastEpisode {
     pub image_path: Option<String>,
     pub published_at: Option<OffsetDateTime>,
 }
+
+// ---------------------------------------------------------------------------
+// Discography sync (Phase 14 — external metadata reconciliation).
+//
+// Resolution state + reports live in side tables keyed by artist_id (see the
+// 20270801 migration) so the shared Artist/Album structs — and their many
+// hand-written queries — stay untouched. Server-only; not mirrored to SQLite.
+// ---------------------------------------------------------------------------
+
+/// Per-artist provider resolution state. `mbid` is the resolved MusicBrainz
+/// artist id (sticky once set); `match_status` ∈
+/// `unresolved` / `matched` / `manual` / `ignored`.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct ArtistDiscoState {
+    pub artist_id: Uuid,
+    pub mbid: Option<Uuid>,
+    pub match_status: String,
+    pub synced_at: Option<OffsetDateTime>,
+}
+
+/// A release (album/EP/single/live) the library is missing entirely. `year` is
+/// the provider's first-release year; `provider_id` is the release-group MBID
+/// (a string on the wire; a client echoes it back to ignore the release).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MissingRelease {
+    pub title: String,
+    /// Mapped `album_type`: `album` / `ep` / `single` / `live`.
+    pub album_type: String,
+    pub year: Option<i32>,
+    pub provider_id: String,
+}
+
+/// An owned album that is missing one or more tracks vs. the provider's
+/// canonical edition. `release_group_id` (the matched release-group MBID) lets a
+/// client scope a track ignore to this release.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IncompleteAlbum {
+    pub album_id: Uuid,
+    pub title: String,
+    pub release_group_id: String,
+    pub missing_tracks: Vec<MissingTrack>,
+}
+
+/// One track missing from an owned album. `recording_id` (recording MBID, when
+/// the provider has one) + `title_key` (normalized title) are the ignore keys a
+/// client echoes back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MissingTrack {
+    pub title: String,
+    pub position: Option<i32>,
+    pub disc_no: Option<i32>,
+    pub recording_id: Option<String>,
+    pub title_key: String,
+}
+
+/// The cached gap report served to the UI (assembled from the stored JSON in
+/// `discography_reports`, after suppression filtering).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographyReport {
+    pub artist_id: Uuid,
+    pub provider: String,
+    pub missing_releases: Vec<MissingRelease>,
+    pub incomplete_albums: Vec<IncompleteAlbum>,
+    pub missing_release_count: i32,
+    pub incomplete_album_count: i32,
+    pub generated_at: OffsetDateTime,
+}
+
+/// Raw report row as persisted: the three JSON payloads (as TEXT) + counts. The
+/// service deserializes `missing_releases`/`incomplete_albums` for the wire and
+/// `provider_snapshot` only when re-filtering after an ignore change.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StoredReport {
+    pub provider: String,
+    pub missing_releases: String,
+    pub incomplete_albums: String,
+    pub provider_snapshot: String,
+    pub missing_release_count: i32,
+    pub incomplete_album_count: i32,
+    pub generated_at: OffsetDateTime,
+}
+
+/// Insert/upsert shape for a stored report.
+#[derive(Debug, Clone)]
+pub struct NewStoredReport {
+    pub artist_id: Uuid,
+    pub provider: String,
+    pub missing_releases: String,
+    pub incomplete_albums: String,
+    pub provider_snapshot: String,
+    pub missing_release_count: i32,
+    pub incomplete_album_count: i32,
+}
+
+/// A suppression entry — a release or a track a manager has chosen to ignore
+/// (DISCOGRAPHY_SYNC.md §4.7). Keyed on provider ids so it survives library
+/// edits + re-matching.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct DiscographyIgnore {
+    pub id: Uuid,
+    pub artist_id: Uuid,
+    /// `release` or `track`.
+    pub scope: String,
+    pub release_group_id: Uuid,
+    pub recording_id: Option<Uuid>,
+    pub title_key: Option<String>,
+    pub label: String,
+    pub created_at: OffsetDateTime,
+}
+
+/// Insert shape for a [`DiscographyIgnore`]. `id`/`created_at` are DB-set; the
+/// insert is idempotent (`ON CONFLICT DO NOTHING`).
+#[derive(Debug, Clone)]
+pub struct NewDiscographyIgnore {
+    pub artist_id: Uuid,
+    pub scope: String,
+    pub release_group_id: Uuid,
+    pub recording_id: Option<Uuid>,
+    pub title_key: Option<String>,
+    pub label: String,
+    pub created_by: Option<Uuid>,
+}
