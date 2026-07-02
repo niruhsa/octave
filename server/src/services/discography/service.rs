@@ -6,20 +6,92 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::auth::Identity;
 use crate::db::models::{
     Album, DiscographyIgnore, DiscographyReport, NewDiscographyIgnore, NewStoredReport,
-    PermissionLevel,
+    PermissionLevel, TrackFingerprint,
 };
 use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, DiscographyRepo, TrackRepo};
 use crate::error::{AppError, Result};
+use crate::services::NotificationService;
 
 use super::diff::{apply_ignores, ProviderSnapshot, SnapMissingTrack, SnapReleaseGroup};
 use super::r#match::{matches_any, normalize_title, similarity};
 use super::provider::{ArtistCandidate, DiscographyProvider};
+
+/// Hook for alerting an artist's followers when a sync detects a genuinely-new
+/// missing release (Phase D). A trait (implemented by [`NotificationService`])
+/// so the service stays unit-testable against a fake.
+#[async_trait]
+pub trait NewReleaseNotifier: Send + Sync {
+    /// Fan out a "new release from this artist" alert to followers. Returns the
+    /// number of notifications created.
+    async fn notify(&self, artist_id: Uuid, title: &str) -> Result<u64>;
+}
+
+#[async_trait]
+impl NewReleaseNotifier for NotificationService {
+    async fn notify(&self, artist_id: Uuid, title: &str) -> Result<u64> {
+        self.notify_provider_release(artist_id, title).await
+    }
+}
+
+/// Audio-anchored artist resolution (Phase E). Given the Chromaprint
+/// fingerprints of some owned tracks, resolve the artist to a provider
+/// (MusicBrainz, via AcoustID) id — sharpening resolution beyond name search.
+/// A trait so the service stays testable; the AcoustID impl lives behind the
+/// `chromaprint` build feature.
+#[async_trait]
+pub trait AudioResolver: Send + Sync {
+    /// The provider artist id the fingerprints point to, or `None` when the
+    /// audio can't confidently resolve (→ fall back to name search).
+    async fn resolve_artist(&self, fingerprints: &[TrackFingerprint]) -> Result<Option<String>>;
+}
+
+// `dominant_artist` is consumed by the AcoustID resolver (chromaprint feature)
+// and the unit tests; it's dead in a default, non-test lib build.
+#[cfg_attr(not(feature = "chromaprint"), allow(dead_code))]
+
+/// Pick the dominant provider artist id across per-track resolutions (Phase E).
+/// Each input is `(artist_ids_for_that_track, best_match_score)`. Accepts a
+/// winner only when **two independent tracks agree**, or a single track resolves
+/// unambiguously with a high score — so one featured-artist credit can't
+/// mis-anchor the whole artist. Pure + unit-tested.
+pub(super) fn dominant_artist(tracks: &[(Vec<String>, f32)]) -> Option<String> {
+    use std::collections::{HashMap, HashSet};
+    let returned: Vec<&(Vec<String>, f32)> = tracks.iter().filter(|(a, _)| !a.is_empty()).collect();
+    if returned.is_empty() {
+        return None;
+    }
+    let mut counts: HashMap<&str, u32> = HashMap::new();
+    for (artists, _) in &returned {
+        let mut seen = HashSet::new();
+        for a in artists.iter() {
+            if seen.insert(a.as_str()) {
+                *counts.entry(a.as_str()).or_default() += 1;
+            }
+        }
+    }
+    let (winner, count) = counts
+        .iter()
+        .max_by_key(|(_, c)| **c)
+        .map(|(k, c)| (k.to_string(), *c))?;
+    if count >= 2 {
+        return Some(winner);
+    }
+    // Single-track high-confidence fallback: one track, one artist, strong score.
+    if returned.len() == 1 {
+        let (artists, score) = returned[0];
+        if artists.len() == 1 && *score >= 0.9 {
+            return Some(winner);
+        }
+    }
+    None
+}
 
 /// How far the top candidate's score must beat the runner-up to auto-accept
 /// (points) — guards against confidently picking one of two same-named artists.
@@ -27,6 +99,19 @@ const MATCH_MARGIN: u8 = 5;
 
 /// Skip re-syncing an artist synced within this window during a background pass.
 const FRESHNESS_DAYS: i64 = 7;
+
+/// A newly-detected missing release notifies followers only if its first-release
+/// year is within this many years of now — so a re-sync that surfaces a
+/// freshly-*cataloged* old album doesn't masquerade as a new release.
+const NEW_RELEASE_RECENT_YEARS: i32 = 1;
+
+/// Cap on how many new-release notifications one sync fans out (a burst guard —
+/// the "new since last snapshot + recent" filter already makes bursts rare).
+const NEW_RELEASE_NOTIFY_CAP: usize = 20;
+
+/// How many of an artist's fingerprinted tracks to sample for audio-anchored
+/// resolution (Phase E) — a handful is plenty to agree on the artist.
+const AUDIO_SAMPLE_LIMIT: i64 = 5;
 
 /// Tunables sourced from [`crate::config::DiscographyConfig`].
 #[derive(Debug, Clone)]
@@ -80,6 +165,12 @@ pub struct DiscographyService {
     disco: Arc<dyn DiscographyRepo>,
     provider: Arc<dyn DiscographyProvider>,
     cfg: DiscographyCfg,
+    /// Optional follower-notification hook (Phase D). `None` disables new-release
+    /// alerts; the sync otherwise behaves identically.
+    notifier: Option<Arc<dyn NewReleaseNotifier>>,
+    /// Optional audio-anchored resolver (Phase E — AcoustID). `None` falls back
+    /// to name-based resolution.
+    audio_resolver: Option<Arc<dyn AudioResolver>>,
 }
 
 impl DiscographyService {
@@ -101,7 +192,23 @@ impl DiscographyService {
             disco,
             provider,
             cfg,
+            notifier: None,
+            audio_resolver: None,
         }
+    }
+
+    /// Wire in the follower-notification hook so a sync that detects a
+    /// genuinely-new missing release alerts the artist's followers (Phase D).
+    pub fn with_notifier(mut self, notifier: Option<Arc<dyn NewReleaseNotifier>>) -> Self {
+        self.notifier = notifier;
+        self
+    }
+
+    /// Wire in audio-anchored resolution (Phase E) — the artist is resolved from
+    /// its tracks' Chromaprints (via AcoustID) before falling back to name search.
+    pub fn with_audio_resolver(mut self, resolver: Option<Arc<dyn AudioResolver>>) -> Self {
+        self.audio_resolver = resolver;
+        self
     }
 
     // -----------------------------------------------------------------------
@@ -129,17 +236,30 @@ impl DiscographyService {
             return Ok(SyncOutcome::Report(report));
         }
 
-        // Resolve the provider artist id (sticky once set).
-        let mbid = match state.as_ref().and_then(|s| s.mbid) {
-            Some(m) => m.to_string(),
-            None => match self.resolve_mbid(&artist.name, artist_id).await? {
-                Resolved::Mbid(m) => m,
+        // Resolve the provider artist id (sticky once set — but only for the
+        // *active* provider; a provider switch makes a stored id stale and
+        // re-resolves).
+        let resolved = state.as_ref().and_then(|s| {
+            match (s.provider.as_deref(), s.provider_id.as_deref()) {
+                (Some(p), Some(id)) if p == self.provider.id() => Some(id.to_string()),
+                _ => None,
+            }
+        });
+        let provider_artist_id = match resolved {
+            Some(id) => id,
+            None => match self.resolve_provider(&artist.name, artist_id).await? {
+                Resolved::Id(id) => id,
                 Resolved::Needs(candidates) => return Ok(SyncOutcome::NeedsResolution(candidates)),
             },
         };
 
+        // Baseline for new-release detection (Phase D): the release-group ids
+        // from the previous snapshot. `None` when never synced, so the first
+        // sync only records a baseline and notifies nothing.
+        let prev_ids = self.previous_release_ids(artist_id).await;
+
         // Fetch the discography and build the pre-ignore snapshot.
-        let groups = self.provider.release_groups(&mbid).await?;
+        let groups = self.provider.release_groups(&provider_artist_id).await?;
         let locals = self.load_local_albums(artist_id).await?;
         let mut used: HashSet<Uuid> = HashSet::new();
         let mut snap_groups = Vec::new();
@@ -184,32 +304,69 @@ impl DiscographyService {
         let report = self
             .persist_filtered(artist_id, self.provider.id(), &snapshot, &ignores)
             .await?;
+        self.notify_new_releases(artist_id, &snapshot, prev_ids.as_ref())
+            .await;
         Ok(SyncOutcome::Report(report))
     }
 
-    /// Resolve an artist name to a provider id via the confidence policy (§4.2).
-    async fn resolve_mbid(&self, name: &str, artist_id: Uuid) -> Result<Resolved> {
+    /// Resolve an artist to a provider id: audio-anchored first (Phase E — from
+    /// the tracks' fingerprints), then the name-based confidence policy (§4.2).
+    async fn resolve_provider(&self, name: &str, artist_id: Uuid) -> Result<Resolved> {
+        // Phase E: try resolving from the artist's audio before guessing by name.
+        if let Some(resolver) = &self.audio_resolver {
+            let prints = self
+                .disco
+                .artist_chromaprints(artist_id, AUDIO_SAMPLE_LIMIT)
+                .await
+                .unwrap_or_default();
+            if !prints.is_empty() {
+                match resolver.resolve_artist(&prints).await {
+                    Ok(Some(provider_id)) => {
+                        self.disco
+                            .upsert_state(
+                                artist_id,
+                                Some(self.provider.id()),
+                                Some(&provider_id),
+                                "matched",
+                            )
+                            .await?;
+                        return Ok(Resolved::Id(provider_id));
+                    }
+                    Ok(None) => {} // abstained — fall back to name search
+                    Err(e) => {
+                        tracing::warn!(artist = %artist_id, error = %e, "discography: audio resolution failed")
+                    }
+                }
+            }
+        }
+
         let hints = self.hint_titles(artist_id).await;
         let candidates = self.provider.resolve_artist(name, &hints).await?;
         if candidates.is_empty() {
-            self.disco.upsert_state(artist_id, None, "unresolved").await?;
+            self.disco
+                .upsert_state(artist_id, None, None, "unresolved")
+                .await?;
             return Ok(Resolved::Needs(vec![]));
         }
         let top = &candidates[0];
         let runner_up = candidates.get(1).map(|c| c.score).unwrap_or(0);
         let confident = top.score >= self.cfg.match_threshold
             && (candidates.len() == 1 || top.score.saturating_sub(runner_up) >= MATCH_MARGIN);
-        match (confident, Uuid::parse_str(&top.provider_id)) {
-            (true, Ok(m)) => {
-                self.disco
-                    .upsert_state(artist_id, Some(m), "matched")
-                    .await?;
-                Ok(Resolved::Mbid(m.to_string()))
-            }
-            _ => {
-                self.disco.upsert_state(artist_id, None, "unresolved").await?;
-                Ok(Resolved::Needs(candidates))
-            }
+        if confident {
+            self.disco
+                .upsert_state(
+                    artist_id,
+                    Some(self.provider.id()),
+                    Some(&top.provider_id),
+                    "matched",
+                )
+                .await?;
+            Ok(Resolved::Id(top.provider_id.clone()))
+        } else {
+            self.disco
+                .upsert_state(artist_id, None, None, "unresolved")
+                .await?;
+            Ok(Resolved::Needs(candidates))
         }
     }
 
@@ -256,21 +413,30 @@ impl DiscographyService {
         self.provider.resolve_artist(&artist.name, &hints).await
     }
 
-    /// Pin the artist ↔ provider match by hand (`Some(mbid)` → `manual`), or set
-    /// the artist to `ignored` (`None`) so it's excluded from reconciliation.
+    /// Pin the artist ↔ provider match by hand (`Some(id)` → `manual`, tagged
+    /// with the active provider), or set the artist to `ignored` (`None`) so
+    /// it's excluded from reconciliation.
     pub async fn resolve(
         &self,
         caller: &Identity,
         artist_id: Uuid,
-        mbid: Option<Uuid>,
+        provider_id: Option<String>,
     ) -> Result<()> {
         caller.require(PermissionLevel::Manager)?;
         if self.artists.get(artist_id).await?.is_none() {
             return Err(AppError::NotFound(format!("artist {artist_id}")));
         }
-        match mbid {
-            Some(m) => self.disco.upsert_state(artist_id, Some(m), "manual").await,
-            None => self.disco.upsert_state(artist_id, None, "ignored").await,
+        match provider_id {
+            Some(id) => {
+                self.disco
+                    .upsert_state(artist_id, Some(self.provider.id()), Some(&id), "manual")
+                    .await
+            }
+            None => {
+                self.disco
+                    .upsert_state(artist_id, None, None, "ignored")
+                    .await
+            }
         }
     }
 
@@ -407,6 +573,64 @@ impl DiscographyService {
             incomplete_album_count,
             generated_at: OffsetDateTime::now_utc(),
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // New-release notifications (Phase D)
+    // -----------------------------------------------------------------------
+
+    /// Release-group ids from the last stored snapshot, or `None` if the artist
+    /// has never been synced (the baseline guard for new-release alerts).
+    async fn previous_release_ids(&self, artist_id: Uuid) -> Option<HashSet<String>> {
+        let stored = self.disco.get_report(artist_id).await.ok().flatten()?;
+        let snap: ProviderSnapshot =
+            serde_json::from_str(&stored.provider_snapshot).unwrap_or_default();
+        Some(
+            snap.release_groups
+                .into_iter()
+                .map(|rg| rg.provider_id)
+                .collect(),
+        )
+    }
+
+    /// Alert followers about genuinely-new missing releases: a release-group
+    /// that is missing (not owned), absent from the previous snapshot, and
+    /// recently released. No-op without a notifier, or on the first sync
+    /// (`prev` is `None`) so the back-catalogue never spams. Best-effort —
+    /// a notification failure never fails the sync.
+    async fn notify_new_releases(
+        &self,
+        artist_id: Uuid,
+        snapshot: &ProviderSnapshot,
+        prev: Option<&HashSet<String>>,
+    ) {
+        let (Some(notifier), Some(prev)) = (self.notifier.as_ref(), prev) else {
+            return;
+        };
+        let year_now = OffsetDateTime::now_utc().year();
+        let fresh: Vec<&SnapReleaseGroup> = snapshot
+            .release_groups
+            .iter()
+            .filter(|rg| {
+                rg.matched_album_id.is_none()
+                    && !prev.contains(&rg.provider_id)
+                    && rg
+                        .year
+                        .is_some_and(|y| y >= year_now - NEW_RELEASE_RECENT_YEARS)
+            })
+            .collect();
+        for rg in fresh.iter().take(NEW_RELEASE_NOTIFY_CAP) {
+            if let Err(e) = notifier.notify(artist_id, &rg.title).await {
+                tracing::warn!(artist = %artist_id, error = %e, "discography: new-release notify failed");
+            }
+        }
+        if fresh.len() > NEW_RELEASE_NOTIFY_CAP {
+            tracing::info!(
+                artist = %artist_id,
+                dropped = fresh.len() - NEW_RELEASE_NOTIFY_CAP,
+                "discography: capped new-release notifications"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -566,17 +790,18 @@ impl DiscographyService {
     }
 }
 
-/// A request to add a suppression (built from the REST/gRPC body).
+/// A request to add a suppression (built from the REST/gRPC body). Provider ids
+/// are strings (provider-agnostic — Phase D).
 pub struct IgnoreRequest {
     pub scope: String,
-    pub release_group_id: Uuid,
-    pub recording_id: Option<Uuid>,
+    pub release_group_id: String,
+    pub recording_id: Option<String>,
     pub title_key: Option<String>,
     pub label: String,
 }
 
 enum Resolved {
-    Mbid(String),
+    Id(String),
     Needs(Vec<ArtistCandidate>),
 }
 
@@ -904,7 +1129,8 @@ mod tests {
         async fn upsert_state(
             &self,
             artist_id: Uuid,
-            mbid: Option<Uuid>,
+            provider: Option<&str>,
+            provider_id: Option<&str>,
             match_status: &str,
         ) -> Result<()> {
             let mut g = self.states.lock().unwrap();
@@ -913,7 +1139,8 @@ mod tests {
                 artist_id,
                 ArtistDiscoState {
                     artist_id,
-                    mbid,
+                    provider: provider.map(str::to_string),
+                    provider_id: provider_id.map(str::to_string),
                     match_status: match_status.to_string(),
                     synced_at,
                 },
@@ -924,7 +1151,8 @@ mod tests {
             let mut g = self.states.lock().unwrap();
             let e = g.entry(artist_id).or_insert(ArtistDiscoState {
                 artist_id,
-                mbid: None,
+                provider: None,
+                provider_id: None,
                 match_status: "unresolved".to_string(),
                 synced_at: None,
             });
@@ -933,6 +1161,13 @@ mod tests {
         }
         async fn list_states(&self) -> Result<Vec<ArtistDiscoState>> {
             Ok(self.states.lock().unwrap().values().cloned().collect())
+        }
+        async fn artist_chromaprints(
+            &self,
+            _artist_id: Uuid,
+            _limit: i64,
+        ) -> Result<Vec<crate::db::models::TrackFingerprint>> {
+            Ok(vec![])
         }
         async fn upsert_report(&self, r: NewStoredReport) -> Result<()> {
             self.reports.lock().unwrap().insert(
@@ -1003,7 +1238,8 @@ mod tests {
     #[derive(Default)]
     struct FakeProvider {
         candidates: Vec<ArtistCandidate>,
-        groups: Vec<ProviderReleaseGroup>,
+        // Mutable so a test can add a "new release" between syncs.
+        groups: Mutex<Vec<ProviderReleaseGroup>>,
         tracks: Vec<ProviderTrack>,
         resolve_calls: AtomicUsize,
         rg_calls: AtomicUsize,
@@ -1020,11 +1256,26 @@ mod tests {
         }
         async fn release_groups(&self, _: &str) -> Result<Vec<ProviderReleaseGroup>> {
             self.rg_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.groups.clone())
+            Ok(self.groups.lock().unwrap().clone())
         }
         async fn tracklist(&self, _: &str) -> Result<Vec<ProviderTrack>> {
             self.track_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.tracks.clone())
+        }
+    }
+
+    /// Counting notifier — records each new-release alert the sync fires.
+    #[derive(Default)]
+    struct FakeNotifier {
+        count: AtomicUsize,
+        titles: Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl NewReleaseNotifier for FakeNotifier {
+        async fn notify(&self, _artist_id: Uuid, title: &str) -> Result<u64> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            self.titles.lock().unwrap().push(title.to_string());
+            Ok(1)
         }
     }
 
@@ -1034,6 +1285,7 @@ mod tests {
         svc: DiscographyService,
         provider: Arc<FakeProvider>,
         disco: Arc<FakeDisco>,
+        notifier: Arc<FakeNotifier>,
         artist_id: Uuid,
         animals_rg: String,
     }
@@ -1064,7 +1316,7 @@ mod tests {
         let animals_rg = Uuid::new_v4().to_string();
         let provider = Arc::new(FakeProvider {
             candidates,
-            groups: vec![
+            groups: Mutex::new(vec![
                 ProviderReleaseGroup {
                     provider_id: wall_rg,
                     title: "The Wall".to_string(),
@@ -1077,7 +1329,7 @@ mod tests {
                     album_type: "album".to_string(),
                     year: Some(1977),
                 },
-            ],
+            ]),
             tracks: vec![
                 ProviderTrack {
                     provider_id: None,
@@ -1101,6 +1353,7 @@ mod tests {
             include_types: vec!["album".into(), "ep".into(), "single".into(), "live".into()],
             sync_interval_secs: 0,
         };
+        let notifier = Arc::new(FakeNotifier::default());
         let svc = DiscographyService::new(
             artists,
             albums,
@@ -1109,11 +1362,13 @@ mod tests {
             disco.clone(),
             provider.clone(),
             cfg,
-        );
+        )
+        .with_notifier(Some(notifier.clone() as Arc<dyn NewReleaseNotifier>));
         Ctx {
             svc,
             provider,
             disco,
+            notifier,
             artist_id,
             animals_rg,
         }
@@ -1152,7 +1407,7 @@ mod tests {
         // State is now matched.
         let st = ctx.disco.get_state(ctx.artist_id).await.unwrap().unwrap();
         assert_eq!(st.match_status, "matched");
-        assert!(st.mbid.is_some());
+        assert!(st.provider_id.is_some());
     }
 
     #[tokio::test]
@@ -1195,7 +1450,6 @@ mod tests {
         );
 
         // Ignore the missing "Animals" release → it drops out of the report.
-        let rg = Uuid::parse_str(&ctx.animals_rg).unwrap();
         let report = ctx
             .svc
             .ignore(
@@ -1203,7 +1457,7 @@ mod tests {
                 ctx.artist_id,
                 IgnoreRequest {
                     scope: "release".to_string(),
-                    release_group_id: rg,
+                    release_group_id: ctx.animals_rg.clone(),
                     recording_id: None,
                     title_key: None,
                     label: "Animals".to_string(),
@@ -1227,5 +1481,67 @@ mod tests {
             ctx.provider.track_calls.load(Ordering::SeqCst),
         );
         assert_eq!(calls_after_sync, calls_now, "suppression must not call the provider");
+    }
+
+    #[tokio::test]
+    async fn notifies_only_new_recent_missing_releases() {
+        let ctx = make(vec![candidate(&Uuid::new_v4().to_string(), 100)]);
+        // First sync = baseline. "Animals" is missing but it's the
+        // back-catalogue, so nothing is announced.
+        ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
+        assert_eq!(ctx.notifier.count.load(Ordering::SeqCst), 0);
+
+        // A brand-new release (this year) appears on the provider → the next
+        // sync announces exactly it.
+        let year = OffsetDateTime::now_utc().year();
+        ctx.provider.groups.lock().unwrap().push(ProviderReleaseGroup {
+            provider_id: Uuid::new_v4().to_string(),
+            title: "Brand New LP".to_string(),
+            album_type: "album".to_string(),
+            year: Some(year),
+        });
+        ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
+        assert_eq!(ctx.notifier.count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            ctx.notifier.titles.lock().unwrap().as_slice(),
+            &["Brand New LP".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_notify_for_newly_cataloged_old_releases() {
+        let ctx = make(vec![candidate(&Uuid::new_v4().to_string(), 100)]);
+        ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
+        // A newly-*cataloged* but decades-old release must not masquerade as new.
+        ctx.provider.groups.lock().unwrap().push(ProviderReleaseGroup {
+            provider_id: Uuid::new_v4().to_string(),
+            title: "Old Reissue".to_string(),
+            album_type: "album".to_string(),
+            year: Some(1970),
+        });
+        ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
+        assert_eq!(ctx.notifier.count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn dominant_artist_needs_agreement_or_high_confidence() {
+        let a = "artist-a".to_string();
+        let b = "artist-b".to_string();
+        // Two tracks agree on A (even with a feature on the second) → resolved.
+        assert_eq!(
+            dominant_artist(&[(vec![a.clone()], 0.8), (vec![a.clone(), b.clone()], 0.7)]),
+            Some(a.clone())
+        );
+        // A lone, low-confidence track abstains.
+        assert_eq!(dominant_artist(&[(vec![a.clone()], 0.5)]), None);
+        // A lone, high-confidence single-artist track resolves.
+        assert_eq!(dominant_artist(&[(vec![a.clone()], 0.95)]), Some(a.clone()));
+        // No results at all → None.
+        assert_eq!(dominant_artist(&[(vec![], 0.99)]), None);
+        // Two tracks that disagree, neither strong → None.
+        assert_eq!(
+            dominant_artist(&[(vec![a.clone()], 0.6), (vec![b.clone()], 0.6)]),
+            None
+        );
     }
 }

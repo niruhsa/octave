@@ -746,13 +746,15 @@ pub struct NewPodcastEpisode {
 // hand-written queries — stay untouched. Server-only; not mirrored to SQLite.
 // ---------------------------------------------------------------------------
 
-/// Per-artist provider resolution state. `mbid` is the resolved MusicBrainz
-/// artist id (sticky once set); `match_status` ∈
-/// `unresolved` / `matched` / `manual` / `ignored`.
+/// Per-artist provider resolution state (Phase D — provider-agnostic).
+/// `provider` names the metadata source and `provider_id` is the artist's id on
+/// that provider (MusicBrainz MBID, Discogs artist id, …); both sticky once set.
+/// `match_status` ∈ `unresolved` / `matched` / `manual` / `ignored`.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct ArtistDiscoState {
     pub artist_id: Uuid,
-    pub mbid: Option<Uuid>,
+    pub provider: Option<String>,
+    pub provider_id: Option<String>,
     pub match_status: String,
     pub synced_at: Option<OffsetDateTime>,
 }
@@ -840,11 +842,22 @@ pub struct DiscographyIgnore {
     pub artist_id: Uuid,
     /// `release` or `track`.
     pub scope: String,
-    pub release_group_id: Uuid,
-    pub recording_id: Option<Uuid>,
+    /// Provider release-group id (TEXT — provider-agnostic).
+    pub release_group_id: String,
+    /// Provider recording id (track scope), when the provider supplies one.
+    pub recording_id: Option<String>,
     pub title_key: Option<String>,
     pub label: String,
     pub created_at: OffsetDateTime,
+}
+
+/// A track's Chromaprint identification fingerprint + duration, for Phase-E
+/// audio-anchored resolution (AcoustID lookup). Only rows with a stored
+/// `chromaprint` (the `chromaprint` build feature) are returned.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TrackFingerprint {
+    pub chromaprint: String,
+    pub duration_ms: i64,
 }
 
 /// Insert shape for a [`DiscographyIgnore`]. `id`/`created_at` are DB-set; the
@@ -853,8 +866,8 @@ pub struct DiscographyIgnore {
 pub struct NewDiscographyIgnore {
     pub artist_id: Uuid,
     pub scope: String,
-    pub release_group_id: Uuid,
-    pub recording_id: Option<Uuid>,
+    pub release_group_id: String,
+    pub recording_id: Option<String>,
     pub title_key: Option<String>,
     pub label: String,
     pub created_by: Option<Uuid>,

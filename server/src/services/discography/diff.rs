@@ -54,31 +54,31 @@ pub fn apply_ignores(
     snapshot: &ProviderSnapshot,
     ignores: &[DiscographyIgnore],
 ) -> (Vec<MissingRelease>, Vec<IncompleteAlbum>) {
-    // Release-scope: release-group ids to hide entirely.
-    let release_ignored: HashSet<Uuid> = ignores
+    // Release-scope: provider release-group ids to hide entirely.
+    let release_ignored: HashSet<&str> = ignores
         .iter()
         .filter(|i| i.scope == "release")
-        .map(|i| i.release_group_id)
+        .map(|i| i.release_group_id.as_str())
         .collect();
 
     // Track-scope: per release-group, the set of track ignores to apply.
-    let mut track_ignored: HashMap<Uuid, Vec<&DiscographyIgnore>> = HashMap::new();
+    let mut track_ignored: HashMap<&str, Vec<&DiscographyIgnore>> = HashMap::new();
     for i in ignores.iter().filter(|i| i.scope == "track") {
-        track_ignored.entry(i.release_group_id).or_default().push(i);
+        track_ignored
+            .entry(i.release_group_id.as_str())
+            .or_default()
+            .push(i);
     }
 
     let mut missing_releases = Vec::new();
     let mut incomplete_albums = Vec::new();
 
     for rg in &snapshot.release_groups {
-        let rg_uuid = Uuid::parse_str(&rg.provider_id).ok();
         match rg.matched_album_id {
             // Missing release — unless the manager ignored it.
             None => {
-                if let Some(u) = rg_uuid {
-                    if release_ignored.contains(&u) {
-                        continue;
-                    }
+                if release_ignored.contains(rg.provider_id.as_str()) {
+                    continue;
                 }
                 missing_releases.push(MissingRelease {
                     title: rg.title.clone(),
@@ -89,7 +89,7 @@ pub fn apply_ignores(
             }
             // Owned album — report the missing tracks that aren't ignored.
             Some(album_id) => {
-                let ig = rg_uuid.and_then(|u| track_ignored.get(&u));
+                let ig = track_ignored.get(rg.provider_id.as_str());
                 let kept: Vec<MissingTrack> = rg
                     .missing_tracks
                     .iter()
@@ -124,12 +124,8 @@ fn is_track_ignored(track: &SnapMissingTrack, ignores: Option<&Vec<&DiscographyI
     let Some(list) = ignores else {
         return false;
     };
-    let track_rec = track
-        .recording_id
-        .as_deref()
-        .and_then(|s| Uuid::parse_str(s).ok());
     list.iter().any(|ig| {
-        let by_recording = match (ig.recording_id, track_rec) {
+        let by_recording = match (&ig.recording_id, &track.recording_id) {
             (Some(a), Some(b)) => a == b,
             _ => false,
         };
@@ -143,20 +139,20 @@ mod tests {
     use super::*;
     use time::OffsetDateTime;
 
-    fn ignore(scope: &str, rg: Uuid, rec: Option<Uuid>, title: Option<&str>) -> DiscographyIgnore {
+    fn ignore(scope: &str, rg: &str, rec: Option<&str>, title: Option<&str>) -> DiscographyIgnore {
         DiscographyIgnore {
             id: Uuid::new_v4(),
             artist_id: Uuid::new_v4(),
             scope: scope.to_string(),
-            release_group_id: rg,
-            recording_id: rec,
+            release_group_id: rg.to_string(),
+            recording_id: rec.map(|s| s.to_string()),
             title_key: title.map(|s| s.to_string()),
             label: "x".to_string(),
             created_at: OffsetDateTime::now_utc(),
         }
     }
 
-    fn snapshot(rg_id: Uuid, album: Option<Uuid>) -> ProviderSnapshot {
+    fn snapshot(rg_id: &str, album: Option<Uuid>) -> ProviderSnapshot {
         ProviderSnapshot {
             release_groups: vec![SnapReleaseGroup {
                 provider_id: rg_id.to_string(),
@@ -178,7 +174,7 @@ mod tests {
 
     #[test]
     fn release_ignore_hides_missing_release() {
-        let rg = Uuid::new_v4();
+        let rg = "rg-1";
         let snap = snapshot(rg, None);
         let (mr, _) = apply_ignores(&snap, &[]);
         assert_eq!(mr.len(), 1);
@@ -188,7 +184,7 @@ mod tests {
 
     #[test]
     fn track_ignore_hides_missing_track_by_title() {
-        let rg = Uuid::new_v4();
+        let rg = "rg-1";
         let album = Uuid::new_v4();
         let snap = snapshot(rg, Some(album));
         let (_, ia) = apply_ignores(&snap, &[]);
@@ -200,9 +196,9 @@ mod tests {
 
     #[test]
     fn track_ignore_matches_by_recording_id() {
-        let rg = Uuid::new_v4();
+        let rg = "rg-1";
         let album = Uuid::new_v4();
-        let rec = Uuid::new_v4();
+        let rec = "rec-1";
         let mut snap = snapshot(rg, Some(album));
         snap.release_groups[0].missing_tracks[0].recording_id = Some(rec.to_string());
         let (_, ia) = apply_ignores(&snap, &[ignore("track", rg, Some(rec), None)]);

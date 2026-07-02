@@ -188,13 +188,13 @@ async fn resolve(
     Path(id): Path<Uuid>,
     Json(body): Json<ResolveBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mbid = match body.mbid.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(v) => Some(
-            Uuid::parse_str(v).map_err(|_| AppError::InvalidArgument("invalid mbid".into()))?,
-        ),
-        None => None,
-    };
-    svc(&s)?.resolve(&c, id, mbid).await?;
+    let provider_id = body
+        .mbid
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    svc(&s)?.resolve(&c, id, provider_id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -230,20 +230,16 @@ async fn add_ignore(
     Path(id): Path<Uuid>,
     Json(body): Json<IgnoreBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let release_group_id = Uuid::parse_str(body.release_group_id.trim())
-        .map_err(|_| AppError::InvalidArgument("invalid release_group_id".into()))?;
-    let recording_id = match body
+    let release_group_id = body.release_group_id.trim().to_string();
+    if release_group_id.is_empty() {
+        return Err(AppError::InvalidArgument("release_group_id is required".into()).into());
+    }
+    let recording_id = body
         .recording_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        Some(v) => Some(
-            Uuid::parse_str(v)
-                .map_err(|_| AppError::InvalidArgument("invalid recording_id".into()))?,
-        ),
-        None => None,
-    };
+        .map(str::to_string);
     let title_key = body
         .title_key
         .map(|s| s.trim().to_string())

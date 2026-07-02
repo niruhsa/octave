@@ -21,6 +21,10 @@ use crate::transport::{
     Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
+use crate::transport::{
+    DiscographyCandidate, DiscographyIgnore, DiscographyReport, DiscographyStatus,
+    DiscographySyncAll, DiscographySyncResult,
+};
 
 /// A snapshot of the active session safe to hand to the frontend. Mirrors
 /// `StoredCredential` minus the secret material.
@@ -476,6 +480,91 @@ impl AuthManager {
     pub async fn fingerprint_status(&self) -> AppResult<FingerprintStatus> {
         let cred = self.credential().await?;
         self.server.fingerprint_status(&cred).await
+    }
+
+    // ----- Discography sync (Phase 14) -----------------------------------
+
+    pub async fn discography_report(
+        &self,
+        artist_id: &str,
+    ) -> AppResult<Option<DiscographyReport>> {
+        let cred = self.credential().await?;
+        self.server.discography_report(&cred, artist_id).await
+    }
+
+    pub async fn discography_sync(&self, artist_id: &str) -> AppResult<DiscographySyncResult> {
+        let cred = self.credential().await?;
+        self.server.discography_sync(&cred, artist_id).await
+    }
+
+    pub async fn discography_candidates(
+        &self,
+        artist_id: &str,
+    ) -> AppResult<Vec<DiscographyCandidate>> {
+        let cred = self.credential().await?;
+        self.server.discography_candidates(&cred, artist_id).await
+    }
+
+    pub async fn discography_resolve(
+        &self,
+        artist_id: &str,
+        mbid: Option<&str>,
+    ) -> AppResult<()> {
+        let cred = self.credential().await?;
+        self.server.discography_resolve(&cred, artist_id, mbid).await
+    }
+
+    pub async fn discography_ignores(
+        &self,
+        artist_id: &str,
+    ) -> AppResult<Vec<DiscographyIgnore>> {
+        let cred = self.credential().await?;
+        self.server.discography_ignores(&cred, artist_id).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn discography_add_ignore(
+        &self,
+        artist_id: &str,
+        scope: &str,
+        release_group_id: &str,
+        recording_id: Option<&str>,
+        title_key: Option<&str>,
+        label: &str,
+    ) -> AppResult<DiscographyReport> {
+        let cred = self.credential().await?;
+        self.server
+            .discography_add_ignore(
+                &cred,
+                artist_id,
+                scope,
+                release_group_id,
+                recording_id,
+                title_key,
+                label,
+            )
+            .await
+    }
+
+    pub async fn discography_remove_ignore(
+        &self,
+        artist_id: &str,
+        ignore_id: &str,
+    ) -> AppResult<DiscographyReport> {
+        let cred = self.credential().await?;
+        self.server
+            .discography_remove_ignore(&cred, artist_id, ignore_id)
+            .await
+    }
+
+    pub async fn discography_status(&self) -> AppResult<DiscographyStatus> {
+        let cred = self.credential().await?;
+        self.server.discography_status(&cred).await
+    }
+
+    pub async fn discography_sync_all(&self) -> AppResult<DiscographySyncAll> {
+        let cred = self.credential().await?;
+        self.server.discography_sync_all(&cred).await
     }
 
     pub async fn unregister_device(&self, token: &str) -> AppResult<()> {

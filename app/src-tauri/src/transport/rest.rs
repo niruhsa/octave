@@ -20,6 +20,10 @@ use super::{
     UploadView,
 };
 use crate::error::{AppError, AppResult};
+use super::{
+    DiscographyCandidate, DiscographyIgnore, DiscographyReport, DiscographyStatus,
+    DiscographySyncAll, DiscographySyncResult,
+};
 
 pub struct RestClient {
     http: Client,
@@ -1482,6 +1486,248 @@ impl RestClient {
             .json()
             .await
             .map_err(rest_err("fingerprint_status decode"))?;
+        Ok(body)
+    }
+
+    // ----- Discography sync (Phase 14) -----------------------------------
+
+    /// The cached discography report (`None` when never synced).
+    pub async fn discography_report(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<Option<DiscographyReport>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            report: Option<DiscographyReport>,
+        }
+        let url = format!("{}/artists/{artist_id}/discography", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_report"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_report decode"))?;
+        Ok(body.report)
+    }
+
+    /// Trigger a sync — returns a report, or a candidate list to disambiguate.
+    pub async fn discography_sync(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<DiscographySyncResult> {
+        let url = format!("{}/artists/{artist_id}/discography/sync", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_sync"))?;
+        let body: DiscographySyncResult = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_sync decode"))?;
+        Ok(body)
+    }
+
+    /// Provider artist candidates for the disambiguation UI.
+    pub async fn discography_candidates(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<Vec<DiscographyCandidate>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            candidates: Vec<DiscographyCandidate>,
+        }
+        let url = format!("{}/artists/{artist_id}/discography/candidates", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_candidates"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_candidates decode"))?;
+        Ok(body.candidates)
+    }
+
+    /// Pin the artist ↔ provider match, or ignore the artist (empty `mbid`).
+    pub async fn discography_resolve(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        mbid: Option<&str>,
+    ) -> AppResult<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            mbid: Option<&'a str>,
+        }
+        let url = format!("{}/artists/{artist_id}/discography/resolve", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&Body { mbid })
+            .send()
+            .await
+            .map_err(rest_err("discography_resolve"))?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    /// The artist's suppression list.
+    pub async fn discography_ignores(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<Vec<DiscographyIgnore>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            ignores: Vec<DiscographyIgnore>,
+        }
+        let url = format!("{}/artists/{artist_id}/discography/ignores", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_ignores"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_ignores decode"))?;
+        Ok(body.ignores)
+    }
+
+    /// Suppress a release/track; returns the re-filtered report.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn discography_add_ignore(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        scope: &str,
+        release_group_id: &str,
+        recording_id: Option<&str>,
+        title_key: Option<&str>,
+        label: &str,
+    ) -> AppResult<DiscographyReport> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            scope: &'a str,
+            release_group_id: &'a str,
+            recording_id: Option<&'a str>,
+            title_key: Option<&'a str>,
+            label: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            report: DiscographyReport,
+        }
+        let url = format!("{}/artists/{artist_id}/discography/ignores", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&Body {
+                scope,
+                release_group_id,
+                recording_id,
+                title_key,
+                label,
+            })
+            .send()
+            .await
+            .map_err(rest_err("discography_add_ignore"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_add_ignore decode"))?;
+        Ok(body.report)
+    }
+
+    /// Remove a suppression; returns the re-filtered report.
+    pub async fn discography_remove_ignore(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        ignore_id: &str,
+    ) -> AppResult<DiscographyReport> {
+        #[derive(Deserialize)]
+        struct Resp {
+            report: DiscographyReport,
+        }
+        let url = format!(
+            "{}/artists/{artist_id}/discography/ignores/{ignore_id}",
+            self.base
+        );
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_remove_ignore"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_remove_ignore decode"))?;
+        Ok(body.report)
+    }
+
+    /// Library-wide coverage (`enabled=false` when the server has it off).
+    pub async fn discography_status(&self, cred: &Credential) -> AppResult<DiscographyStatus> {
+        let url = format!("{}/discography/status", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_status"))?;
+        let body: DiscographyStatus = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_status decode"))?;
+        Ok(body)
+    }
+
+    /// Re-sync every matched artist (rate-limited by the provider).
+    pub async fn discography_sync_all(&self, cred: &Credential) -> AppResult<DiscographySyncAll> {
+        let url = format!("{}/discography/sync-all", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("discography_sync_all"))?;
+        let body: DiscographySyncAll = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("discography_sync_all decode"))?;
         Ok(body)
     }
 

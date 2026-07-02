@@ -43,15 +43,6 @@ fn req_uuid(s: &str, what: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(s.trim()).map_err(|_| Status::invalid_argument(format!("invalid {what} uuid")))
 }
 
-fn opt_uuid(s: &str, what: &str) -> Result<Option<Uuid>, Status> {
-    if s.trim().is_empty() {
-        return Ok(None);
-    }
-    Uuid::parse_str(s.trim())
-        .map(Some)
-        .map_err(|_| Status::invalid_argument(format!("invalid {what} uuid")))
-}
-
 fn opt_string(s: String) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {
@@ -178,8 +169,11 @@ impl pb::discography_service_server::DiscographyService for DiscographyServer {
         let caller = self.caller(&req).await?;
         let body = req.into_inner();
         let id = req_uuid(&body.artist_id, "artist")?;
-        let mbid = opt_uuid(&body.mbid, "mbid")?;
-        self.svc()?.resolve(&caller, id, mbid).await.map_err(map_err)?;
+        let provider_id = opt_string(body.mbid);
+        self.svc()?
+            .resolve(&caller, id, provider_id)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(pb::OkResponse { ok: true }))
     }
 
@@ -202,8 +196,10 @@ impl pb::discography_service_server::DiscographyService for DiscographyServer {
         let caller = self.caller(&req).await?;
         let body = req.into_inner();
         let id = req_uuid(&body.artist_id, "artist")?;
-        let release_group_id = req_uuid(&body.release_group_id, "release_group")?;
-        let recording_id = opt_uuid(&body.recording_id, "recording")?;
+        let release_group_id = body.release_group_id.trim().to_string();
+        if release_group_id.is_empty() {
+            return Err(Status::invalid_argument("release_group_id is required"));
+        }
         let report = self
             .svc()?
             .ignore(
@@ -212,7 +208,7 @@ impl pb::discography_service_server::DiscographyService for DiscographyServer {
                 IgnoreRequest {
                     scope: body.scope,
                     release_group_id,
-                    recording_id,
+                    recording_id: opt_string(body.recording_id),
                     title_key: opt_string(body.title_key),
                     label: body.label,
                 },

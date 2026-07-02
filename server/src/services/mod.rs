@@ -35,8 +35,9 @@ pub mod watch;
 pub use archive::{extract as extract_archive, ArchiveKind};
 pub use artwork::{ArtworkService, CoverArtArchive, CoverArtSource, CoverImage};
 pub use discography::{
-    build_provider as build_discography_provider, ArtistCandidate, DiscographyCfg,
-    DiscographyProvider, DiscographyService, DiscographyStatus, IgnoreRequest, SyncOutcome,
+    build_audio_resolver, build_provider as build_discography_provider, ArtistCandidate,
+    AudioResolver, DiscographyCfg, DiscographyProvider, DiscographyService, DiscographyStatus,
+    IgnoreRequest, NewReleaseNotifier, SyncOutcome,
 };
 pub use favorites::FavoritesService;
 pub use fcm::{FcmSender, PushOutcome, PushSender};

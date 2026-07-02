@@ -12,9 +12,10 @@ use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
 use server::services::{
-    build_discography_provider, build_extractor, build_index, run_optimize_pass, ArtworkService,
+    build_audio_resolver, build_discography_provider, build_extractor, build_index,
+    run_optimize_pass, ArtworkService,
     CoverArtArchive, CoverArtSource, DebouncedWarmer, DiscographyCfg, DiscographyService,
-    FavoritesService, FcmSender, FingerprintService, ImageOptimizer, IngestService,
+    NewReleaseNotifier, FavoritesService, FcmSender, FingerprintService, ImageOptimizer, IngestService,
     ItunesDirectory, LibraryService, MetadataService, NotificationService, PlaylistRecWarmer,
     PlayHistoryService, PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService,
     PushSender, RecommendationCache, RecommendationService, ScanService, StorageService,
@@ -363,6 +364,15 @@ async fn main() -> Result<()> {
             provider,
             DiscographyCfg::from(dc),
         )
+        // Alert followers when a re-sync detects a genuinely-new missing
+        // release (Phase D) — reuses the new-release notification fan-out.
+        .with_notifier(Some(
+            Arc::new(notifications.clone()) as Arc<dyn NewReleaseNotifier>
+        ))
+        // Audio-anchored resolution (Phase E) — resolves the artist from its
+        // tracks' fingerprints via AcoustID before falling back to name search.
+        // `None` unless the `chromaprint` feature + an AcoustID key are present.
+        .with_audio_resolver(build_audio_resolver(dc))
     });
     // Background sync-all poller (0 = manual only; no startup pass so we never
     // hammer the provider at ~1 req/s on boot).

@@ -19,6 +19,7 @@ import { OfflineGate } from "../components/OfflineGate";
 import { PowerIcon } from "../components/icons";
 import { Skeleton } from "../components/Skeleton";
 import { TransportStatus } from "../components/TransportStatus";
+import { DiscographyCoverage } from "../components/DiscographyCoverage";
 
 /**
  * /account — change your own password, or (admin/secret-key) manage any user:
@@ -34,6 +35,7 @@ export default function Account() {
   const qc = useQueryClient();
 
   const isAdmin = tier === "admin";
+  const isManager = tier === "admin" || tier === "manager";
   const selfId = session?.user_id ?? "";
 
   const usersQ = useQuery({ queryKey: ["users"], queryFn: authListUsers, enabled: isAdmin, staleTime: 30_000 });
@@ -182,6 +184,8 @@ export default function Account() {
           {pwBusy ? "Saving…" : isAdmin && !pwIsSelf ? (pwSelected ? `Reset for ${pwSelected.username}` : "Reset password") : "Change password"}
         </button>
       </form>
+
+      {isManager && <DiscographyCoverage />}
 
       {isAdmin && (
         <section className="border-t border-oct-border pt-6">

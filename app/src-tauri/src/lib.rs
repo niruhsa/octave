@@ -290,6 +290,16 @@ pub fn run() {
             commands::discover_commands::discover_similar,
             commands::discover_commands::discover_playlist_recommendations,
             commands::discover_commands::fingerprint_status,
+            // discography sync (Phase 14)
+            commands::discography_commands::discography_report,
+            commands::discography_commands::discography_sync,
+            commands::discography_commands::discography_candidates,
+            commands::discography_commands::discography_resolve,
+            commands::discography_commands::discography_ignores,
+            commands::discography_commands::discography_add_ignore,
+            commands::discography_commands::discography_remove_ignore,
+            commands::discography_commands::discography_status,
+            commands::discography_commands::discography_sync_all,
             // podcasts
             commands::podcast_commands::podcast_search,
             commands::podcast_commands::podcast_list,

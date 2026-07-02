@@ -20,6 +20,10 @@ use super::{
     UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
+use super::{
+    DiscographyCandidate, DiscographyIgnore, DiscographyReport, DiscographyStatus,
+    DiscographySyncAll, DiscographySyncResult,
+};
 use crate::error::{AppError, AppResult};
 
 /// Aggregate client. Cheap to clone-by-`Arc` once placed in Tauri state.
@@ -457,6 +461,97 @@ impl ServerClient {
         artist_id: &str,
     ) -> AppResult<ArtistStoragePaths> {
         self.rest.list_artist_library_paths(cred, artist_id).await
+    }
+
+    // ----- Discography sync (Phase 14) -----------------------------------
+    // REST-only on the client: an online Manager tool. The server has full gRPC
+    // parity, but (like `list_artist_library_paths`) the client uses REST here.
+
+    pub async fn discography_report(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<Option<DiscographyReport>> {
+        self.rest.discography_report(cred, artist_id).await
+    }
+
+    pub async fn discography_sync(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<DiscographySyncResult> {
+        self.rest.discography_sync(cred, artist_id).await
+    }
+
+    pub async fn discography_candidates(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<Vec<DiscographyCandidate>> {
+        self.rest.discography_candidates(cred, artist_id).await
+    }
+
+    pub async fn discography_resolve(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        mbid: Option<&str>,
+    ) -> AppResult<()> {
+        self.rest.discography_resolve(cred, artist_id, mbid).await
+    }
+
+    pub async fn discography_ignores(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+    ) -> AppResult<Vec<DiscographyIgnore>> {
+        self.rest.discography_ignores(cred, artist_id).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn discography_add_ignore(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        scope: &str,
+        release_group_id: &str,
+        recording_id: Option<&str>,
+        title_key: Option<&str>,
+        label: &str,
+    ) -> AppResult<DiscographyReport> {
+        self.rest
+            .discography_add_ignore(
+                cred,
+                artist_id,
+                scope,
+                release_group_id,
+                recording_id,
+                title_key,
+                label,
+            )
+            .await
+    }
+
+    pub async fn discography_remove_ignore(
+        &self,
+        cred: &Credential,
+        artist_id: &str,
+        ignore_id: &str,
+    ) -> AppResult<DiscographyReport> {
+        self.rest
+            .discography_remove_ignore(cred, artist_id, ignore_id)
+            .await
+    }
+
+    pub async fn discography_status(&self, cred: &Credential) -> AppResult<DiscographyStatus> {
+        self.rest.discography_status(cred).await
+    }
+
+    pub async fn discography_sync_all(
+        &self,
+        cred: &Credential,
+    ) -> AppResult<DiscographySyncAll> {
+        self.rest.discography_sync_all(cred).await
     }
 
     /// Move all of an artist's tracks under a single language folder. REST-only

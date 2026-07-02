@@ -2969,7 +2969,7 @@ impl StorageRepo for PgRepos {
 impl DiscographyRepo for PgRepos {
     async fn get_state(&self, artist_id: Uuid) -> Result<Option<ArtistDiscoState>> {
         sqlx::query_as::<_, ArtistDiscoState>(
-            r#"SELECT artist_id, mbid, match_status, synced_at
+            r#"SELECT artist_id, provider, provider_id, match_status, synced_at
                FROM artist_discography WHERE artist_id = $1"#,
         )
         .bind(artist_id)
@@ -2981,17 +2981,21 @@ impl DiscographyRepo for PgRepos {
     async fn upsert_state(
         &self,
         artist_id: Uuid,
-        mbid: Option<Uuid>,
+        provider: Option<&str>,
+        provider_id: Option<&str>,
         match_status: &str,
     ) -> Result<()> {
         sqlx::query(
-            r#"INSERT INTO artist_discography (artist_id, mbid, match_status)
-               VALUES ($1, $2, $3)
+            r#"INSERT INTO artist_discography (artist_id, provider, provider_id, match_status)
+               VALUES ($1, $2, $3, $4)
                ON CONFLICT (artist_id) DO UPDATE
-                   SET mbid = EXCLUDED.mbid, match_status = EXCLUDED.match_status"#,
+                   SET provider = EXCLUDED.provider,
+                       provider_id = EXCLUDED.provider_id,
+                       match_status = EXCLUDED.match_status"#,
         )
         .bind(artist_id)
-        .bind(mbid)
+        .bind(provider)
+        .bind(provider_id)
         .bind(match_status)
         .execute(&self.pool)
         .await
@@ -3014,8 +3018,28 @@ impl DiscographyRepo for PgRepos {
 
     async fn list_states(&self) -> Result<Vec<ArtistDiscoState>> {
         sqlx::query_as::<_, ArtistDiscoState>(
-            r#"SELECT artist_id, mbid, match_status, synced_at FROM artist_discography"#,
+            r#"SELECT artist_id, provider, provider_id, match_status, synced_at
+               FROM artist_discography"#,
         )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn artist_chromaprints(
+        &self,
+        artist_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<TrackFingerprint>> {
+        sqlx::query_as::<_, TrackFingerprint>(
+            r#"SELECT tf.chromaprint AS chromaprint, t.duration_ms AS duration_ms
+               FROM track_features tf
+               JOIN tracks t ON t.id = tf.track_id
+               WHERE t.artist_id = $1 AND tf.chromaprint IS NOT NULL
+               LIMIT $2"#,
+        )
+        .bind(artist_id)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .map_err(db)

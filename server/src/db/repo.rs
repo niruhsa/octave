@@ -690,17 +690,28 @@ pub trait PodcastSubscriptionRepo: Send + Sync {
 pub trait DiscographyRepo: Send + Sync {
     // ----- Resolution state (`artist_discography`) -----
     async fn get_state(&self, artist_id: Uuid) -> Result<Option<ArtistDiscoState>>;
-    /// Insert or update the artist's resolved id + status (leaves `synced_at`).
+    /// Insert or update the artist's resolved provider + id + status (leaves
+    /// `synced_at`). Provider-agnostic (Phase D): `provider`/`provider_id` are
+    /// TEXT so non-UUID providers work.
     async fn upsert_state(
         &self,
         artist_id: Uuid,
-        mbid: Option<Uuid>,
+        provider: Option<&str>,
+        provider_id: Option<&str>,
         match_status: &str,
     ) -> Result<()>;
     /// Bump `synced_at` to now (after a successful sync). Upserts the row.
     async fn touch_synced(&self, artist_id: Uuid) -> Result<()>;
     /// Every resolution-state row (drives sync-all + the status endpoint).
     async fn list_states(&self) -> Result<Vec<ArtistDiscoState>>;
+    /// Up to `limit` `(chromaprint, duration_ms)` rows for an artist's tracks
+    /// that have a stored Chromaprint — the audio sample for Phase-E resolution.
+    /// Empty unless the `chromaprint` feature has populated fingerprints.
+    async fn artist_chromaprints(
+        &self,
+        artist_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<TrackFingerprint>>;
 
     // ----- Cached reports (`discography_reports`) -----
     async fn upsert_report(&self, r: NewStoredReport) -> Result<()>;

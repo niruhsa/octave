@@ -15,7 +15,10 @@ use super::decode::decode_mono;
 /// can't be decoded (e.g. MP3 in this build). Best-effort — never fatal.
 pub fn fingerprint(path: &Path) -> Option<String> {
     let pcm = decode_mono(path).ok()?;
-    let mut printer = Fingerprinter::new(&Configuration::preset_test1());
+    // `preset_test2` = algorithm id 1 = the `fpcalc`/AcoustID default. Using it
+    // (rather than test1) keeps these fingerprints compatible with AcoustID's
+    // index, which the Phase-E audio-anchored discography resolution submits to.
+    let mut printer = Fingerprinter::new(&Configuration::preset_test2());
     // rusty-chromaprint wants interleaved i16 at a known rate + channel count;
     // we feed our mono f32 as single-channel i16.
     printer.start(pcm.sample_rate, 1).ok()?;

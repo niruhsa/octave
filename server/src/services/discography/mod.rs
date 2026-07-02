@@ -13,7 +13,10 @@
 //! suppression list ([`diff::apply_ignores`]) can re-filter without re-hitting
 //! the provider.
 
+#[cfg(feature = "chromaprint")]
+mod acoustid;
 mod diff;
+mod discogs;
 mod r#match;
 mod musicbrainz;
 mod provider;
@@ -21,18 +24,46 @@ mod service;
 
 pub use provider::{ArtistCandidate, DiscographyProvider, ProviderReleaseGroup, ProviderTrack};
 pub use service::{
-    DiscographyCfg, DiscographyPassReport, DiscographyService, DiscographyStatus, IgnoreRequest,
-    SyncOutcome,
+    AudioResolver, DiscographyCfg, DiscographyPassReport, DiscographyService, DiscographyStatus,
+    IgnoreRequest, NewReleaseNotifier, SyncOutcome,
 };
 
 use std::sync::Arc;
 
 use crate::config::DiscographyConfig;
 
-/// Build the configured metadata provider. Only MusicBrainz today;
-/// `DISCOGRAPHY_PROVIDER` is reserved for a future Discogs backend.
+/// Build the configured metadata provider (`DISCOGRAPHY_PROVIDER`): `discogs`
+/// when selected (needs `DISCOGRAPHY_DISCOGS_TOKEN` for search), else the
+/// MusicBrainz default.
 pub fn build_provider(cfg: &DiscographyConfig) -> Arc<dyn DiscographyProvider> {
-    Arc::new(musicbrainz::MusicBrainzDiscography::new(cfg.contact.clone()))
+    match cfg.provider.as_str() {
+        "discogs" => {
+            if cfg.discogs_token.is_none() {
+                tracing::warn!(
+                    "DISCOGRAPHY_PROVIDER=discogs but DISCOGRAPHY_DISCOGS_TOKEN is unset — \
+                     artist search will fail (401)"
+                );
+            }
+            Arc::new(discogs::DiscogsDiscography::new(
+                cfg.discogs_token.clone(),
+                cfg.contact.clone(),
+            ))
+        }
+        _ => Arc::new(musicbrainz::MusicBrainzDiscography::new(cfg.contact.clone())),
+    }
+}
+
+/// Build the Phase-E audio-anchored resolver (AcoustID → MusicBrainz), or `None`
+/// when it's not available: needs the `chromaprint` build feature, a
+/// `DISCOGRAPHY_ACOUSTID_KEY`, and the MusicBrainz provider.
+#[cfg(feature = "chromaprint")]
+pub fn build_audio_resolver(cfg: &DiscographyConfig) -> Option<Arc<dyn AudioResolver>> {
+    acoustid::build(cfg)
+}
+
+#[cfg(not(feature = "chromaprint"))]
+pub fn build_audio_resolver(_cfg: &DiscographyConfig) -> Option<Arc<dyn AudioResolver>> {
+    None
 }
 
 impl From<&DiscographyConfig> for DiscographyCfg {

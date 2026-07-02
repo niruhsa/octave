@@ -767,6 +767,137 @@ export type FingerprintStatus = {
 export const fingerprintStatus = () =>
   invoke<FingerprintStatus>("fingerprint_status");
 
+// ---------------------------------------------------------------------------
+// discography sync (Phase 14) — Manager-only. Reconcile an artist against
+// MusicBrainz to surface missing releases + missing tracks. See
+// DISCOGRAPHY_SYNC.md. Server enforces Manager; the panel also hides itself.
+// ---------------------------------------------------------------------------
+
+export type MissingRelease = {
+  title: string;
+  album_type: string;
+  year: number | null;
+  provider_id: string;
+};
+
+export type MissingTrack = {
+  title: string;
+  position: number | null;
+  disc_no: number | null;
+  recording_id: string | null;
+  title_key: string;
+};
+
+export type IncompleteAlbum = {
+  album_id: string;
+  title: string;
+  release_group_id: string;
+  missing_tracks: MissingTrack[];
+};
+
+export type DiscographyReport = {
+  artist_id: string;
+  provider: string;
+  missing_releases: MissingRelease[];
+  incomplete_albums: IncompleteAlbum[];
+  missing_release_count: number;
+  incomplete_album_count: number;
+  generated_at: string;
+};
+
+export type DiscographyCandidate = {
+  provider_id: string;
+  name: string;
+  disambiguation: string | null;
+  score: number;
+};
+
+export type DiscographyIgnore = {
+  id: string;
+  artist_id: string;
+  scope: "release" | "track";
+  release_group_id: string;
+  recording_id: string | null;
+  title_key: string | null;
+  label: string;
+  created_at: string;
+};
+
+export type DiscographySyncResult = {
+  status: "report" | "needs_resolution";
+  report: DiscographyReport | null;
+  candidates: DiscographyCandidate[];
+};
+
+/** The cached gap report, or null when the artist has never been synced. */
+export const discographyReport = (artistId: string) =>
+  invoke<DiscographyReport | null>("discography_report", { artistId });
+
+/** Trigger a sync (slow — hits the provider). Returns a report, or a candidate
+ *  list to disambiguate when the artist can't be auto-matched. */
+export const discographySync = (artistId: string) =>
+  invoke<DiscographySyncResult>("discography_sync", { artistId });
+
+/** Provider artist candidates for the disambiguation dialog. */
+export const discographyCandidates = (artistId: string) =>
+  invoke<DiscographyCandidate[]>("discography_candidates", { artistId });
+
+/** Pin the artist ↔ MusicBrainz match, or ignore the artist (omit `mbid`). */
+export const discographyResolve = (artistId: string, mbid?: string) =>
+  invoke<void>("discography_resolve", { artistId, mbid: mbid ?? null });
+
+/** The artist's suppression list (the "Ignored" management view). */
+export const discographyIgnores = (artistId: string) =>
+  invoke<DiscographyIgnore[]>("discography_ignores", { artistId });
+
+/** Suppress a release (scope "release") or a track (scope "track"); returns the
+ *  re-filtered report. */
+export const discographyAddIgnore = (
+  artistId: string,
+  scope: "release" | "track",
+  releaseGroupId: string,
+  opts?: { recordingId?: string; titleKey?: string; label?: string },
+) =>
+  invoke<DiscographyReport>("discography_add_ignore", {
+    artistId,
+    scope,
+    releaseGroupId,
+    recordingId: opts?.recordingId ?? null,
+    titleKey: opts?.titleKey ?? null,
+    label: opts?.label ?? "",
+  });
+
+/** Un-ignore a suppression; returns the re-filtered report. */
+export const discographyRemoveIgnore = (artistId: string, ignoreId: string) =>
+  invoke<DiscographyReport>("discography_remove_ignore", { artistId, ignoreId });
+
+/** Library-wide coverage (Manager). `enabled` is false when the server has
+ *  `DISCOGRAPHY_ENABLED` off. */
+export type DiscographyStatus = {
+  enabled: boolean;
+  provider: string;
+  artists_total: number;
+  matched: number;
+  unresolved: number;
+  ignored: number;
+};
+
+/** Summary of a library-wide `sync-all` pass. */
+export type DiscographySyncAll = {
+  synced: number;
+  skipped_fresh: number;
+  failed: number;
+  total: number;
+};
+
+/** Read library-wide discography coverage. */
+export const discographyStatus = () =>
+  invoke<DiscographyStatus>("discography_status");
+
+/** Re-sync every matched artist (rate-limited — can take a while). */
+export const discographySyncAll = () =>
+  invoke<DiscographySyncAll>("discography_sync_all");
+
 /**
  * Enable the **background** notification poll (Android only; no-op on desktop).
  * Reads the active bearer token natively and schedules a ~15-min WorkManager

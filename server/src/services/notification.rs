@@ -250,6 +250,56 @@ impl NotificationService {
         Ok(created)
     }
 
+    /// Notify every follower of `artist_id` about a release **detected on the
+    /// metadata provider** (MusicBrainz) that the library doesn't have — the
+    /// discography-sync counterpart to [`notify_new_release`], which fires on a
+    /// *library* addition (Phase D). There's no actor to exclude (the release
+    /// comes from the provider, not a user action), so it fans out to every
+    /// follower. `album_id` is left `None` (there's no local album yet), so a
+    /// notification tap routes to the artist page. Best-effort by contract:
+    /// the caller (the discography sync) logs and swallows any error so a
+    /// notification failure never fails the sync. Returns the number created.
+    pub async fn notify_provider_release(&self, artist_id: Uuid, title: &str) -> Result<u64> {
+        let followers = self.follows.followers_of(artist_id).await?;
+        if followers.is_empty() {
+            return Ok(0);
+        }
+        let artist_name = match self.artists.get(artist_id).await? {
+            Some(a) => a.name,
+            None => "an artist you follow".to_string(),
+        };
+        let heading = format!("New release from {artist_name}");
+        let body_text = title.to_string();
+        let items: Vec<NewNotification> = followers
+            .iter()
+            .map(|uid| NewNotification {
+                user_id: *uid,
+                kind: KIND_NEW_RELEASE.to_string(),
+                artist_id: Some(artist_id),
+                title: heading.clone(),
+                body: Some(body_text.clone()),
+                ..Default::default()
+            })
+            .collect();
+        let created = self.notifications.create_many(&items).await?;
+
+        // Real-time push (best-effort, background) — same pattern as
+        // `notify_new_release`, but the tap-routing data carries only the
+        // artist (no album exists yet).
+        if self.push.is_some() {
+            let this = self.clone();
+            let recipients = followers.clone();
+            let data = vec![
+                ("kind".to_string(), KIND_NEW_RELEASE.to_string()),
+                ("artist_id".to_string(), artist_id.to_string()),
+            ];
+            tokio::spawn(async move {
+                this.push_fanout(&recipients, &heading, &body_text, &data).await;
+            });
+        }
+        Ok(created)
+    }
+
     /// Notify every subscriber of `podcast` about a newly-published `episode`.
     /// Best-effort fan-out (same contract as [`notify_new_release`]); returns
     /// the number of notifications created. Unlike new releases there's no actor

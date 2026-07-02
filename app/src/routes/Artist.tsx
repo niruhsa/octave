@@ -22,6 +22,7 @@ import { BlurUpImage } from "../components/BlurUpImage";
 import { ImageUploader } from "../components/ImageUploader";
 import { Aliases } from "../components/Aliases";
 import { LibraryLocation } from "../components/LibraryLocation";
+import { DiscographyPanel } from "../components/DiscographyPanel";
 import { EntityPicker } from "../components/EntityPicker";
 import { SavedBadge, SourceBadge, StreamBadge } from "../components/SourceBadge";
 import { formatError } from "../lib/error";
@@ -459,6 +460,8 @@ export default function Artist() {
         ) : (
           <LibraryLocation artistId={id} online={online} isManager={isManager} onChanged={refreshArtist} />
         )}
+
+        <DiscographyPanel artistId={id} online={online} isManager={isManager} />
 
         {q.isLoading && <SkeletonGrid count={12} />}
         {q.isError && (

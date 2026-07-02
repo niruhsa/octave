@@ -156,9 +156,16 @@ pub struct FingerprintConfig {
 pub struct DiscographyConfig {
     /// Metadata provider id (`musicbrainz` today; future `discogs`).
     pub provider: String,
-    /// Optional contact string appended to the MusicBrainz `User-Agent`
-    /// (MusicBrainz etiquette so they can reach the operator).
+    /// Optional contact string appended to the provider `User-Agent`
+    /// (etiquette so they can reach the operator).
     pub contact: Option<String>,
+    /// Discogs personal-access token (`DISCOGRAPHY_DISCOGS_TOKEN`). Required for
+    /// Discogs artist search; ignored by the MusicBrainz provider.
+    pub discogs_token: Option<String>,
+    /// AcoustID API key (`DISCOGRAPHY_ACOUSTID_KEY`) — enables Phase-E
+    /// audio-anchored artist resolution (MusicBrainz only, and only with the
+    /// `chromaprint` build feature + fingerprinted tracks). `None` disables it.
+    pub acoustid_key: Option<String>,
     /// Background sync-all cadence in seconds. 0 = manual only (the default —
     /// a whole-library reconcile is heavy at ~1 req/s).
     pub sync_interval_secs: u64,
@@ -539,6 +546,12 @@ fn load_discography() -> Option<DiscographyConfig> {
     let contact = env::var("DISCOGRAPHY_CONTACT")
         .ok()
         .filter(|s| !s.trim().is_empty());
+    let discogs_token = env::var("DISCOGRAPHY_DISCOGS_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let acoustid_key = env::var("DISCOGRAPHY_ACOUSTID_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
     let sync_interval_secs = env_u64("DISCOGRAPHY_SYNC_INTERVAL_SECS", 0);
     let match_threshold = env_u64("DISCOGRAPHY_MATCH_THRESHOLD", 90).min(100) as u8;
     let title_sim = env::var("DISCOGRAPHY_TITLE_SIM")
@@ -567,6 +580,8 @@ fn load_discography() -> Option<DiscographyConfig> {
     Some(DiscographyConfig {
         provider,
         contact,
+        discogs_token,
+        acoustid_key,
         sync_interval_secs,
         match_threshold,
         title_sim,

@@ -463,6 +463,126 @@ pub struct FingerprintStatus {
     pub enabled: bool,
 }
 
+// ── Discography sync (Phase 14) ────────────────────────────────────────
+
+/// A release the library is missing entirely (server's `MissingRelease`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingRelease {
+    pub title: String,
+    pub album_type: String,
+    #[serde(default)]
+    pub year: Option<i32>,
+    pub provider_id: String,
+}
+
+/// A track missing from an owned album.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingTrack {
+    pub title: String,
+    #[serde(default)]
+    pub position: Option<i32>,
+    #[serde(default)]
+    pub disc_no: Option<i32>,
+    #[serde(default)]
+    pub recording_id: Option<String>,
+    pub title_key: String,
+}
+
+/// An owned album missing one or more tracks vs. the provider edition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncompleteAlbum {
+    pub album_id: String,
+    pub title: String,
+    pub release_group_id: String,
+    #[serde(default)]
+    pub missing_tracks: Vec<MissingTrack>,
+}
+
+/// The cached discography gap report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographyReport {
+    pub artist_id: String,
+    pub provider: String,
+    #[serde(default)]
+    pub missing_releases: Vec<MissingRelease>,
+    #[serde(default)]
+    pub incomplete_albums: Vec<IncompleteAlbum>,
+    #[serde(default)]
+    pub missing_release_count: i32,
+    #[serde(default)]
+    pub incomplete_album_count: i32,
+    pub generated_at: String,
+}
+
+/// A provider artist candidate for disambiguation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographyCandidate {
+    pub provider_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub disambiguation: Option<String>,
+    #[serde(default)]
+    pub score: u8,
+}
+
+/// A suppression-list entry (release- or track-scope).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographyIgnore {
+    pub id: String,
+    pub artist_id: String,
+    pub scope: String,
+    pub release_group_id: String,
+    #[serde(default)]
+    pub recording_id: Option<String>,
+    #[serde(default)]
+    pub title_key: Option<String>,
+    pub label: String,
+    pub created_at: String,
+}
+
+/// The result of a sync: either a report, or (when the artist can't be
+/// auto-matched) a candidate list to disambiguate. `status` is
+/// `"report"` | `"needs_resolution"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographySyncResult {
+    pub status: String,
+    #[serde(default)]
+    pub report: Option<DiscographyReport>,
+    #[serde(default)]
+    pub candidates: Vec<DiscographyCandidate>,
+}
+
+/// Library-wide discography coverage (Phase C admin dashboard). `enabled` is
+/// false when the server has `DISCOGRAPHY_ENABLED` off.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographyStatus {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub artists_total: i64,
+    #[serde(default)]
+    pub matched: i64,
+    #[serde(default)]
+    pub unresolved: i64,
+    #[serde(default)]
+    pub ignored: i64,
+}
+
+/// Outcome of a library-wide `sync-all` pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscographySyncAll {
+    #[serde(default)]
+    pub synced: u64,
+    #[serde(default)]
+    pub skipped_fresh: u64,
+    #[serde(default)]
+    pub failed: u64,
+    #[serde(default)]
+    pub total: u64,
+}
+
 // ── Podcasts ───────────────────────────────────────────────────────────
 
 /// Server's view of a podcast show. `categories` is the parsed list (the
