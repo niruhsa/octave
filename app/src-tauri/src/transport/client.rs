@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    AliasInfo, Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
+    AliasInfo, Album, AlbumFolderInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
+    DiscoverSection, EpisodeProgress,
     FingerprintStatus,
     LibraryStorage, ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
     PlayInput,
@@ -565,6 +566,28 @@ impl ServerClient {
     ) -> AppResult<RelocateReport> {
         self.rest
             .set_artist_language(cred, artist_id, target_language, target_folder)
+            .await
+    }
+
+    /// Inspect an album's on-disk folder. REST-only (like the artist paths).
+    pub async fn album_folder(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+    ) -> AppResult<AlbumFolderInfo> {
+        self.rest.album_folder(cred, album_id).await
+    }
+
+    /// Rename an album's on-disk folder (empty/None → match the album title).
+    /// REST-only (no gRPC surface yet).
+    pub async fn rename_album_folder(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        folder_name: Option<&str>,
+    ) -> AppResult<RelocateReport> {
+        self.rest
+            .rename_album_folder(cred, album_id, folder_name)
             .await
     }
 

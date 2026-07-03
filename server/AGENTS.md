@@ -117,6 +117,24 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Album folder rename.** A manager can rename an album's on-disk folder to match
+its title (any album type — album/EP/single/live) or to a hand-entered name, with
+the track files physically moved and `file_path`s updated.
+- **Service** ([`services/library.rs`](./src/services/library.rs)): `album_folder`
+  (User+) reports the album's current on-disk folder (the 3rd path component of a
+  track's `<Language>/<Artist>/<Album>/<file>` path — the most common across the
+  album's tracks) plus `suggested_folder` (the sanitized title) as `AlbumFolderInfo`;
+  `rename_album_folder(caller, album_id, new_folder_name?)` (Manager+, audited
+  `album.rename_folder`) resolves the destination name (explicit value → the album
+  title), then reuses the artist-relocate machinery (`move_file` / `move_leftover_files`
+  / `prune_empty_dirs`) via a new `retarget_album` helper that rewrites **only** the
+  album path component, keeping the `<Language>/<Artist>/` prefix (a rename never
+  moves the album out from under its artist), re-points `cover_path`, and prunes the
+  emptied old folder. Returns a `RelocateReport`. +2 helper unit tests.
+- **Transport** ([`rest/library.rs`](./src/rest/library.rs)): REST `GET /albums/:id/folder`
+  (info) + `POST /albums/:id/folder` `{ folder_name? }`. REST-only, mirroring the
+  sibling artist storage-language endpoints (no gRPC surface).
+
 **Alias-aware search (cross-language).** Artist/album/track search now matches **every known
 spelling**, not just the primary-language display name, so a Japanese artist shown under an
 English name (or vice-versa) is still found by their Kanji spelling and vice-versa.

@@ -520,6 +520,23 @@ impl<'a> LibraryService<'a> {
             .await
     }
 
+    /// Inspect an album's on-disk folder (current name + title-based suggestion).
+    pub async fn album_folder(
+        &self,
+        album_id: &str,
+    ) -> AppResult<crate::transport::AlbumFolderInfo> {
+        self.auth.album_folder(album_id).await
+    }
+
+    /// Rename an album's on-disk folder (empty/None → match the album title).
+    pub async fn rename_album_folder(
+        &self,
+        album_id: &str,
+        folder_name: Option<&str>,
+    ) -> AppResult<crate::transport::RelocateReport> {
+        self.auth.rename_album_folder(album_id, folder_name).await
+    }
+
     pub async fn move_track(
         &self,
         track_id: &str,

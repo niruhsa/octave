@@ -1552,6 +1552,210 @@ impl LibraryService {
         Ok(report)
     }
 
+    /// Inspect the on-disk folder an album's tracks currently occupy, alongside
+    /// the folder name that would match the album's title.
+    ///
+    /// The album directory is the third path component of a track's stored path
+    /// (`<language>/<artist>/<album>/<file>`); the most common one across the
+    /// album's tracks is reported as `current_folder`. `suggested_folder` is the
+    /// sanitised album title — what "rename to match title" would produce. User+
+    /// (a read).
+    pub async fn album_folder(
+        &self,
+        caller: &Identity,
+        album_id: Uuid,
+    ) -> Result<AlbumFolderInfo> {
+        caller.require(PermissionLevel::User)?;
+        let album = self
+            .albums
+            .get(album_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
+
+        let suggested_folder = sanitize(&album.title);
+        let mut info = AlbumFolderInfo {
+            current_folder: None,
+            relative_dir: None,
+            suggested_folder,
+            track_count: 0,
+        };
+
+        let Some(root) = &self.library_root else {
+            return Ok(info);
+        };
+
+        // Tally the distinct `<language>/<artist>/<album>` directories the
+        // album's tracks live under, picking the most common as canonical.
+        let tracks = self.tracks.list_by_album(album_id).await?;
+        let mut dir_counts: Vec<(String, String, u64)> = Vec::new(); // (album_folder, relative_dir, count)
+        for t in &tracks {
+            let Some(rel) = relative_to_root(&t.file_path, root) else {
+                continue;
+            };
+            let Some((album_folder, relative_dir)) = album_dir_of(&rel) else {
+                continue;
+            };
+            if let Some(e) = dir_counts.iter_mut().find(|(_, d, _)| *d == relative_dir) {
+                e.2 += 1;
+            } else {
+                dir_counts.push((album_folder, relative_dir, 1));
+            }
+        }
+        info.track_count = tracks.len() as u64;
+        if let Some((folder, relative_dir, _)) = dir_counts.into_iter().max_by_key(|(_, _, n)| *n) {
+            info.current_folder = Some(folder);
+            info.relative_dir = Some(relative_dir);
+        }
+        Ok(info)
+    }
+
+    /// Rename an album's on-disk folder, physically relocating every track file
+    /// into the new folder, updating each `file_path`, carrying the cover +
+    /// sidecar files along, and pruning the emptied old folder.
+    ///
+    /// `new_folder_name` pins the on-disk album-folder spelling; omit it (or pass
+    /// empty) to use the album's title. The rename applies wherever the album's
+    /// tracks live — its `<language>/<artist>/` prefix is preserved, so a rename
+    /// never moves an album out from under its artist. Works for every album
+    /// type (album / EP / single / live). Manager+, audited (`album.rename_folder`).
+    pub async fn rename_album_folder(
+        &self,
+        caller: &Identity,
+        album_id: Uuid,
+        new_folder_name: Option<&str>,
+    ) -> Result<RelocateReport> {
+        caller.require(PermissionLevel::Manager)?;
+        let root = self
+            .library_root
+            .clone()
+            .ok_or_else(|| AppError::Config("LIBRARY_PATH is not set".into()))?;
+        let album = self
+            .albums
+            .get(album_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
+
+        // Resolve the destination folder name: an explicit non-empty value wins,
+        // else the album title. Both are sanitised into a safe path component.
+        let target_folder = match new_folder_name {
+            Some(f) if !f.trim().is_empty() => sanitize(f),
+            _ => sanitize(&album.title),
+        };
+
+        let tracks = self.tracks.list_by_album(album_id).await?;
+
+        let mut report = RelocateReport::default();
+        let mut source_album_dirs: Vec<PathBuf> = Vec::new();
+        let mut source_dirs_str: Vec<String> = Vec::new();
+        let mut target_relative_dir: Option<String> = None;
+
+        // 1. Move every track file into the renamed folder, updating file_path.
+        for t in &tracks {
+            let Some(rel) = relative_to_root(&t.file_path, &root) else {
+                report.skipped += 1;
+                continue;
+            };
+            if let Some((_, src_dir)) = album_dir_of(&rel)
+                && !source_dirs_str.contains(&src_dir)
+            {
+                source_dirs_str.push(src_dir);
+            }
+            let Some(new_rel) = retarget_album(&rel, &target_folder) else {
+                report.skipped += 1;
+                continue;
+            };
+            if target_relative_dir.is_none()
+                && let Some(parent) = new_rel.parent()
+            {
+                target_relative_dir = Some(parent.to_string_lossy().replace('\\', "/"));
+            }
+            let src_abs = resolve_abs(&t.file_path, &root);
+            let dst_abs = root.join(&new_rel);
+            if dst_abs == src_abs {
+                report.skipped += 1;
+                continue;
+            }
+            match move_file(&src_abs, &dst_abs) {
+                Ok(MoveOutcome::Moved) | Ok(MoveOutcome::AlreadyPresent) => {
+                    self.tracks
+                        .update_file_path(t.id, &dst_abs.to_string_lossy())
+                        .await?;
+                    report.moved += 1;
+                    if let Some(parent) = src_abs.parent() {
+                        let parent = parent.to_path_buf();
+                        if !source_album_dirs.contains(&parent) {
+                            source_album_dirs.push(parent);
+                        }
+                    }
+                }
+                Ok(MoveOutcome::Conflict) => {
+                    warn!(
+                        track = %t.id,
+                        src = %src_abs.display(),
+                        dst = %dst_abs.display(),
+                        "rename_album_folder: destination exists with different content, skipping"
+                    );
+                    report.skipped += 1;
+                }
+                Ok(MoveOutcome::Missing) => report.skipped += 1,
+                Err(e) => {
+                    warn!(track = %t.id, error = %e, "rename_album_folder: file move failed");
+                    report.skipped += 1;
+                }
+            }
+        }
+
+        // 2. Sweep leftover files (cover.jpg, artwork, logs) from each source
+        //    album dir into its renamed sibling so nothing is orphaned.
+        for src_dir in &source_album_dirs {
+            let Some(parent) = src_dir.parent() else { continue };
+            let dst_dir = parent.join(&target_folder);
+            if dst_dir == *src_dir {
+                continue;
+            }
+            move_leftover_files(src_dir, &dst_dir);
+        }
+
+        // 3. Re-point the album cover if it lived under the old folder (only when
+        //    the moved file actually exists at the new location).
+        if let Some(cover) = &album.cover_path
+            && let Some(rel) = relative_to_root(cover, &root)
+            && let Some(new_rel) = retarget_album(&rel, &target_folder)
+        {
+            let new_abs = root.join(&new_rel);
+            if new_abs != resolve_abs(cover, &root)
+                && new_abs.is_file()
+                && let Err(e) = self
+                    .albums
+                    .update(album.id, &album.title, album.release_year, Some(&new_abs.to_string_lossy()))
+                    .await
+            {
+                warn!(album = %album.id, error = %e, "rename_album_folder: cover_path update failed");
+            }
+        }
+
+        // 4. Prune the now-empty old folder(s).
+        for src_dir in &source_album_dirs {
+            self.prune_empty_dirs(src_dir);
+        }
+
+        report.target_relative_dir = target_relative_dir.unwrap_or_else(|| target_folder.clone());
+
+        let before = serde_json::json!({ "sources": source_dirs_str });
+        let after = serde_json::json!({
+            "target": report.target_relative_dir,
+            "folder": target_folder,
+            "moved": report.moved,
+            "skipped": report.skipped,
+        });
+        self.audit(caller, "album.rename_folder", "album", Some(album_id), Some(&before), Some(&after))
+            .await?;
+
+        // File sizes are unchanged by a move, so storage aggregates need no
+        // recompute.
+        Ok(report)
+    }
+
     /// Every track of an artist, gathered across all their albums (reuses the
     /// existing per-album listing so no new repo method is needed).
     async fn artist_tracks(&self, artist_id: Uuid) -> Result<Vec<Track>> {
@@ -1803,6 +2007,22 @@ pub struct ArtistStoragePaths {
     pub library_languages: Vec<String>,
 }
 
+/// Result of [`LibraryService::album_folder`] — the album's current on-disk
+/// folder and the name a "match the title" rename would produce.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AlbumFolderInfo {
+    /// The album folder's current name on disk (third path component), or `None`
+    /// when the album has no resolvable tracks / no library root is configured.
+    pub current_folder: Option<String>,
+    /// `"<language>/<artist>/<album>"` — the album's full relative directory,
+    /// shown to the user for context. `None` when `current_folder` is.
+    pub relative_dir: Option<String>,
+    /// Sanitised album title — the folder name "rename to match title" produces.
+    pub suggested_folder: String,
+    /// Number of the album's tracks (whether or not their paths resolve).
+    pub track_count: u64,
+}
+
 /// Result of [`LibraryService::set_artist_language`].
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RelocateReport {
@@ -1855,6 +2075,38 @@ fn lang_artist_of(rel: &Path) -> Option<(String, String)> {
     let artist = it.next()?.as_os_str().to_str()?.to_string();
     it.next()?; // ensure there's a track/album component beyond the artist dir
     Some((language, artist))
+}
+
+/// Extract `(album_folder, "<language>/<artist>/<album>")` from a library-
+/// relative track path. Requires at least four components
+/// (`<lang>/<artist>/<album>/<file>`).
+fn album_dir_of(rel: &Path) -> Option<(String, String)> {
+    let comps: Vec<_> = rel.components().collect();
+    if comps.len() < 4 {
+        return None;
+    }
+    let lang = comps[0].as_os_str().to_str()?;
+    let artist = comps[1].as_os_str().to_str()?;
+    let album = comps[2].as_os_str().to_str()?;
+    Some((album.to_string(), format!("{lang}/{artist}/{album}")))
+}
+
+/// Rewrite a library-relative path's **album** component (the third) to
+/// `new_album_folder`, preserving the `<language>/<artist>/` prefix and the
+/// file suffix. Returns `None` when the path has fewer than four components.
+fn retarget_album(rel: &Path, new_album_folder: &str) -> Option<PathBuf> {
+    let comps: Vec<_> = rel.components().collect();
+    if comps.len() < 4 {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    out.push(comps[0].as_os_str());
+    out.push(comps[1].as_os_str());
+    out.push(new_album_folder);
+    for c in &comps[3..] {
+        out.push(c.as_os_str());
+    }
+    Some(out)
 }
 
 /// Rewrite a library-relative path so its first two components become
@@ -1953,10 +2205,36 @@ fn move_leftover_files(src_dir: &Path, dst_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        lang_artist_of, parse_album_type, pick_primary_index, relative_to_root, resolve_language,
-        retarget, single_song_rule_satisfied,
+        album_dir_of, lang_artist_of, parse_album_type, pick_primary_index, relative_to_root,
+        resolve_language, retarget, retarget_album, single_song_rule_satisfied,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn album_dir_of_extracts_folder_and_relative_dir() {
+        assert_eq!(
+            album_dir_of(Path::new("English/aespa/Armageddon/01 - Song.flac")),
+            Some(("Armageddon".into(), "English/aespa/Armageddon".into()))
+        );
+        // Needs a file beyond the album component (four parts).
+        assert_eq!(album_dir_of(Path::new("English/aespa/Armageddon")), None);
+    }
+
+    #[test]
+    fn retarget_album_renames_only_the_album_component() {
+        // The <lang>/<artist>/ prefix and the file suffix are preserved.
+        assert_eq!(
+            retarget_album(Path::new("English/aespa/Old Name/01 - Song.flac"), "Armageddon"),
+            Some(PathBuf::from("English/aespa/Armageddon/01 - Song.flac"))
+        );
+        // A disc subfolder after the album component rides along.
+        assert_eq!(
+            retarget_album(Path::new("English/aespa/Old/Disc 1/01.flac"), "New"),
+            Some(PathBuf::from("English/aespa/New/Disc 1/01.flac"))
+        );
+        // Too few components → None.
+        assert_eq!(retarget_album(Path::new("English/aespa/01.flac"), "New"), None);
+    }
 
     #[test]
     fn relative_to_root_handles_absolute_and_relative() {

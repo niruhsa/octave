@@ -12,7 +12,8 @@ use tokio::sync::RwLock;
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    AliasInfo, Album, Artist, ArtistStoragePaths, ChunkAck, Credential, DiscoverSection, EpisodeProgress,
+    AliasInfo, Album, AlbumFolderInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
+    DiscoverSection, EpisodeProgress,
     FingerprintStatus,
     ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
     Podcast,
@@ -707,6 +708,22 @@ impl AuthManager {
         let cred = self.credential().await?;
         self.server
             .set_artist_language(&cred, artist_id, target_language, target_folder)
+            .await
+    }
+
+    pub async fn album_folder(&self, album_id: &str) -> AppResult<AlbumFolderInfo> {
+        let cred = self.credential().await?;
+        self.server.album_folder(&cred, album_id).await
+    }
+
+    pub async fn rename_album_folder(
+        &self,
+        album_id: &str,
+        folder_name: Option<&str>,
+    ) -> AppResult<RelocateReport> {
+        let cred = self.credential().await?;
+        self.server
+            .rename_album_folder(&cred, album_id, folder_name)
             .await
     }
 

@@ -380,6 +380,32 @@ export const librarySetArtistLanguage = (
     targetFolder: targetFolder ?? null,
   });
 
+/** An album's current on-disk folder + the name a "match title" rename yields. */
+export type AlbumFolderInfo = {
+  /** Current album-folder name on disk, or null when unresolvable / no root. */
+  current_folder: string | null;
+  /** `"<language>/<artist>/<album>"` full relative dir, for display. */
+  relative_dir: string | null;
+  /** Sanitized album title — what "rename to match title" would produce. */
+  suggested_folder: string;
+  track_count: number;
+};
+
+/** Inspect an album's on-disk folder (server-only; Manager+ acts on it). */
+export const libraryAlbumFolder = (albumId: string) =>
+  invoke<AlbumFolderInfo>("library_album_folder", { albumId });
+
+/**
+ * Rename an album's on-disk folder, physically moving its track files. Pass a
+ * `folderName` to pin the name, or omit it to match the album's title. Applies
+ * to every album type (album/EP/single/live). Manager+ gated server-side.
+ */
+export const libraryRenameAlbumFolder = (albumId: string, folderName?: string) =>
+  invoke<RelocateReport>("library_rename_album_folder", {
+    albumId,
+    folderName: folderName ?? null,
+  });
+
 export const libraryMergeAlbums = (survivorId: string, duplicateId: string) =>
   invoke<MergedAlbum>("library_merge_albums", { survivorId, duplicateId });
 

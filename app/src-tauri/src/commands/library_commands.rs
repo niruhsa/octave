@@ -14,7 +14,7 @@ use crate::error::{AppError, AppResult};
 use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::library::service::LibraryService;
 use crate::transport::{
-    ArtistStoragePaths, LibraryStorage, MetadataEdit, RelocateReport, RescanReport,
+    AlbumFolderInfo, ArtistStoragePaths, LibraryStorage, MetadataEdit, RelocateReport, RescanReport,
 };
 use crate::AppStateHandle;
 
@@ -203,6 +203,26 @@ pub async fn library_set_artist_language(
 ) -> AppResult<RelocateReport> {
     let svc = service(&state).await?;
     svc.set_artist_language(&artist_id, &target_language, target_folder.as_deref())
+        .await
+}
+
+#[tauri::command]
+pub async fn library_album_folder(
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+) -> AppResult<AlbumFolderInfo> {
+    let svc = service(&state).await?;
+    svc.album_folder(&album_id).await
+}
+
+#[tauri::command]
+pub async fn library_rename_album_folder(
+    state: State<'_, AppStateHandle>,
+    album_id: String,
+    folder_name: Option<String>,
+) -> AppResult<RelocateReport> {
+    let svc = service(&state).await?;
+    svc.rename_album_folder(&album_id, folder_name.as_deref())
         .await
 }
 

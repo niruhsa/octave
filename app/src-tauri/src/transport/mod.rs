@@ -81,6 +81,20 @@ pub struct ArtistStoragePaths {
     pub library_languages: Vec<String>,
 }
 
+/// The album's current on-disk folder plus the name a "match the title" rename
+/// would produce (album storage-folder rename).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumFolderInfo {
+    #[serde(default)]
+    pub current_folder: Option<String>,
+    #[serde(default)]
+    pub relative_dir: Option<String>,
+    #[serde(default)]
+    pub suggested_folder: String,
+    #[serde(default)]
+    pub track_count: u64,
+}
+
 /// Result of relocating an artist into a single language folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelocateReport {

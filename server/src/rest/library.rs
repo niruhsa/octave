@@ -35,6 +35,7 @@ pub fn router() -> Router<RestState> {
         .route("/albums/search", get(search_albums))
         .route("/albums/:id", get(get_album).put(update_album).delete(delete_album))
         .route("/albums/:id/type", post(set_album_type))
+        .route("/albums/:id/folder", get(get_album_folder).post(rename_album_folder))
         .route("/albums/:id/tracks", get(list_tracks_by_album))
         .route("/albums/:id/cover", get(serve_album_cover).post(upload_album_cover))
         .route("/albums/:id/artwork", post(fetch_album_artwork))
@@ -759,6 +760,37 @@ async fn merge_albums(
         .merge_albums(&caller, survivor_id, body.duplicate_id)
         .await?;
     Ok(Json(album_dto_full(&state, &caller, a).await?))
+}
+
+async fn get_album_folder(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<crate::services::library::AlbumFolderInfo>, ApiError> {
+    let caller = id(&req)?;
+    let info = state.library.album_folder(&caller, album_id).await?;
+    Ok(Json(info))
+}
+
+#[derive(Deserialize)]
+pub struct RenameFolderBody {
+    /// The new album folder name. Omit or leave empty to match the album title.
+    #[serde(default)]
+    pub folder_name: Option<String>,
+}
+
+async fn rename_album_folder(
+    State(state): State<RestState>,
+    Path(album_id): Path<Uuid>,
+    req: Request<Body>,
+) -> Result<Json<crate::services::library::RelocateReport>, ApiError> {
+    let caller = id(&req)?;
+    let body: RenameFolderBody = crate::rest::parse_json(req).await?;
+    let report = state
+        .library
+        .rename_album_folder(&caller, album_id, body.folder_name.as_deref())
+        .await?;
+    Ok(Json(report))
 }
 
 #[derive(Deserialize)]

@@ -91,6 +91,17 @@ This file owns the **client's** status and detail. When client work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Album folder rename (client).** The Album route gains a Manager+ "Folder on disk"
+control ([`components/AlbumFolderLocation.tsx`](./src/components/AlbumFolderLocation.tsx),
+rendered near the album aliases): it shows the album's current
+`<Language>/<Artist>/<Album>` folder and lets a manager rename it to match the album
+title (any album type) or a hand-entered name, moving the track files server-side.
+Threaded through `library_album_folder` / `library_rename_album_folder` Tauri
+commands → `LibraryService` → `AuthManager` → `ServerClient` → REST
+`GET|POST /albums/:id/folder`, with `AlbumFolderInfo` + `libraryAlbumFolder` /
+`libraryRenameAlbumFolder` in [`ipc.ts`](./src/ipc.ts). Online + Manager gated
+(offline-disabled), mirroring the artist storage-language `LibraryLocation` control.
+
 **Gapless playback & crossfade (client).** Track boundaries no longer tear down and reload a single
 `<audio>` element (an audible 50–300 ms gap): a **dual-element playback deck**
 ([`player/deck.ts`](./src/player/deck.ts), design in [`GAPLESS_CROSSFADE.md`](./GAPLESS_CROSSFADE.md))

@@ -24,6 +24,7 @@ import { DownloadStatus } from "../components/DownloadStatus";
 import { AddToPlaylistSheet } from "../components/AddToPlaylistSheet";
 import { ActionSheet, SheetItem } from "../components/ActionSheet";
 import { Aliases } from "../components/Aliases";
+import { AlbumFolderLocation } from "../components/AlbumFolderLocation";
 import { EntityPicker } from "../components/EntityPicker";
 import { EqBars } from "../components/EqBars";
 import { byteSize, formatDuration } from "../lib/format";
@@ -415,6 +416,14 @@ export default function Album() {
           onChanged={refreshAlbum}
         />
       )}
+
+      {/* On-disk folder — rename to match the title or a custom name (Manager+). */}
+      <AlbumFolderLocation
+        albumId={id}
+        online={online}
+        isManager={isManager}
+        onChanged={refreshAlbum}
+      />
 
       {/* actions */}
       {items.length > 0 && (

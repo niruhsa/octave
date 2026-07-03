@@ -10,7 +10,8 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Album, ArchiveUploadResult, Artist, ArtistStat, ArtistStoragePaths, ChunkAck, Credential,
+    Album, AlbumFolderInfo, ArchiveUploadResult, Artist, ArtistStat, ArtistStoragePaths, ChunkAck,
+    Credential,
     DiscoverSection,
     EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, PermissionTier,
     PlayEvent, RelocateReport,
@@ -576,6 +577,48 @@ impl RestClient {
             .json()
             .await
             .map_err(rest_err("set_artist_language decode"))
+    }
+
+    pub async fn album_folder(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+    ) -> AppResult<AlbumFolderInfo> {
+        let url = format!("{}/albums/{album_id}/folder", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("album_folder"))?;
+        check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("album_folder decode"))
+    }
+
+    pub async fn rename_album_folder(
+        &self,
+        cred: &Credential,
+        album_id: &str,
+        folder_name: Option<&str>,
+    ) -> AppResult<RelocateReport> {
+        let url = format!("{}/albums/{album_id}/folder", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "folder_name": folder_name }))
+            .send()
+            .await
+            .map_err(rest_err("rename_album_folder"))?;
+        check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("rename_album_folder decode"))
     }
 
     pub async fn merge_albums(
