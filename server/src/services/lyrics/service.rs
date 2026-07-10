@@ -129,8 +129,31 @@ impl LyricsService {
 
     /// Read + parse a track's cached lyrics for the client. Never errors on a
     /// missing/instrumental track — the panel degrades gracefully.
+    ///
+    /// An already-uploaded track the background pass hasn't reached yet has no
+    /// `lyrics_path`. Rather than show "No lyrics available" until the (slow,
+    /// polite) pass gets to it, we **resolve on demand** here — as a system
+    /// identity for the audited write — so opening the panel fetches lyrics
+    /// immediately (like on-demand artwork optimization). A definitive
+    /// instrumental result is terminal; a network miss stays retryable.
     pub async fn get(&self, caller: &Identity, track_id: Uuid) -> Result<LyricsView> {
-        let track = self.library.get_track(caller, track_id).await?;
+        let mut track = self.library.get_track(caller, track_id).await?;
+
+        if track.lyrics_path.is_none() && !track.lyrics_instrumental {
+            match self
+                .resolve_track_inner(&Identity::SecretKey, track_id, false)
+                .await
+            {
+                Ok(outcome) => {
+                    tracing::debug!(track = %track_id, ?outcome, "lyrics: on-demand resolve")
+                }
+                Err(e) => {
+                    tracing::debug!(track = %track_id, error = %e, "lyrics: on-demand resolve failed")
+                }
+            }
+            track = self.library.get_track(caller, track_id).await?;
+        }
+
         if track.lyrics_instrumental {
             return Ok(LyricsView {
                 instrumental: true,

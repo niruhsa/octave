@@ -62,6 +62,10 @@ impl LrcLibSource {
     pub fn new(contact: Option<&str>) -> Self {
         let client = reqwest::Client::builder()
             .user_agent(user_agent(contact))
+            // Bounded so an unreachable/slow provider fails fast — on-demand
+            // resolution runs inside the request handler that serves the panel.
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("reqwest client build");
         Self {
