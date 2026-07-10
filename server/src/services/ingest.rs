@@ -51,6 +51,11 @@ pub struct IngestService {
     /// like" radio works promptly for fresh uploads (the periodic pass is the
     /// catch-all). `None` when `FINGERPRINT_ENABLED` is off.
     pub fingerprint: Option<crate::services::FingerprintService>,
+    /// Optional lyrics service (Phase 15). When set, every newly-indexed track
+    /// gets a background lyric resolve (sidecar → embedded → LRCLIB) on ingest,
+    /// beside the artwork + fingerprint hooks. `None` when `LYRICS_ENABLED` is
+    /// off.
+    pub lyrics: Option<crate::services::LyricsService>,
 }
 
 impl IngestService {
@@ -66,6 +71,7 @@ impl IngestService {
             ingest_root,
             artwork,
             fingerprint: None,
+            lyrics: None,
         }
     }
 
@@ -75,6 +81,12 @@ impl IngestService {
         fingerprint: Option<crate::services::FingerprintService>,
     ) -> Self {
         self.fingerprint = fingerprint;
+        self
+    }
+
+    /// Attach the lyrics service so new uploads get lyrics resolved on ingest.
+    pub fn with_lyrics(mut self, lyrics: Option<crate::services::LyricsService>) -> Self {
+        self.lyrics = lyrics;
         self
     }
 
@@ -208,6 +220,7 @@ impl IngestService {
         // pass, which re-analyzes only when the file signature actually changed.
         if !already_indexed {
             self.spawn_fingerprint(track_id);
+            self.spawn_lyrics(track_id);
         }
 
         debug!(
@@ -333,6 +346,7 @@ impl IngestService {
                     result.ingested += 1;
                     result.track_ids.push(track_id);
                     self.spawn_fingerprint(track_id);
+                    self.spawn_lyrics(track_id);
                 }
                 Ok(None) => {
                     result.already_indexed += 1;
@@ -431,6 +445,28 @@ impl IngestService {
                         track_id = %track_id,
                         error = %e,
                         "ingest: fingerprint analyze skipped/failed"
+                    ),
+                }
+            });
+        }
+    }
+
+    /// Resolve lyrics for a genuinely-new track in the background (Phase 15) so
+    /// the NowPlaying panel has them promptly (the periodic pass is the
+    /// catch-all). Uses a system identity for the audited write. No-op when
+    /// lyrics are disabled.
+    fn spawn_lyrics(&self, track_id: Uuid) {
+        if let Some(lyrics) = &self.lyrics {
+            let lyrics = lyrics.clone();
+            tokio::spawn(async move {
+                match lyrics.resolve_track(&Identity::SecretKey, track_id).await {
+                    Ok(outcome) => {
+                        tracing::debug!(track_id = %track_id, ?outcome, "ingest: lyrics resolved")
+                    }
+                    Err(e) => tracing::debug!(
+                        track_id = %track_id,
+                        error = %e,
+                        "ingest: lyrics resolve skipped/failed"
                     ),
                 }
             });

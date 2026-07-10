@@ -166,6 +166,35 @@ pub struct Track {
     pub aliases: Vec<AliasInfo>,
 }
 
+/// A track's parsed lyrics (Phase 15). `found = false` means none/pending; the
+/// panel degrades gracefully. `synced` distinguishes time-aligned lines (with
+/// `ms`) from a plain-text dump.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Lyrics {
+    #[serde(default)]
+    pub found: bool,
+    #[serde(default)]
+    pub synced: bool,
+    #[serde(default)]
+    pub instrumental: bool,
+    /// `sidecar` | `embedded` | `lrclib` | `manual`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Sorted lines; empty for plain (unsynced) lyrics.
+    #[serde(default)]
+    pub lines: Vec<LyricLine>,
+    /// Newline-joined fallback text.
+    #[serde(default)]
+    pub plain: String,
+}
+
+/// One lyric line: `ms` from the start of the track + its text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LyricLine {
+    pub ms: i64,
+    pub text: String,
+}
+
 /// The server's library-storage breakdown (homepage widget). `misc` shown in
 /// the UI is `artwork_bytes + other_bytes`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

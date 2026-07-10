@@ -96,6 +96,10 @@ pub struct Config {
     /// `DISCOGRAPHY_ENABLED` is on. The server boots + the discography endpoints
     /// report `enabled = false` when this is `None`.
     pub discography: Option<DiscographyConfig>,
+    /// Optional lyrics subsystem (Phase 15). `Some` when `LYRICS_ENABLED` is on.
+    /// The server boots + the lyrics endpoints report `enabled = false` when
+    /// this is `None`.
+    pub lyrics: Option<LyricsConfig>,
     /// Directory that relative paths anchor to. Either the dir containing
     /// the loaded `.env` file or the current working directory.
     pub config_anchor: PathBuf,
@@ -178,6 +182,28 @@ pub struct DiscographyConfig {
     pub include_types: Vec<String>,
 }
 
+/// Lyrics config (Phase 15). Enabled by `LYRICS_ENABLED`. Attaches synced +
+/// plain lyrics to tracks from sidecar / embedded tags / LRCLIB, cached on disk
+/// under `cache_dir` like artwork. See LYRICS_FEATURE.md.
+#[derive(Debug, Clone)]
+pub struct LyricsConfig {
+    /// Allow the external provider (LRCLIB). `false` ⇒ sidecar + embedded only,
+    /// no outbound calls (`LYRICS_FETCH`).
+    pub fetch: bool,
+    /// External source id (`lrclib` today).
+    pub provider: String,
+    /// On-disk `.lrc` cache dir (anchor-resolved; default `<LIBRARY_PATH>/.lyrics`).
+    pub cache_dir: PathBuf,
+    /// Optional contact appended to the provider `User-Agent` (etiquette).
+    pub contact: Option<String>,
+    /// Background-pass cadence in seconds. 0 = startup-only.
+    pub interval_secs: u64,
+    /// Resolve workers (network-bound; kept low + polite).
+    pub concurrency: usize,
+    /// Embed resolved lyrics back into the audio file's tags (`WRITE_LYRICS`).
+    pub write_back: bool,
+}
+
 /// Firebase Cloud Messaging config (Phase 10 — real-time push). The credentials
 /// file is a Google **service-account JSON key** (used to mint an OAuth2 token
 /// for the FCM HTTP v1 API); only its path is held, never the key bytes.
@@ -247,6 +273,7 @@ impl Config {
         let podcast = load_podcast(&anchor, library_path.as_ref())?;
         let fingerprint = load_fingerprint(&anchor);
         let discography = load_discography();
+        let lyrics = load_lyrics(&anchor, library_path.as_ref());
 
         // Image optimization knobs (sensible defaults; all overridable).
         let image_max_dim = env_u64("IMAGE_MAX_DIM", 800).clamp(64, 8192) as u32;
@@ -291,6 +318,7 @@ impl Config {
             podcast,
             fingerprint,
             discography,
+            lyrics,
             config_anchor: anchor,
         })
     }
@@ -586,6 +614,50 @@ fn load_discography() -> Option<DiscographyConfig> {
         match_threshold,
         title_sim,
         include_types,
+    })
+}
+
+/// Optional lyrics subsystem (Phase 15). Enabled by `LYRICS_ENABLED`.
+/// `LYRICS_FETCH` (default on) gates the external provider; `LYRICS_PATH`
+/// (default `<LIBRARY_PATH>/.lyrics`) is the on-disk cache;
+/// `LYRICS_INTERVAL_SECS` (default 24h, 0 = startup-only) + `LYRICS_CONCURRENCY`
+/// (default 2, kept low + polite) tune the background pass; `WRITE_LYRICS`
+/// (default off) embeds resolved lyrics back into the audio tags.
+fn load_lyrics(anchor: &Path, library_path: Option<&PathBuf>) -> Option<LyricsConfig> {
+    if !env_flag("LYRICS_ENABLED") {
+        return None;
+    }
+    // Default-on unless explicitly disabled (unlike `env_flag`, which is
+    // default-off) — an enabled operator usually wants LRCLIB.
+    let fetch = env::var("LYRICS_FETCH")
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(true);
+    let provider = env::var("LYRICS_PROVIDER")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| "lrclib".to_string());
+    let cache_dir = env::var("LYRICS_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|p| resolve_path(anchor, &p))
+        .or_else(|| library_path.map(|l| l.join(".lyrics")))
+        .unwrap_or_else(|| anchor.join(".lyrics"));
+    let contact = env::var("LYRICS_CONTACT")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let interval_secs = env_u64("LYRICS_INTERVAL_SECS", 86_400);
+    let concurrency = env_u64("LYRICS_CONCURRENCY", 2).clamp(1, 16) as usize;
+    let write_back = env_flag("WRITE_LYRICS");
+    Some(LyricsConfig {
+        fetch,
+        provider,
+        cache_dir,
+        contact,
+        interval_secs,
+        concurrency,
+        write_back,
     })
 }
 

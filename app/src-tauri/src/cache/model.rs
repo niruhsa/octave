@@ -16,6 +16,21 @@ pub struct Artist {
     pub updated_at: String,
 }
 
+/// Cached lyrics for one track (Phase 15, offline). `lines_json` is a JSON
+/// array of `{ms,text}` (parsed server-side). Standalone (no FK) so a
+/// refresh-on-read for a not-yet-downloaded track is safe. Booleans are stored
+/// as `INTEGER` 0/1 per SQLite convention.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TrackLyricsRow {
+    pub track_id: String,
+    pub found: i64,
+    pub synced: i64,
+    pub instrumental: i64,
+    pub source: Option<String>,
+    pub lines_json: String,
+    pub plain: String,
+}
+
 /// One album whose metadata is cached locally.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Album {

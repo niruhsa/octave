@@ -15,7 +15,8 @@ use crate::transport::{
     AliasInfo, Album, AlbumFolderInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
     DiscoverSection, EpisodeProgress,
     FingerprintStatus,
-    ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput,
+    ListeningStats, Lyrics, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
+    PlayInput,
     Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RelocateReport, RescanReport, ServerClient,
     ServerConfig,
@@ -462,6 +463,30 @@ impl AuthManager {
     pub async fn discover_similar(&self, track_id: &str, limit: i32) -> AppResult<Vec<Track>> {
         let cred = self.credential().await?;
         self.server.discover_similar(&cred, track_id, limit).await
+    }
+
+    /// A track's parsed lyrics (Phase 15). Server-first (freshest).
+    pub async fn get_lyrics(&self, track_id: &str) -> AppResult<Lyrics> {
+        let cred = self.credential().await?;
+        self.server.get_lyrics(&cred, track_id).await
+    }
+
+    /// Manager: force a re-resolve of a track's lyrics.
+    pub async fn refetch_lyrics(&self, track_id: &str) -> AppResult<Lyrics> {
+        let cred = self.credential().await?;
+        self.server.refetch_lyrics(&cred, track_id).await
+    }
+
+    /// Manager: set lyrics from an uploaded `.lrc`/text blob.
+    pub async fn set_lyrics(&self, track_id: &str, lrc: &str) -> AppResult<Lyrics> {
+        let cred = self.credential().await?;
+        self.server.set_lyrics(&cred, track_id, lrc).await
+    }
+
+    /// Manager: clear a track's lyrics.
+    pub async fn clear_lyrics(&self, track_id: &str) -> AppResult<Lyrics> {
+        let cred = self.credential().await?;
+        self.server.clear_lyrics(&cred, track_id).await
     }
 
     /// Spotify-style playlist recommendations (Phase 12). `seed_track_ids` is the

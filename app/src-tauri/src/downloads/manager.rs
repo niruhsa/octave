@@ -359,6 +359,13 @@ impl DownloadManager {
         stamp(&self.pool, "album", &album.id).await?;
         stamp(&self.pool, "track", &track.id).await?;
 
+        // Bundle lyrics for offline (Phase 15) — best-effort. Persist whatever
+        // the server has (synced / plain / instrumental / none) so the offline
+        // NowPlaying panel shows the right state with no server.
+        if let Ok(lyrics) = server.get_lyrics(&cred, track_id).await {
+            let _ = repo::upsert_track_lyrics(&self.pool, track_id, &lyrics).await;
+        }
+
         // Best-effort cover art for the album (skip if already cached).
         if repo::get_album_art(&self.pool, &album.id).await?.is_none() {
             let cover_path = final_path

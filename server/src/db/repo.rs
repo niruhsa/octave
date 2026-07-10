@@ -143,6 +143,37 @@ pub trait TrackRepo: Send + Sync {
         bit_depth: Option<i32>,
         channels: Option<i32>,
     ) -> Result<Option<Track>>;
+
+    // --- Lyrics (Phase 15) -------------------------------------------------
+    // Default no-op impls so the many in-memory test fakes (favorites.rs,
+    // recommendation.rs, discography, fingerprint, …) compile unchanged; the
+    // Postgres repo overrides them, and the lyrics-service test fake overrides
+    // only what it exercises. Mirrors `update_file_path`'s default.
+    /// Persist a resolved lyric pointer + provenance. Returns the updated row.
+    async fn set_lyrics(&self, _id: Uuid, _meta: LyricsMeta) -> Result<Option<Track>> {
+        Ok(None)
+    }
+    /// Mark a track positively instrumental / not-found (records the current
+    /// `source_sig`) so the pass stops retrying it. Returns the updated row.
+    async fn set_lyrics_instrumental(
+        &self,
+        _id: Uuid,
+        _source_sig: &str,
+    ) -> Result<Option<Track>> {
+        Ok(None)
+    }
+    /// Clear a track's lyrics (Manager remove / re-resolve). Returns the row.
+    async fn clear_lyrics(&self, _id: Uuid) -> Result<Option<Track>> {
+        Ok(None)
+    }
+    /// Up to `limit` tracks lacking a lyric lookup — drives the background pass.
+    async fn lyrics_candidates(&self, _limit: i64) -> Result<Vec<LyricsCandidate>> {
+        Ok(Vec::new())
+    }
+    /// Library-wide lyric coverage counts (status endpoint).
+    async fn lyrics_counts(&self) -> Result<LyricsCounts> {
+        Ok(LyricsCounts::default())
+    }
 }
 
 /// Lightweight row for `list_all_ids_paths` — avoids fetching every column.

@@ -56,9 +56,12 @@ use super::proto::favorite::favorite_service_client::FavoriteServiceClient;
 use super::proto::favorite as fpb;
 use super::proto::discover::discover_service_client::DiscoverServiceClient;
 use super::proto::discover as dpb;
+use super::proto::lyrics::lyrics_service_client::LyricsServiceClient;
+use super::proto::lyrics as lpb;
 use super::{
     AliasInfo, Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
-    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, Notification,
+    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, Lyrics, LyricLine,
+    MetadataEdit, Notification,
     NotificationPage,
     PermissionTier, PlayEvent, PlayHistoryPage, PlayInput, Playlist, PlaylistTrack,
     PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
@@ -212,6 +215,10 @@ impl GrpcClient {
 
     fn discover(&self) -> DiscoverServiceClient<Channel> {
         DiscoverServiceClient::new(self.channel.clone())
+    }
+
+    fn lyrics(&self) -> LyricsServiceClient<Channel> {
+        LyricsServiceClient::new(self.channel.clone())
     }
 
     /// Username/password login. On success the server returns an opaque
@@ -503,6 +510,70 @@ impl GrpcClient {
             Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
             Err(s) => Err(AppError::Transport(format!("get_track: {s}"))),
         }
+    }
+
+    // ---- lyrics (Phase 15) --------------------------------------------------
+
+    pub async fn get_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        let mut req = Request::new(lpb::GetLyricsRequest {
+            track_id: track_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .lyrics()
+            .get_lyrics(req)
+            .await
+            .map_err(|s| AppError::Transport(format!("get_lyrics: {s}")))?
+            .into_inner();
+        Ok(lyrics_from_proto(resp))
+    }
+
+    pub async fn refetch_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        let mut req = Request::new(lpb::RefetchLyricsRequest {
+            track_id: track_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .lyrics()
+            .refetch_lyrics(req)
+            .await
+            .map_err(map_mutation_err("refetch_lyrics"))?
+            .into_inner();
+        Ok(lyrics_from_proto(resp))
+    }
+
+    pub async fn set_lyrics(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        lrc: &str,
+    ) -> AppResult<Lyrics> {
+        let mut req = Request::new(lpb::SetLyricsRequest {
+            track_id: track_id.to_string(),
+            lrc: lrc.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .lyrics()
+            .set_lyrics(req)
+            .await
+            .map_err(map_mutation_err("set_lyrics"))?
+            .into_inner();
+        Ok(lyrics_from_proto(resp))
+    }
+
+    pub async fn clear_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        let mut req = Request::new(lpb::ClearLyricsRequest {
+            track_id: track_id.to_string(),
+        });
+        attach_credential(&mut req, cred)?;
+        let resp = self
+            .lyrics()
+            .clear_lyrics(req)
+            .await
+            .map_err(map_mutation_err("clear_lyrics"))?
+            .into_inner();
+        Ok(lyrics_from_proto(resp))
     }
 
     pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {
@@ -2384,6 +2455,28 @@ fn track_from_proto(t: super::proto::library::Track) -> Track {
         is_single_release: t.is_single_release,
         is_explicit: t.is_explicit,
         aliases: t.aliases.into_iter().map(alias_from_proto).collect(),
+    }
+}
+
+fn lyrics_from_proto(l: super::proto::lyrics::GetLyricsResponse) -> Lyrics {
+    Lyrics {
+        found: l.found,
+        synced: l.synced,
+        instrumental: l.instrumental,
+        source: if l.source.is_empty() {
+            None
+        } else {
+            Some(l.source)
+        },
+        lines: l
+            .lines
+            .into_iter()
+            .map(|x| LyricLine {
+                ms: i64::from(x.ms),
+                text: x.text,
+            })
+            .collect(),
+        plain: l.plain,
     }
 }
 

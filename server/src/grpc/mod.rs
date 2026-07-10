@@ -9,6 +9,7 @@ pub mod discover_svc;
 pub mod favorite_svc;
 pub mod interceptor;
 pub mod library_svc;
+pub mod lyrics_svc;
 pub mod notification_svc;
 pub mod playhistory_svc;
 pub mod playlist_svc;
@@ -27,8 +28,9 @@ use crate::error::{AppError, Result};
 use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
     ArtworkService, DiscographyService, FavoritesService, FingerprintService, IngestService,
-    LibraryService, MetadataService, NotificationService, PlayHistoryService, PlaylistService,
-    PodcastService, RecommendationService, ScanService, StorageService, UploadHub, UploadsService,
+    LibraryService, LyricsService, MetadataService, NotificationService, PlayHistoryService,
+    PlaylistService, PodcastService, RecommendationService, ScanService, StorageService, UploadHub,
+    UploadsService,
 };
 
 pub use auth_svc::AuthServer;
@@ -37,6 +39,7 @@ pub use discover_svc::DiscoverServer;
 pub use favorite_svc::FavoriteServer;
 pub use interceptor::AuthInterceptor;
 pub use library_svc::LibraryServer;
+pub use lyrics_svc::LyricsServer;
 pub use notification_svc::NotificationServer;
 pub use playhistory_svc::PlayHistoryServer;
 pub use playlist_svc::PlaylistServer;
@@ -61,6 +64,7 @@ pub async fn serve(
     discover: RecommendationService,
     fingerprint: Option<FingerprintService>,
     discography: Option<DiscographyService>,
+    lyrics: Option<LyricsService>,
     podcasts: Option<PodcastService>,
     ingest: Option<IngestService>,
     uploads: Option<UploadsService>,
@@ -98,6 +102,9 @@ pub async fn serve(
         .await;
     health_reporter
         .set_serving::<proto::discography::discography_service_server::DiscographyServiceServer<DiscographyServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::lyrics::lyrics_service_server::LyricsServiceServer<LyricsServer>>()
         .await;
 
     let interceptor = AuthInterceptor::new(auth.clone());
@@ -151,6 +158,11 @@ pub async fn serve(
         interceptor: interceptor.clone(),
     }
     .into_service();
+    let lyrics_server = LyricsServer {
+        lyrics,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
     let upload_server = UploadServer {
         ingest,
         uploads,
@@ -186,6 +198,7 @@ pub async fn serve(
         .add_service(favorite_server)
         .add_service(discover_server)
         .add_service(discography_server)
+        .add_service(lyrics_server)
         .add_service(upload_server)
         .serve_with_shutdown(addr, shutdown_signal)
         .await

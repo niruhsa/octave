@@ -292,6 +292,11 @@ pub fn run() {
             commands::discover_commands::discover_similar,
             commands::discover_commands::discover_playlist_recommendations,
             commands::discover_commands::fingerprint_status,
+            // lyrics (Phase 15)
+            commands::lyrics_commands::get_lyrics,
+            commands::lyrics_commands::refetch_lyrics,
+            commands::lyrics_commands::set_lyrics,
+            commands::lyrics_commands::clear_lyrics,
             // discography sync (Phase 14)
             commands::discography_commands::discography_report,
             commands::discography_commands::discography_sync,

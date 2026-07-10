@@ -929,6 +929,12 @@ mod tests {
                 metadata_json: "{}".into(),
                 is_single_release: false,
                 is_explicit: false,
+                lyrics_path: None,
+                lyrics_synced: false,
+                lyrics_source: None,
+                lyrics_instrumental: false,
+                lyrics_source_sig: None,
+                lyrics_synced_at: None,
                 created_at: now(),
                 updated_at: now(),
             };

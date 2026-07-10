@@ -36,6 +36,10 @@ pub mod discography {
     tonic::include_proto!("music.discography.v1");
 }
 
+pub mod lyrics {
+    tonic::include_proto!("music.lyrics.v1");
+}
+
 pub mod upload {
     tonic::include_proto!("music.upload.v1");
 }

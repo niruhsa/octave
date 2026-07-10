@@ -142,8 +142,67 @@ pub struct Track {
     pub is_single_release: bool,
     /// `true` when this track is explicit (independent of the title text).
     pub is_explicit: bool,
+    // --- Lyrics (Phase 15). Cache pointer + provenance; the text itself lives
+    // on disk under LYRICS_PATH. Every field is `#[sqlx(default)]` so the many
+    // existing `SELECT`/`RETURNING` lists that don't mention these columns
+    // still map onto `Track` unchanged — only the read paths that care select
+    // them. ---
+    /// Relative path (`<track_id>.lrc`) under LYRICS_PATH; `None` until resolved.
+    #[sqlx(default)]
+    pub lyrics_path: Option<String>,
+    /// `true` when the cached `.lrc` is time-synced (vs. a plain-text dump).
+    #[sqlx(default)]
+    pub lyrics_synced: bool,
+    /// Provenance: `sidecar` | `embedded` | `lrclib` | `manual`.
+    #[sqlx(default)]
+    pub lyrics_source: Option<String>,
+    /// `true` when the track is positively instrumental (no lyrics) — stops the
+    /// pass retrying it forever.
+    #[sqlx(default)]
+    pub lyrics_instrumental: bool,
+    /// File-content signature (size+mtime) at resolution time so a replaced
+    /// audio file re-resolves.
+    #[sqlx(default)]
+    pub lyrics_source_sig: Option<String>,
+    #[sqlx(default)]
+    pub lyrics_synced_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+/// Resolved lyric pointer + provenance to persist on a track (the `set_lyrics`
+/// write shape). The `.lrc`/plain text itself is written to disk under
+/// LYRICS_PATH; only this pointer lands on the row. Mirrors [`NewTrackFeature`].
+#[derive(Debug, Clone)]
+pub struct LyricsMeta {
+    /// Relative path under LYRICS_PATH (`<track_id>.lrc`).
+    pub lyrics_path: String,
+    pub synced: bool,
+    /// `sidecar` | `embedded` | `lrclib` | `manual`.
+    pub source: String,
+    pub source_sig: String,
+}
+
+/// Lightweight `(id, file_path, title, artist, album, duration_ms)` row for the
+/// "needs lyrics?" scan — joins the artist/album display names for the provider
+/// query without loading full `Track` rows.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LyricsCandidate {
+    pub id: Uuid,
+    pub file_path: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_ms: i64,
+}
+
+/// Library-wide lyric coverage for the status endpoint.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LyricsCounts {
+    pub synced: i64,
+    pub plain: i64,
+    pub instrumental: i64,
+    pub missing: i64,
 }
 
 /// One known spelling of an artist. Every artist has at least one (the primary,

@@ -16,7 +16,8 @@ use server::services::{
     run_optimize_pass, ArtworkService,
     CoverArtArchive, CoverArtSource, DebouncedWarmer, DiscographyCfg, DiscographyService,
     NewReleaseNotifier, FavoritesService, FcmSender, FingerprintService, ImageOptimizer, IngestService,
-    ItunesDirectory, LibraryService, MetadataService, NotificationService, PlaylistRecWarmer,
+    ItunesDirectory, LibraryService, LrcLibSource, LyricsService, LyricsSource, MetadataService,
+    NotificationService, PlaylistRecWarmer,
     PlayHistoryService, PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService,
     PushSender, RecommendationCache, RecommendationService, ScanService, StorageService,
     StreamingService, UploadHub, UploadsService, REC_CACHE_MAX, REC_CACHE_TTL, REC_WARM_DEBOUNCE,
@@ -227,6 +228,40 @@ async fn main() -> Result<()> {
         .clone()
         .map(|dir| ImageOptimizer::new(dir, config.image_max_dim, config.image_quality));
 
+    // Lyrics (Phase 15) — optional synced/plain lyrics. Sidecar + embedded tags
+    // always; LRCLIB only when LYRICS_FETCH is on. Cached on disk under
+    // LYRICS_PATH and audited via LibraryService, like artwork. When disabled
+    // the endpoints report `enabled = false` / `found = false` and the server
+    // behaves exactly as before.
+    let lyrics = config.lyrics.as_ref().map(|lc| {
+        let source: Option<Arc<dyn LyricsSource>> = if lc.fetch {
+            Some(Arc::new(LrcLibSource::new(lc.contact.as_deref())))
+        } else {
+            None
+        };
+        info!(
+            provider = %lc.provider,
+            fetch = lc.fetch,
+            interval_secs = lc.interval_secs,
+            concurrency = lc.concurrency,
+            write_back = lc.write_back,
+            "lyrics enabled"
+        );
+        LyricsService::new(
+            Arc::new(repos.clone()), // tracks
+            library.clone(),
+            source,
+            lc.cache_dir.clone(),
+            config.library_path.clone(),
+            lc.concurrency,
+        )
+        .with_write_back(lc.write_back)
+    });
+    // Background resolve pass: startup + interval (0 = startup-only).
+    if let (Some(l), Some(lc)) = (&lyrics, &config.lyrics) {
+        Arc::new(l.clone()).spawn_poller(lc.interval_secs);
+    }
+
     let ingest = match config.library_path.clone() {
         Some(ref root) => {
             let organizer = Organizer::new(root.clone());
@@ -239,7 +274,9 @@ async fn main() -> Result<()> {
                 )
                 // Analyze newly-uploaded tracks on ingest (Phase 12) so "sounds
                 // like" works promptly; no-op when fingerprinting is disabled.
-                .with_fingerprint(fingerprint.clone()),
+                .with_fingerprint(fingerprint.clone())
+                // Resolve lyrics for new uploads (Phase 15); no-op when disabled.
+                .with_lyrics(lyrics.clone()),
             )
         }
         None => None,
@@ -402,6 +439,7 @@ async fn main() -> Result<()> {
         discover: discover.clone(),
         fingerprint: fingerprint.clone(),
         discography: discography.clone(),
+        lyrics: lyrics.clone(),
         podcasts: podcasts.clone(),
         ingest: ingest.clone(),
         metadata: metadata.clone(),
@@ -428,6 +466,7 @@ async fn main() -> Result<()> {
         discover,
         fingerprint,
         discography,
+        lyrics,
         podcasts,
         ingest,
         uploads,

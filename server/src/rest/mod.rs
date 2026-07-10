@@ -8,6 +8,7 @@ pub mod discover;
 pub mod favorites;
 pub mod ingest;
 pub mod library;
+pub mod lyrics;
 pub mod notification;
 pub mod playhistory;
 pub mod playlist;
@@ -43,9 +44,9 @@ use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::time_fmt::rfc3339;
 use crate::services::{
     ArtworkService, DiscographyService, FavoritesService, FingerprintService, ImageOptimizer,
-    IngestService, LibraryService, MetadataService, NotificationService, PlayHistoryService,
-    PlaylistService, PodcastService, RecommendationService, ScanService, StorageService,
-    StreamingService, UploadHub, UploadsService,
+    IngestService, LibraryService, LyricsService, MetadataService, NotificationService,
+    PlayHistoryService, PlaylistService, PodcastService, RecommendationService, ScanService,
+    StorageService, StreamingService, UploadHub, UploadsService,
 };
 
 /// Shared state injected into every handler.
@@ -67,6 +68,10 @@ pub struct RestState {
     /// Discography sync (Phase 14). `None` when `DISCOGRAPHY_ENABLED` is off —
     /// `/discography/status` then reports `enabled = false`.
     pub discography: Option<DiscographyService>,
+    /// Lyrics (Phase 15). `None` when `LYRICS_ENABLED` is off — `/lyrics/status`
+    /// then reports `enabled = false` and `/tracks/:id/lyrics` returns
+    /// `found = false`.
+    pub lyrics: Option<LyricsService>,
     /// Podcast subsystem (None when no `PODCAST_PATH` is configured).
     pub podcasts: Option<PodcastService>,
     pub ingest: Option<IngestService>,
@@ -108,6 +113,7 @@ pub async fn serve(addr: SocketAddr, tls: Option<TlsConfig>, state: RestState) -
         .merge(favorites::router())
         .merge(discover::router())
         .merge(discography::router())
+        .merge(lyrics::router())
         .merge(podcast::router())
         .merge(streaming::router())
         .merge(ingest::router())

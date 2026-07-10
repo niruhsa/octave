@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package music.lyrics.v1;
+
+// Synced + plain lyrics (Phase 15). Lyrics are cached server-side (sidecar /
+// embedded tag / LRCLIB) and served parsed so every client agrees on timing +
+// sort order. Reads are any-authed-user; the refetch/set/clear/scan mutations
+// are Manager-gated at the service layer. Slim messages (own copies) avoid a
+// cross-proto import. See LYRICS_FEATURE.md.
+service LyricsService {
+  // A track's parsed lyrics (found=false when none/pending). Any authed user.
+  rpc GetLyrics(GetLyricsRequest) returns (GetLyricsResponse);
+  // Force a re-resolve, ignoring the instrumental/fresh short-circuit (Manager+).
+  rpc RefetchLyrics(RefetchLyricsRequest) returns (GetLyricsResponse);
+  // Set lyrics from an uploaded `.lrc`/text blob (Manager+).
+  rpc SetLyrics(SetLyricsRequest) returns (GetLyricsResponse);
+  // Clear a track's lyrics (Manager+).
+  rpc ClearLyrics(ClearLyricsRequest) returns (GetLyricsResponse);
+  // Library-wide coverage (enabled=false when LYRICS_ENABLED is off). Any user.
+  rpc Status(LyricsStatusRequest) returns (LyricsStatusResponse);
+  // Trigger a resolve pass on demand (Manager+).
+  rpc Scan(LyricsScanRequest) returns (LyricsStatusResponse);
+}
+
+message GetLyricsRequest { string track_id = 1; }
+
+// One lyric line: `ms` from the start of the track + its text.
+message LyricLine {
+  uint32 ms = 1;
+  string text = 2;
+}
+
+message GetLyricsResponse {
+  bool found = 1;               // has renderable lines
+  bool synced = 2;              // time-aligned (vs. plain text)
+  bool instrumental = 3;        // positively no lyrics
+  string source = 4;            // sidecar | embedded | lrclib | manual
+  repeated LyricLine lines = 5; // parsed, sorted; empty for plain
+  string plain = 6;             // newline-joined fallback text
+}
+
+message RefetchLyricsRequest { string track_id = 1; }
+message SetLyricsRequest {
+  string track_id = 1;
+  string lrc = 2; // `.lrc` or plain text
+}
+message ClearLyricsRequest { string track_id = 1; }
+
+message LyricsStatusRequest {}
+message LyricsStatusResponse {
+  bool enabled = 1;
+  int64 synced = 2;
+  int64 plain = 3;
+  int64 instrumental = 4;
+  int64 missing = 5;
+}
+
+message LyricsScanRequest {}

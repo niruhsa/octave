@@ -48,3 +48,8 @@ pub mod favorite {
 pub mod discover {
     tonic::include_proto!("music.discover.v1");
 }
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod lyrics {
+    tonic::include_proto!("music.lyrics.v1");
+}

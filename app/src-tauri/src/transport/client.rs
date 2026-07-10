@@ -14,7 +14,8 @@ use super::{
     AliasInfo, Album, AlbumFolderInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
     DiscoverSection, EpisodeProgress,
     FingerprintStatus,
-    LibraryStorage, ListeningStats, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
+    LibraryStorage, ListeningStats, Lyrics, MetadataEdit, NotificationPage, PermissionTier,
+    PlayHistoryPage,
     PlayInput,
     Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport,
     RelocateReport, RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest,
@@ -370,6 +371,57 @@ impl ServerClient {
             }
         }
         self.rest.get_track(cred, id).await
+    }
+
+    // ---- lyrics (Phase 15) --------------------------------------------------
+
+    pub async fn get_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_lyrics(cred, track_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("get_lyrics", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.get_lyrics(cred, track_id).await
+    }
+
+    pub async fn refetch_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.refetch_lyrics(cred, track_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("refetch_lyrics", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.refetch_lyrics(cred, track_id).await
+    }
+
+    pub async fn set_lyrics(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        lrc: &str,
+    ) -> AppResult<Lyrics> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.set_lyrics(cred, track_id, lrc).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("set_lyrics", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.set_lyrics(cred, track_id, lrc).await
+    }
+
+    pub async fn clear_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.clear_lyrics(cred, track_id).await {
+                Ok(v) => return Ok(v),
+                Err(e) if is_transport_error(&e) => fallback_log("clear_lyrics", &e),
+                Err(e) => return Err(e),
+            }
+        }
+        self.rest.clear_lyrics(cred, track_id).await
     }
 
     pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {

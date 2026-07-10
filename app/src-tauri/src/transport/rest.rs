@@ -13,7 +13,8 @@ use super::{
     Album, AlbumFolderInfo, ArchiveUploadResult, Artist, ArtistStat, ArtistStoragePaths, ChunkAck,
     Credential,
     DiscoverSection,
-    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, MetadataEdit, PermissionTier,
+    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, LyricLine, Lyrics,
+    MetadataEdit, PermissionTier,
     PlayEvent, RelocateReport,
     PlayHistoryPage, PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
     PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig, SingleUploadResult,
@@ -431,6 +432,83 @@ impl RestClient {
             Some(r) => Ok(Some(r.json::<TrackJson>().await.map_err(rest_err("get_track decode"))?.into())),
             None => Ok(None),
         }
+    }
+
+    // ---- lyrics (Phase 15) --------------------------------------------------
+
+    pub async fn get_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        // The server always 200s (found=false when none/pending/disabled).
+        let url = format!("{}/tracks/{track_id}/lyrics", self.base);
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_lyrics"))?;
+        let body: LyricsJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("get_lyrics decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn refetch_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        let url = format!("{}/tracks/{track_id}/lyrics/refetch", self.base);
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("refetch_lyrics"))?;
+        let body: LyricsJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("refetch_lyrics decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn set_lyrics(
+        &self,
+        cred: &Credential,
+        track_id: &str,
+        lrc: &str,
+    ) -> AppResult<Lyrics> {
+        let url = format!("{}/tracks/{track_id}/lyrics", self.base);
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "lrc": lrc }))
+            .send()
+            .await
+            .map_err(rest_err("set_lyrics"))?;
+        let body: LyricsJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("set_lyrics decode"))?;
+        Ok(body.into())
+    }
+
+    pub async fn clear_lyrics(&self, cred: &Credential, track_id: &str) -> AppResult<Lyrics> {
+        let url = format!("{}/tracks/{track_id}/lyrics", self.base);
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("clear_lyrics"))?;
+        let body: LyricsJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("clear_lyrics decode"))?;
+        Ok(body.into())
     }
 
     pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {
@@ -3039,6 +3117,50 @@ fn auth_header(cred: &Credential) -> String {
     match cred {
         Credential::SecretKey(k) => format!("SecretKey {k}"),
         Credential::Bearer(t) => format!("Bearer {t}"),
+    }
+}
+
+#[derive(Deserialize)]
+struct LyricLineJson {
+    #[serde(default)]
+    ms: i64,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Deserialize, Default)]
+struct LyricsJson {
+    #[serde(default)]
+    found: bool,
+    #[serde(default)]
+    synced: bool,
+    #[serde(default)]
+    instrumental: bool,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    lines: Vec<LyricLineJson>,
+    #[serde(default)]
+    plain: String,
+}
+
+impl From<LyricsJson> for Lyrics {
+    fn from(j: LyricsJson) -> Self {
+        Lyrics {
+            found: j.found,
+            synced: j.synced,
+            instrumental: j.instrumental,
+            source: j.source,
+            lines: j
+                .lines
+                .into_iter()
+                .map(|l| LyricLine {
+                    ms: l.ms,
+                    text: l.text,
+                })
+                .collect(),
+            plain: j.plain,
+        }
     }
 }
 

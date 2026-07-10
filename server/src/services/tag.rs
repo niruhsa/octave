@@ -510,6 +510,47 @@ pub fn read_embedded_cover(path: &Path) -> crate::error::Result<Option<(Vec<u8>,
     Ok(Some((pic.data().to_vec(), mime)))
 }
 
+/// Extract embedded lyrics from the audio file at `path` via lofty's unified
+/// [`ItemKey::Lyrics`] (ID3v2 `USLT`/`SYLT`, Vorbis `LYRICS`/`UNSYNCEDLYRICS`,
+/// MP4 `©lyr`).
+///
+/// Returns `Ok(Some(text))` when the file carries a non-empty lyric tag,
+/// `Ok(None)` otherwise. The text may be plain or `.lrc`-shaped (time-synced) —
+/// the caller parses it to decide. Errors only when the file can't be opened.
+pub fn read_embedded_lyrics(path: &Path) -> crate::error::Result<Option<String>> {
+    let tagged = lofty::read_from_path(path)
+        .map_err(|e| crate::error::AppError::Internal(format!("lyrics read open: {e}")))?;
+    let text = tagged
+        .primary_tag()
+        .or_else(|| tagged.first_tag())
+        .and_then(|t| t.get_string(&ItemKey::Lyrics).map(str::to_string))
+        .filter(|s| !s.trim().is_empty());
+    Ok(text)
+}
+
+/// Embed `lyrics` (plain or `.lrc`) into the audio file at `path` via lofty's
+/// unified [`ItemKey::Lyrics`]. Gated by `WRITE_LYRICS` at the call site
+/// (symmetric with [`write_cover`] + `WRITE_TAGS`). No-op for empty input.
+pub fn write_lyrics(path: &Path, lyrics: &str) -> crate::error::Result<()> {
+    if lyrics.trim().is_empty() {
+        return Ok(());
+    }
+    let mut tagged = lofty::read_from_path(path)
+        .map_err(|e| crate::error::AppError::Internal(format!("lyrics write open: {e}")))?;
+    if tagged.primary_tag_mut().is_none() {
+        let tag_type = tagged.primary_tag_type();
+        tagged.insert_tag(Tag::new(tag_type));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .expect("primary tag inserted above");
+    tag.insert_text(ItemKey::Lyrics, lyrics.to_string());
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .map_err(|e| crate::error::AppError::Internal(format!("lyrics write save: {e}")))?;
+    Ok(())
+}
+
 /// Returns `true` when the file extension (case-insensitive) is a recognised
 /// audio format.
 /// macOS AppleDouble sidecar files (`._name`) store resource-fork / Finder

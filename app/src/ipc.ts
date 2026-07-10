@@ -767,6 +767,42 @@ export const discoverSimilar = (trackId: string, limit?: number) =>
     limit: limit ?? null,
   });
 
+// ---------------------------------------------------------------------------
+// lyrics (Phase 15)
+// ---------------------------------------------------------------------------
+
+/** One lyric line: `ms` from the start of the track + its text. */
+export type LyricLine = { ms: number; text: string };
+
+/** A track's parsed lyrics. `found=false` means none/pending — render nothing
+ *  (or a placeholder). `synced` distinguishes time-aligned lines (with `ms`)
+ *  from a plain-text dump; `instrumental` is a positive "no lyrics". */
+export type Lyrics = {
+  found: boolean;
+  synced: boolean;
+  instrumental: boolean;
+  source: string | null;
+  lines: LyricLine[];
+  plain: string;
+};
+
+/** Fetch a track's parsed lyrics. Server-first; falls back to the offline
+ *  SQLite mirror for downloaded/previously-viewed tracks. */
+export const getLyrics = (trackId: string) =>
+  invoke<Lyrics>("get_lyrics", { trackId });
+
+/** Manager: force a re-resolve of a track's lyrics (sidecar → embedded → LRCLIB). */
+export const refetchLyrics = (trackId: string) =>
+  invoke<Lyrics>("refetch_lyrics", { trackId });
+
+/** Manager: set lyrics from an uploaded `.lrc`/text blob. */
+export const setLyrics = (trackId: string, lrc: string) =>
+  invoke<Lyrics>("set_lyrics", { trackId, lrc });
+
+/** Manager: clear a track's lyrics. */
+export const clearLyrics = (trackId: string) =>
+  invoke<Lyrics>("clear_lyrics", { trackId });
+
 /** Spotify-style playlist recommendations (Phase 12). Pass the playlist's
  *  current track ids as seeds; results are based on + exclude them — so the more
  *  songs the playlist has, the better the recommendations. Falls back to

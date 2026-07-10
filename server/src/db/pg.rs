@@ -490,11 +490,17 @@ impl TrackRepo for PgRepos {
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<Track>> {
+        // Single-track read carries the lyric columns too (the many-row +
+        // update-returning queries let them `#[sqlx(default)]`), so the lyrics
+        // endpoints + audit before/after images see accurate provenance.
         sqlx::query_as::<_, Track>(
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at
+                         is_single_release, is_explicit,
+                         lyrics_path, lyrics_synced, lyrics_source,
+                         lyrics_instrumental, lyrics_source_sig, lyrics_synced_at,
+                         created_at, updated_at
                FROM tracks WHERE id = $1"#,
         )
         .bind(id)
@@ -761,6 +767,114 @@ impl TrackRepo for PgRepos {
         .fetch_optional(&self.pool)
         .await
         .map_err(db)
+    }
+
+    async fn set_lyrics(&self, id: Uuid, meta: LyricsMeta) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET lyrics_path = $2, lyrics_synced = $3, lyrics_source = $4,
+                   lyrics_instrumental = false, lyrics_source_sig = $5,
+                   lyrics_synced_at = now(), updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, is_explicit,
+                         lyrics_path, lyrics_synced, lyrics_source,
+                         lyrics_instrumental, lyrics_source_sig, lyrics_synced_at,
+                         created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(&meta.lyrics_path)
+        .bind(meta.synced)
+        .bind(&meta.source)
+        .bind(&meta.source_sig)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn set_lyrics_instrumental(&self, id: Uuid, source_sig: &str) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET lyrics_instrumental = true, lyrics_path = NULL,
+                   lyrics_synced = false, lyrics_source = 'lrclib',
+                   lyrics_source_sig = $2, lyrics_synced_at = now(),
+                   updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, is_explicit,
+                         lyrics_path, lyrics_synced, lyrics_source,
+                         lyrics_instrumental, lyrics_source_sig, lyrics_synced_at,
+                         created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(source_sig)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn clear_lyrics(&self, id: Uuid) -> Result<Option<Track>> {
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET lyrics_path = NULL, lyrics_synced = false, lyrics_source = NULL,
+                   lyrics_instrumental = false, lyrics_source_sig = NULL,
+                   lyrics_synced_at = NULL, updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, is_explicit,
+                         lyrics_path, lyrics_synced, lyrics_source,
+                         lyrics_instrumental, lyrics_source_sig, lyrics_synced_at,
+                         created_at, updated_at"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn lyrics_candidates(&self, limit: i64) -> Result<Vec<LyricsCandidate>> {
+        // Only tracks with no lyric result yet (the partial index drives this).
+        // The artist/album display names are joined for the provider query.
+        sqlx::query_as::<_, LyricsCandidate>(
+            r#"SELECT t.id, t.file_path, t.title,
+                      ar.name AS artist, al.title AS album, t.duration_ms
+               FROM tracks t
+               JOIN artists ar ON ar.id = t.artist_id
+               JOIN albums  al ON al.id = t.album_id
+               WHERE t.lyrics_path IS NULL AND NOT t.lyrics_instrumental
+               ORDER BY t.created_at DESC
+               LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn lyrics_counts(&self) -> Result<LyricsCounts> {
+        let row = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+            r#"SELECT
+                 COUNT(*) FILTER (WHERE lyrics_path IS NOT NULL AND lyrics_synced)      AS synced,
+                 COUNT(*) FILTER (WHERE lyrics_path IS NOT NULL AND NOT lyrics_synced)  AS plain,
+                 COUNT(*) FILTER (WHERE lyrics_instrumental)                            AS instrumental,
+                 COUNT(*) FILTER (WHERE lyrics_path IS NULL AND NOT lyrics_instrumental) AS missing
+               FROM tracks"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(LyricsCounts {
+            synced: row.0,
+            plain: row.1,
+            instrumental: row.2,
+            missing: row.3,
+        })
     }
 }
 

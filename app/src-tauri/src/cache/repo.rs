@@ -13,9 +13,74 @@ use sqlx::SqlitePool;
 
 use crate::cache::model::{
     Album, AlbumArt, Artist, PendingOp, PendingPlay, Playlist, PlaylistTrack, Podcast,
-    PodcastEpisode, PodcastEpisodeProgress, SyncState, Track,
+    PodcastEpisode, PodcastEpisodeProgress, SyncState, Track, TrackLyricsRow,
 };
 use crate::error::AppResult;
+
+// ---------------------------------------------------------------------------
+// Lyrics (Phase 15) — offline mirror of a track's parsed lyrics.
+// ---------------------------------------------------------------------------
+
+/// Persist (or refresh) a track's parsed lyrics for offline reads. Idempotent.
+pub async fn upsert_track_lyrics(
+    pool: &SqlitePool,
+    track_id: &str,
+    lyrics: &crate::transport::Lyrics,
+) -> AppResult<()> {
+    let lines_json = serde_json::to_string(&lyrics.lines).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query(
+        r#"
+        INSERT INTO track_lyrics (track_id, found, synced, instrumental, source, lines_json, plain)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT(track_id) DO UPDATE SET
+            found        = excluded.found,
+            synced       = excluded.synced,
+            instrumental = excluded.instrumental,
+            source       = excluded.source,
+            lines_json   = excluded.lines_json,
+            plain        = excluded.plain,
+            fetched_at   = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        "#,
+    )
+    .bind(track_id)
+    .bind(lyrics.found as i64)
+    .bind(lyrics.synced as i64)
+    .bind(lyrics.instrumental as i64)
+    .bind(&lyrics.source)
+    .bind(lines_json)
+    .bind(&lyrics.plain)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Read a track's cached lyrics (offline fallback). `None` when never cached.
+pub async fn get_track_lyrics(
+    pool: &SqlitePool,
+    track_id: &str,
+) -> AppResult<Option<crate::transport::Lyrics>> {
+    let row = sqlx::query_as::<_, TrackLyricsRow>(
+        r#"SELECT track_id, found, synced, instrumental, source, lines_json, plain
+           FROM track_lyrics WHERE track_id = ?1"#,
+    )
+    .bind(track_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(track_lyrics_from_row))
+}
+
+fn track_lyrics_from_row(r: TrackLyricsRow) -> crate::transport::Lyrics {
+    let lines =
+        serde_json::from_str::<Vec<crate::transport::LyricLine>>(&r.lines_json).unwrap_or_default();
+    crate::transport::Lyrics {
+        found: r.found != 0,
+        synced: r.synced != 0,
+        instrumental: r.instrumental != 0,
+        source: r.source,
+        lines,
+        plain: r.plain,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // artists

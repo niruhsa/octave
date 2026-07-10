@@ -217,6 +217,74 @@ impl LibraryService {
         Ok(after)
     }
 
+    /// Point a track's `lyrics_*` columns at a freshly-cached `.lrc` (audited).
+    /// Manager+. Mirrors `update_album`'s `cover_path` update — the on-disk blob
+    /// is written by [`LyricsService`](crate::services::lyrics::LyricsService)
+    /// before this call.
+    pub async fn set_track_lyrics(
+        &self,
+        caller: &Identity,
+        id: Uuid,
+        meta: m::LyricsMeta,
+    ) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .tracks
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        let after = self
+            .tracks
+            .set_lyrics(id, meta)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        self.audit(caller, "track.lyrics_update", "track", Some(id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    /// Mark a track positively instrumental (no lyrics) for `source_sig` so the
+    /// pass stops retrying it (audited). Manager+.
+    pub async fn set_track_lyrics_instrumental(
+        &self,
+        caller: &Identity,
+        id: Uuid,
+        source_sig: &str,
+    ) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .tracks
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        let after = self
+            .tracks
+            .set_lyrics_instrumental(id, source_sig)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        self.audit(caller, "track.lyrics_instrumental", "track", Some(id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
+    /// Clear a track's lyrics (Manager remove / re-resolve, audited). Manager+.
+    pub async fn clear_track_lyrics(&self, caller: &Identity, id: Uuid) -> Result<Track> {
+        caller.require(PermissionLevel::Manager)?;
+        let before = self
+            .tracks
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        let after = self
+            .tracks
+            .clear_lyrics(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
+        self.audit(caller, "track.lyrics_clear", "track", Some(id), Some(&before), Some(&after))
+            .await?;
+        Ok(after)
+    }
+
     pub async fn delete_artist(&self, caller: &Identity, id: Uuid) -> Result<bool> {
         caller.require(PermissionLevel::Manager)?;
         let before = self.artists.get(id).await?;

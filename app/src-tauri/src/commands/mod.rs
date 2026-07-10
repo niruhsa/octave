@@ -10,6 +10,7 @@ pub mod discover_commands;
 pub mod download_commands;
 pub mod favorite_commands;
 pub mod library_commands;
+pub mod lyrics_commands;
 pub mod notification_commands;
 pub mod play_history_commands;
 pub mod playlist_commands;

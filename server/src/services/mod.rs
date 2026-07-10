@@ -15,6 +15,7 @@ pub mod musicbrainz;
 pub mod image_opt;
 pub mod ingest;
 pub mod library;
+pub mod lyrics;
 pub mod metadata;
 pub mod mp3;
 pub mod notification;
@@ -49,6 +50,10 @@ pub use fingerprint::{
 pub use image_opt::{run_optimize_pass, ImageOptimizer, Variant};
 pub use ingest::{ArchiveIngestResult, IngestService};
 pub use library::LibraryService;
+pub use lyrics::{
+    LrcLibSource, LyricResult, LyricsOutcome, LyricsReport, LyricsService, LyricsSource,
+    LyricsStatus, LyricsView,
+};
 pub use metadata::{MetadataEdit, MetadataService};
 pub use notification::NotificationService;
 pub use playhistory::{ListeningStats, PlayHistoryService, PlayInput};
