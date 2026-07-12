@@ -62,7 +62,9 @@ message FingerprintStatusResponse {
   int64 analyzed = 1;        // embeddings stored for the current model
   int64 total = 2;           // total tracks in the library
   string model_version = 3;  // current extractor id (e.g. "dsp-v1")
-  bool enabled = 4;          // whether fingerprinting is configured on
+  bool enabled = 4;          // whether the analysis subsystem is configured on
+  int64 loudness_measured = 5; // tracks with a measured loudness (Phase 16)
+  bool loudness_enabled = 6;   // whether loudness normalization is on
 }
 
 message DiscAlbum {
@@ -91,4 +93,8 @@ message DiscTrack {
   int32 sample_rate_hz = 14;
   int32 bit_depth = 15;
   int32 channels = 16;
+  // Loudness normalization (Phase 16). `optional` because 0.0 is valid.
+  optional float loudness_lufs = 17;
+  optional float loudness_peak = 18;
+  optional float album_loudness_lufs = 19;
 }

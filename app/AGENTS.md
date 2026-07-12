@@ -132,6 +132,21 @@ load path unchanged.
   `cargo clippy` clean (remaining warnings pre-date this change); Settings → Player verified live
   (slider/toggles persist + gate correctly, both deck elements mount, console clean).
 
+**Loudness normalization (client — Phase 16).** The player levels track-to-track volume using the
+server's measured loudness (`loudness_lufs` / `loudness_peak` / `album_loudness_lufs`, which now ride
+the whole transport → queue chain and the offline cache). The deck routes each persistent `<audio>`
+element through a **Web Audio graph** ([`player/audioGraph.ts`](./src/player/audioGraph.ts)):
+`MediaElementSource → fade → replay → master → destination`. The `replay` `GainNode` carries the
+per-track ReplayGain multiplier — **boost-capable** (gain > 1, which a bare `el.volume` clamped to
+[0,1] can't do, so quiet masters come *up*); `fade` is the crossfade envelope the ramp engine now
+writes (instead of `el.volume`); `master` is the global volume. Gain = `target − loudness + preamp`
+(dB → linear), peak-clamped so nothing clips; unmeasured tracks + episodes play at unity. Requires the
+loopback media server ([`src-tauri/.../player/server.rs`](./src-tauri/src/player/server.rs)) to send
+CORS headers + the elements to set `crossOrigin="anonymous"` so the tap is CORS-clean (else it taints
+to silence); Web Audio unavailable → graceful `el.volume` fallback (attenuation-only). **Settings →
+Player** ([`settings/playback.ts`](./src/settings/playback.ts)): Off / Track / Album + target-LUFS +
+preamp sliders; changes apply live to the playing track (`refreshLoudness`).
+
 **Explicit flag (client).** A song can be flagged explicit from its track-row menu (mirroring the
 single-release ★ toggle) on the [Album](./src/routes/Album.tsx) route — an `E` toggle in the hover
 toolbar + the long-press action sheet — and an `EXPLICIT`/`E` badge renders on the row and the album

@@ -459,6 +459,9 @@ impl<'a> LibraryService<'a> {
                     sample_rate_hz: updated.sample_rate_hz,
                     bit_depth: updated.bit_depth,
                     channels: updated.channels,
+                    loudness_lufs: updated.loudness_lufs,
+                    loudness_peak: updated.loudness_peak,
+                    album_loudness_lufs: updated.album_loudness_lufs,
                     // Client-owned — never overwritten by a metadata edit.
                     local_file_path: existing.local_file_path.clone(),
                     metadata_json: updated.metadata_json.clone(),

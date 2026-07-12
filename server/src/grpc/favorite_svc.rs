@@ -72,6 +72,9 @@ fn track_to_pb(t: m::Track) -> pb::FavTrack {
         sample_rate_hz: t.sample_rate_hz.unwrap_or(0),
         bit_depth: t.bit_depth.unwrap_or(0),
         channels: t.channels.unwrap_or(0),
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
     }
 }
 

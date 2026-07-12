@@ -278,7 +278,7 @@ impl AlbumRepo for PgRepos {
         sqlx::query_as::<_, Album>(
             r#"INSERT INTO albums (artist_id, title, release_year, cover_path)
                VALUES ($1, $2, $3, $4)
-               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                          created_at, updated_at"#,
         )
         .bind(new.artist_id)
@@ -292,7 +292,7 @@ impl AlbumRepo for PgRepos {
 
     async fn get(&self, id: Uuid) -> Result<Option<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                        created_at, updated_at
                FROM albums WHERE id = $1"#,
         )
@@ -304,7 +304,7 @@ impl AlbumRepo for PgRepos {
 
     async fn list_by_artist(&self, artist_id: Uuid) -> Result<Vec<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                        created_at, updated_at
                FROM albums WHERE artist_id = $1
                ORDER BY release_year NULLS LAST, title"#,
@@ -317,7 +317,7 @@ impl AlbumRepo for PgRepos {
 
     async fn recent(&self, limit: i64) -> Result<Vec<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                        created_at, updated_at
                FROM albums ORDER BY created_at DESC LIMIT $1"#,
         )
@@ -332,7 +332,7 @@ impl AlbumRepo for PgRepos {
         // Match the canonical title OR any known alias spelling, so a search in
         // a non-primary language still finds the album (see artist search).
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                        created_at, updated_at
                FROM albums a
                WHERE a.title ILIKE $1
@@ -362,7 +362,7 @@ impl AlbumRepo for PgRepos {
             r#"UPDATE albums
                SET title = $2, release_year = $3, cover_path = $4, updated_at = now()
                WHERE id = $1
-               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                          created_at, updated_at"#,
         )
         .bind(id)
@@ -379,7 +379,7 @@ impl AlbumRepo for PgRepos {
             r#"UPDATE albums
                SET album_type = $2, updated_at = now()
                WHERE id = $1
-               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+               RETURNING id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                          created_at, updated_at"#,
         )
         .bind(id)
@@ -405,13 +405,55 @@ impl AlbumRepo for PgRepos {
         Ok(())
     }
 
+    async fn recompute_loudness(&self, album_id: Uuid) -> Result<()> {
+        // Album loudness = duration-weighted energy mean of the tracks' LUFS
+        // (convert each to linear loudness 10^(I/10), weight by duration, mean,
+        // back to dB) + the max track peak. Written to `albums.loudness_*` and
+        // denormalized to every track's `album_loudness_lufs` so the player has
+        // album-mode gain without a JOIN. A data-modifying CTE does both writes
+        // in one statement; the track write bumps `updated_at` so the new album
+        // value syncs to the client cache (mirrors `set_loudness`).
+        sqlx::query(
+            r#"WITH agg AS (
+                   SELECT
+                       CASE WHEN COALESCE(SUM(duration_ms), 0) > 0 THEN
+                           10.0 * log(
+                               SUM(duration_ms::double precision
+                                   * power(10.0, loudness_lufs::double precision / 10.0))
+                               / SUM(duration_ms::double precision)
+                           )
+                       END AS a_lufs,
+                       MAX(loudness_peak) AS a_peak
+                   FROM tracks
+                   WHERE album_id = $1 AND loudness_lufs IS NOT NULL
+               ),
+               upd_album AS (
+                   UPDATE albums
+                      SET loudness_lufs = (SELECT a_lufs FROM agg),
+                          loudness_peak = (SELECT a_peak FROM agg),
+                          updated_at = now()
+                    WHERE id = $1
+               )
+               UPDATE tracks
+                  SET album_loudness_lufs = (SELECT a_lufs FROM agg),
+                      updated_at = now()
+                WHERE album_id = $1
+                  AND album_loudness_lufs IS DISTINCT FROM (SELECT a_lufs FROM agg)"#,
+        )
+        .bind(album_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
     async fn find_by_artist_and_title(
         &self,
         artist_id: Uuid,
         title: &str,
     ) -> Result<Option<Album>> {
         sqlx::query_as::<_, Album>(
-            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes,
+            r#"SELECT id, artist_id, title, release_year, album_type, is_explicit, cover_path, storage_bytes, loudness_lufs, loudness_peak,
                        created_at, updated_at
                FROM albums WHERE artist_id = $1 AND title = $2 LIMIT 1"#,
         )
@@ -468,7 +510,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(new.album_id)
         .bind(new.artist_id)
@@ -500,6 +542,7 @@ impl TrackRepo for PgRepos {
                          is_single_release, is_explicit,
                          lyrics_path, lyrics_synced, lyrics_source,
                          lyrics_instrumental, lyrics_source_sig, lyrics_synced_at,
+                         loudness_lufs, loudness_peak, album_loudness_lufs,
                          created_at, updated_at
                FROM tracks WHERE id = $1"#,
         )
@@ -518,7 +561,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at
                FROM tracks WHERE id = ANY($1)"#,
         )
         .bind(ids)
@@ -535,7 +578,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at
                FROM tracks WHERE album_id = $1
                ORDER BY disc_no NULLS FIRST, track_no NULLS LAST, title"#,
         )
@@ -553,7 +596,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at
                FROM tracks t
                WHERE t.title ILIKE $1
                   OR EXISTS (
@@ -587,7 +630,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(title)
@@ -604,7 +647,7 @@ impl TrackRepo for PgRepos {
             r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                        duration_ms, codec, bitrate_kbps, file_path, file_size,
                        sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at
                FROM tracks WHERE file_path = $1 LIMIT 1"#,
         )
         .bind(file_path)
@@ -639,7 +682,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(duration_ms)
@@ -667,7 +710,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(codec)
@@ -709,7 +752,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(album_id)
@@ -726,7 +769,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(file_path)
@@ -743,7 +786,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(is_single_release)
@@ -760,7 +803,7 @@ impl TrackRepo for PgRepos {
                RETURNING id, album_id, artist_id, title, track_no, disc_no,
                          duration_ms, codec, bitrate_kbps, file_path, file_size,
                          sample_rate_hz, bit_depth, channels, metadata_json,
-                         is_single_release, is_explicit, created_at, updated_at"#,
+                         is_single_release, is_explicit, loudness_lufs, loudness_peak, album_loudness_lufs, created_at, updated_at"#,
         )
         .bind(id)
         .bind(is_explicit)
@@ -874,6 +917,58 @@ impl TrackRepo for PgRepos {
             plain: row.1,
             instrumental: row.2,
             missing: row.3,
+        })
+    }
+
+    async fn set_loudness(&self, id: Uuid, meta: LoudnessMeta) -> Result<Option<Track>> {
+        // Bump `updated_at` so the new loudness syncs to already-cached clients
+        // (mirrors `set_lyrics`). The album rollup (`recompute_loudness`) runs
+        // afterwards to fill `album_loudness_lufs`.
+        sqlx::query_as::<_, Track>(
+            r#"UPDATE tracks
+               SET loudness_lufs = $2, loudness_peak = $3,
+                   loudness_source_sig = $4, loudness_analyzed_at = now(),
+                   updated_at = now()
+               WHERE id = $1
+               RETURNING id, album_id, artist_id, title, track_no, disc_no,
+                         duration_ms, codec, bitrate_kbps, file_path, file_size,
+                         sample_rate_hz, bit_depth, channels, metadata_json,
+                         is_single_release, is_explicit,
+                         loudness_lufs, loudness_peak, album_loudness_lufs,
+                         created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(meta.lufs)
+        .bind(meta.peak)
+        .bind(&meta.source_sig)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn loudness_statuses(&self) -> Result<Vec<(Uuid, String)>> {
+        sqlx::query_as::<_, (Uuid, String)>(
+            r#"SELECT id, loudness_source_sig
+               FROM tracks WHERE loudness_source_sig IS NOT NULL"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn loudness_counts(&self) -> Result<LoudnessCounts> {
+        let row = sqlx::query_as::<_, (i64, i64)>(
+            r#"SELECT
+                 COUNT(*) FILTER (WHERE loudness_lufs IS NOT NULL) AS measured,
+                 COUNT(*) FILTER (WHERE loudness_lufs IS NULL)     AS missing
+               FROM tracks"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(LoudnessCounts {
+            measured: row.0,
+            missing: row.1,
         })
     }
 }

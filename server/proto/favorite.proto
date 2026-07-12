@@ -60,6 +60,10 @@ message FavTrack {
   int32 sample_rate_hz = 14;
   int32 bit_depth = 15;
   int32 channels = 16;
+  // Loudness normalization (Phase 16). `optional` because 0.0 is valid.
+  optional float loudness_lufs = 17;
+  optional float loudness_peak = 18;
+  optional float album_loudness_lufs = 19;
 }
 
 message ListFavoriteTracksResponse { repeated FavTrack tracks = 1; }

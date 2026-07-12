@@ -22,6 +22,7 @@
 mod decode;
 mod extractor;
 mod index;
+mod loudness;
 mod service;
 
 #[cfg(feature = "chromaprint")]
@@ -31,6 +32,7 @@ pub mod onnx;
 
 pub use extractor::{DspExtractor, FeatureExtractor};
 pub use index::{cosine_similarity, BruteForceIndex, PgVectorIndex, SimilarityIndex};
+pub use loudness::Loudness;
 pub use service::{FingerprintReport, FingerprintService, FingerprintStatus};
 
 use std::sync::Arc;

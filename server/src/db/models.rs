@@ -112,6 +112,15 @@ pub struct Album {
     pub cover_path: Option<String>,
     /// Sum of the on-disk bytes of every track on this album.
     pub storage_bytes: i64,
+    /// Album-level integrated loudness (LUFS) — a duration-weighted rollup of the
+    /// album's tracks (Phase 16). `None` until the album has measured tracks.
+    /// `#[sqlx(default)]` so existing album SELECTs that don't list it still map.
+    #[sqlx(default)]
+    pub loudness_lufs: Option<f32>,
+    /// Album-level sample peak (max of the tracks' peaks), for album-gain clip
+    /// safety. `None` until measured.
+    #[sqlx(default)]
+    pub loudness_peak: Option<f32>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -166,6 +175,28 @@ pub struct Track {
     pub lyrics_source_sig: Option<String>,
     #[sqlx(default)]
     pub lyrics_synced_at: Option<OffsetDateTime>,
+    // --- Loudness (Phase 16 — ReplayGain / EBU R128). Measured on the server
+    // during the fingerprint PCM-decode pass; the client applies a compensating
+    // gain in the player. `#[sqlx(default)]` (like the lyrics columns) so the
+    // create/update-returning + bulk queries that don't select them still map
+    // onto `Track`; only the player-facing reads select them. ---
+    /// Integrated loudness in LUFS (EBU R128). `None` until measured.
+    #[sqlx(default)]
+    pub loudness_lufs: Option<f32>,
+    /// Sample peak as a linear amplitude (0..1+, max |sample| across channels),
+    /// for clip-safe gain. `None` until measured.
+    #[sqlx(default)]
+    pub loudness_peak: Option<f32>,
+    /// The owning album's integrated loudness (LUFS), denormalized from the album
+    /// rollup so the player has album-mode gain without a JOIN. `None` until measured.
+    #[sqlx(default)]
+    pub album_loudness_lufs: Option<f32>,
+    /// File-content signature (size+mtime) at measurement time so a replaced
+    /// audio file is re-measured. `None` until measured.
+    #[sqlx(default)]
+    pub loudness_source_sig: Option<String>,
+    #[sqlx(default)]
+    pub loudness_analyzed_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -181,6 +212,28 @@ pub struct LyricsMeta {
     /// `sidecar` | `embedded` | `lrclib` | `manual`.
     pub source: String,
     pub source_sig: String,
+}
+
+/// Measured loudness to persist on a track (the `set_loudness` write shape,
+/// Phase 16). Mirrors [`LyricsMeta`]. `source_sig` is the file-content signature
+/// (size+mtime) at measurement time so a replaced file is re-measured.
+#[derive(Debug, Clone)]
+pub struct LoudnessMeta {
+    /// Integrated loudness in LUFS (EBU R128).
+    pub lufs: f32,
+    /// Sample peak as a linear amplitude (0..1+).
+    pub peak: f32,
+    /// File-content signature at measurement time.
+    pub source_sig: String,
+}
+
+/// Library-wide loudness coverage for the status endpoint (Phase 16).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoudnessCounts {
+    /// Tracks with a measured loudness value.
+    pub measured: i64,
+    /// Tracks still lacking a measurement.
+    pub missing: i64,
 }
 
 /// Lightweight `(id, file_path, title, artist, album, duration_ms)` row for the

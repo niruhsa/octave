@@ -53,6 +53,9 @@ function reportTrackToMerged(t: ReportTrack): MergedTrack {
     local_file_path: null,
     is_single_release: false,
     is_explicit: false,
+    loudness_lufs: null,
+    loudness_peak: null,
+    album_loudness_lufs: null,
     aliases: [],
     downloaded: false,
   };

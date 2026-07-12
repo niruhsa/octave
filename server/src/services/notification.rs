@@ -911,6 +911,8 @@ mod tests {
             is_explicit: false,
             cover_path: None,
             storage_bytes: 0,
+            loudness_lufs: None,
+            loudness_peak: None,
             created_at: now(),
             updated_at: now(),
         }

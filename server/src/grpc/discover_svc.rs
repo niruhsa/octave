@@ -69,6 +69,9 @@ fn track_to_pb(t: m::Track) -> pb::DiscTrack {
         sample_rate_hz: t.sample_rate_hz.unwrap_or(0),
         bit_depth: t.bit_depth.unwrap_or(0),
         channels: t.channels.unwrap_or(0),
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
     }
 }
 
@@ -175,6 +178,8 @@ impl pb::discover_service_server::DiscoverService for DiscoverServer {
                     total: s.total,
                     model_version: s.model_version,
                     enabled: true,
+                    loudness_measured: s.loudness_measured,
+                    loudness_enabled: s.loudness_enabled,
                 }
             }
             None => pb::FingerprintStatusResponse {
@@ -182,6 +187,8 @@ impl pb::discover_service_server::DiscoverService for DiscoverServer {
                 total: 0,
                 model_version: String::new(),
                 enabled: false,
+                loudness_measured: 0,
+                loudness_enabled: false,
             },
         };
         Ok(Response::new(resp))
@@ -204,6 +211,8 @@ impl pb::discover_service_server::DiscoverService for DiscoverServer {
             total: s.total,
             model_version: s.model_version,
             enabled: true,
+            loudness_measured: s.loudness_measured,
+            loudness_enabled: s.loudness_enabled,
         }))
     }
 }

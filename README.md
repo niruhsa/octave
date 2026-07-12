@@ -5,6 +5,7 @@ A private, self-hosted music platform. A remote **server** hosts a lossless/down
 ## Features
 - **Streaming** of lossless/downloaded music from server to client.
 - **Gapless playback & crossfade** — the next track preloads on a standby audio element and starts the instant the current one ends; optional equal-power crossfade (0–12 s) with an album-aware guard, configured under **Settings → Player**. See [`app/GAPLESS_CROSSFADE.md`](./app/GAPLESS_CROSSFADE.md).
+- **Loudness normalization (ReplayGain / EBU R128)** — the server measures each track's integrated loudness (LUFS) + peak (opt-in via `LOUDNESS_ENABLED`, computed in the fingerprint decode pass) and the player levels track-to-track volume through a boost-capable Web Audio graph. **Settings → Player:** Off / Track / Album, with a target-loudness + preamp trim.
 - **Online/offline authority** — server is source of truth when reachable; client uses its offline cache otherwise.
 - **Recommendations** — behavioral discovery shelves + seeded radio (artist / album / track), plus opt-in **acoustic "sounds like" radio** that analyzes each track into a similarity embedding for true content-based neighbors.
 - **Playlists** — create / update / delete.

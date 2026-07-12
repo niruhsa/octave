@@ -131,6 +131,12 @@ futures-util = "0.3"
 # features so the default build stays lean (see services/fingerprint).
 rustfft = "6"
 
+# Loudness normalization (Phase 16 — ReplayGain / EBU R128). `ebur128` is a
+# pure-Rust port of libebur128 (BS.1770 K-weighting + gating); it measures a
+# track's integrated loudness (LUFS) from the same PCM the fingerprint pass
+# already decodes. No C dep, no model file. See services/fingerprint/loudness.rs.
+ebur128 = "0.1"
+
 # Optional: learned-embedding extractor (Phase 12C, `onnx` feature). `ort` is the
 # ONNX Runtime binding; `ndarray` shapes the input tensor. Only pulled when the
 # `onnx` feature is enabled.

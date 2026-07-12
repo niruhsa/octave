@@ -35,7 +35,16 @@ import {
   MIN_CHUNK_CONCURRENCY,
   useNetworkPrefsStore,
 } from "../settings/network";
-import { MAX_CROSSFADE_SEC, usePlaybackPrefsStore } from "../settings/playback";
+import {
+  MAX_CROSSFADE_SEC,
+  MIN_LOUDNESS_TARGET_LUFS,
+  MAX_LOUDNESS_TARGET_LUFS,
+  MIN_LOUDNESS_PREAMP_DB,
+  MAX_LOUDNESS_PREAMP_DB,
+  usePlaybackPrefsStore,
+  type LoudnessMode,
+} from "../settings/playback";
+import { usePlayerStore } from "../player/store";
 
 type SectionId = "player" | "keybinds" | "quicksearch" | "podcasts" | "networking";
 
@@ -239,7 +248,9 @@ function KeybindRow({ cmd }: { cmd: CommandDef }) {
 function PlayerSection() {
   const prefs = usePlaybackPrefsStore((s) => s.prefs);
   const setPref = usePlaybackPrefsStore((s) => s.setPref);
+  const refreshLoudness = usePlayerStore((s) => s.refreshLoudness);
   const fadeOn = prefs.gaplessEnabled && prefs.crossfadeSec > 0;
+  const loudnessOn = prefs.loudnessMode !== "off";
 
   return (
     <div className="flex flex-col gap-5">
@@ -309,6 +320,102 @@ function PlayerSection() {
             disabled={!fadeOn}
             onChange={(v) => setPref("smartAlbumGapless", v)}
           />
+        </div>
+      </div>
+
+      {/* ───────── loudness normalization ───────── */}
+      <div className="flex flex-col gap-2">
+        <div className={label}>LOUDNESS NORMALIZATION</div>
+        <div className={`${card} flex flex-col gap-4 px-4 py-3`}>
+          <div>
+            <div className="text-[13.5px] text-oct-text">Volume leveling</div>
+            <div className="text-[11.5px] text-oct-faint">
+              Play every track at a consistent loudness from the server's measured
+              values (ReplayGain / EBU R128). <b>Track</b> levels each song on its
+              own; <b>Album</b> keeps an album's quiet and loud moments relative to
+              each other. Tracks the server hasn't analyzed yet play unchanged.
+            </div>
+          </div>
+
+          {/* segmented Off / Track / Album */}
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-oct-elevated p-1">
+            {(["off", "track", "album"] as LoudnessMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => {
+                  setPref("loudnessMode", m);
+                  refreshLoudness();
+                }}
+                className={`rounded-md px-3 py-1.5 text-[12.5px] capitalize transition ${
+                  prefs.loudnessMode === m
+                    ? "bg-oct-accent text-white"
+                    : "text-oct-subtle hover:text-oct-text"
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          {loudnessOn && (
+            <>
+              {/* target loudness */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[12.5px] text-oct-text">Target loudness</span>
+                  <span className="shrink-0 rounded-lg bg-oct-elevated px-2.5 py-1 font-mono text-[13px] text-oct-text">
+                    {prefs.loudnessTargetLufs} LUFS
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={MIN_LOUDNESS_TARGET_LUFS}
+                  max={MAX_LOUDNESS_TARGET_LUFS}
+                  step={1}
+                  value={prefs.loudnessTargetLufs}
+                  onChange={(e) => {
+                    setPref("loudnessTargetLufs", Number(e.target.value));
+                    refreshLoudness();
+                  }}
+                  className="oct-range flex-1"
+                  aria-label="Target loudness (LUFS)"
+                />
+                <div className="flex justify-between font-mono text-[10.5px] text-oct-faint">
+                  <span>Quieter</span>
+                  <span>Louder</span>
+                </div>
+              </div>
+
+              {/* preamp */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-[12.5px] text-oct-text">Preamp</div>
+                    <div className="text-[11.5px] text-oct-faint">
+                      Extra trim on top of normalization.
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-lg bg-oct-elevated px-2.5 py-1 font-mono text-[13px] text-oct-text">
+                    {prefs.loudnessPreampDb > 0 ? "+" : ""}
+                    {prefs.loudnessPreampDb} dB
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={MIN_LOUDNESS_PREAMP_DB}
+                  max={MAX_LOUDNESS_PREAMP_DB}
+                  step={1}
+                  value={prefs.loudnessPreampDb}
+                  onChange={(e) => {
+                    setPref("loudnessPreampDb", Number(e.target.value));
+                    refreshLoudness();
+                  }}
+                  className="oct-range flex-1"
+                  aria-label="Preamp (dB)"
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

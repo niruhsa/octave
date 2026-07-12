@@ -9,6 +9,7 @@ A private, self-hosted music platform: a remote server hosts a lossless/download
 ## Core Features
 - **Streaming** of lossless/downloaded music from server to client.
 - **Online/offline authority:** server is source of truth when reachable; client uses offline cache otherwise.
+- **Loudness normalization:** the server measures each track's integrated loudness (LUFS, EBU R128) + peak in the fingerprint decode pass and the client levels playback volume in a boost-capable Web Audio graph (Phase 16, opt-in via `LOUDNESS_ENABLED`; Settings → Player: Off / Track / Album).
 - **Recommendations:** behavioral discovery (play history + favorites + library graph) plus content-based **acoustic "sounds like" radio** — a per-track similarity embedding + nearest-neighbor search (Phase 12, opt-in via `FINGERPRINT_ENABLED`; falls back to behavioral radio otherwise).
 - **Playlists:** create / update / delete.
 - **Offline use:** download and archive content for playback without the server.

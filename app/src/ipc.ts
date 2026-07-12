@@ -225,6 +225,12 @@ export type MergedTrack = {
   is_single_release: boolean;
   /** `true` when this track is explicit (independent of the title text). */
   is_explicit: boolean;
+  /** Loudness normalization (Phase 16): integrated loudness (LUFS) + sample peak
+   *  + the owning album's loudness. `null` until measured. The player derives a
+   *  per-track gain from these. */
+  loudness_lufs: number | null;
+  loudness_peak: number | null;
+  album_loudness_lufs: number | null;
   /** Every known title spelling (populated on single-track reads only). */
   aliases: AliasInfo[];
   downloaded: boolean;
@@ -672,6 +678,10 @@ export type FavoriteTrack = {
   channels: number | null;
   metadata_json: string;
   is_single_release: boolean;
+  /** Loudness normalization (Phase 16); `null` until measured. */
+  loudness_lufs: number | null;
+  loudness_peak: number | null;
+  album_loudness_lufs: number | null;
 };
 
 export type FavoriteAlbum = {

@@ -321,6 +321,7 @@ impl<'a> PlaylistService<'a> {
         let sql = format!(
             "SELECT id, album_id, artist_id, title, track_no, disc_no,
                    duration_ms, codec, bitrate_kbps, file_size,
+                   loudness_lufs, loudness_peak, album_loudness_lufs,
                    local_file_path, metadata_json, downloaded_at, updated_at
               FROM tracks WHERE id IN ({placeholders})"
         );
@@ -797,6 +798,9 @@ fn stub_track(track_id: &str) -> MergedTrack {
         local_file_path: None,
         is_single_release: false,
         is_explicit: false,
+        loudness_lufs: None,
+        loudness_peak: None,
+        album_loudness_lufs: None,
         aliases: Vec::new(),
         downloaded: false,
     }

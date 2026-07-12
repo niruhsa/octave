@@ -150,6 +150,9 @@ pub struct AlbumDto {
     pub aliases: Vec<AliasDto>,
     /// Sum of the on-disk bytes of every track on this album.
     pub storage_bytes: i64,
+    /// Album-level integrated loudness (LUFS) + peak (Phase 16 — loudness norm).
+    pub loudness_lufs: Option<f32>,
+    pub loudness_peak: Option<f32>,
 }
 fn album_dto(a: m::Album) -> AlbumDto {
     AlbumDto {
@@ -162,6 +165,8 @@ fn album_dto(a: m::Album) -> AlbumDto {
         cover_path: a.cover_path,
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
+        loudness_lufs: a.loudness_lufs,
+        loudness_peak: a.loudness_peak,
     }
 }
 
@@ -184,6 +189,11 @@ pub struct TrackDto {
     pub metadata_json: String,
     pub is_single_release: bool,
     pub is_explicit: bool,
+    /// Loudness normalization (Phase 16): per-track integrated loudness (LUFS) +
+    /// sample peak, plus the owning album's loudness for album-mode gain.
+    pub loudness_lufs: Option<f32>,
+    pub loudness_peak: Option<f32>,
+    pub album_loudness_lufs: Option<f32>,
     #[serde(default)]
     pub aliases: Vec<AliasDto>,
 }
@@ -206,6 +216,9 @@ fn track_dto(t: m::Track) -> TrackDto {
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
         is_explicit: t.is_explicit,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
         aliases: Vec::new(),
     }
 }

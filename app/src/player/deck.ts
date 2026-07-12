@@ -17,6 +17,7 @@
 // (the crossfade trigger) keeps firing for audible media in the background.
 
 import { playbackPrefs } from "../settings/playback";
+import * as audioGraph from "./audioGraph";
 import type { QueueItem } from "./store";
 
 /** Fade tick cadence — coarse enough to be cheap, fine enough to be smooth. */
@@ -138,6 +139,11 @@ export class Deck {
   private pendingPreload: PendingPreload | null = null;
 
   private readonly ramps = new Map<HTMLAudioElement, number>();
+  /** Per-element crossfade envelope (0..1) and ReplayGain multiplier — the
+   *  inputs to {@link applyGain}. Together with the global `masterVolume` they
+   *  form each element's output gain (Web Audio nodes, or a folded `el.volume`). */
+  private readonly fadeVal = new Map<HTMLAudioElement, number>();
+  private readonly replayVal = new Map<HTMLAudioElement, number>();
   private readonly unbind: () => void;
   private destroyed = false;
 
@@ -148,8 +154,16 @@ export class Deck {
     // Rebinds (StrictMode double-mount, HMR) must adopt whichever element is
     // actually sounding; on a cold start both are idle and `a` wins.
     this.activeEl = !b.paused ? b : a;
-    this.activeEl.volume = this.masterVolume;
-    this.other(this.activeEl).volume = 0;
+    // Route each element through the Web Audio graph (once per element — re-binds
+    // reuse it). A graphed element passes full signal into the graph, so its
+    // `el.volume` stays 1 and the fade/replay/master nodes own the gain; when
+    // Web Audio is unavailable the gain folds into `el.volume` instead.
+    for (const el of [a, b]) {
+      if (audioGraph.attach(el)) el.volume = 1;
+    }
+    audioGraph.setMaster(this.masterVolume);
+    this.setFade(this.activeEl, 1);
+    this.setFade(this.other(this.activeEl), 0);
 
     const offs: Array<() => void> = [];
     for (const el of [a, b]) {
@@ -193,6 +207,7 @@ export class Deck {
    */
   playNow(item: QueueItem, index: number, url: string, opts?: { fadeSec?: number }) {
     if (this.destroyed) return;
+    audioGraph.resume(); // this is a user gesture — satisfy the autoplay policy
     const outEl = this.activeEl;
     const outgoing = this.current;
     const fadeSec = Math.min(opts?.fadeSec ?? 0, MANUAL_FADE_MAX_SEC);
@@ -218,7 +233,8 @@ export class Deck {
       this.finalizeRetiringNow();
       this.cancelRamp(outEl);
       this.current = { item, index };
-      outEl.volume = this.masterVolume;
+      this.setTrackGain(outEl, item);
+      this.setFade(outEl, 1);
       outEl.src = url;
       outEl.currentTime = 0;
       this.applyResume(outEl, item);
@@ -234,7 +250,8 @@ export class Deck {
     // Silent retire: a manual skip records nothing for the outgoing listen
     // (threshold-based history only), exactly like the legacy instant skip.
     this.retiring = { el: outEl, item: outgoing.item, notify: false };
-    inEl.volume = 0;
+    this.setTrackGain(inEl, item);
+    this.setFade(inEl, 0);
     inEl.src = url;
     inEl.currentTime = 0;
     this.applyResume(inEl, item);
@@ -270,17 +287,22 @@ export class Deck {
     this.cancelRamp(standby);
     this.preloaded = { item, index };
     this.standbyReady = false;
-    standby.volume = 0;
+    // Preset the incoming track's loudness gain now (silent until the handoff).
+    this.setTrackGain(standby, item);
+    this.setFade(standby, 0);
     standby.preload = "auto";
     standby.src = url;
     standby.load();
     this.applyResume(standby, item);
   }
 
-  /** Master volume 0..1 — active tracks it directly; live ramps rescale next tick. */
+  /** Master volume 0..1. In the Web Audio path this is the shared master node
+   *  (global); in the fallback it's folded per-element, so refresh the audible
+   *  element now (a running ramp picks it up on its next tick). */
   setMasterVolume(v: number) {
     this.masterVolume = clamp01(v);
-    if (!this.ramps.has(this.activeEl)) this.activeEl.volume = this.masterVolume;
+    audioGraph.setMaster(this.masterVolume);
+    if (!this.ramps.has(this.activeEl)) this.applyGain(this.activeEl);
   }
 
   /** Pause playback. Mid-fade, the fade resolves instantly (outgoing retired). */
@@ -291,6 +313,7 @@ export class Deck {
 
   /** Resume the active element. */
   resume(): Promise<void> {
+    audioGraph.resume();
     return this.activeEl.play();
   }
 
@@ -311,7 +334,8 @@ export class Deck {
       el.pause();
       el.removeAttribute("src");
       el.load();
-      el.volume = el === this.activeEl ? this.masterVolume : 0;
+      this.setTrackGain(el, null); // no track → unity ReplayGain
+      this.setFade(el, el === this.activeEl ? 1 : 0);
     }
   }
 
@@ -390,7 +414,9 @@ export class Deck {
     const outEl = this.activeEl;
     const inEl = this.other(outEl);
     this.cancelRamp(inEl);
-    inEl.volume = this.masterVolume;
+    // The standby already carries `pre`'s loudness gain (set in syncPreload);
+    // just bring it fully audible for the seamless swap.
+    this.setFade(inEl, 1);
     const started = inEl.play();
     // Bookkeeping swap — audio start is driven by play() above; callback
     // ordering below doesn't affect the gap. onSwapped before onRetired so
@@ -447,7 +473,7 @@ export class Deck {
     const inEl = this.other(outEl);
     this.handoffArmed = true;
     this.cancelRamp(inEl);
-    inEl.volume = 0;
+    this.setFade(inEl, 0);
     inEl
       .play()
       .then(() => {
@@ -483,7 +509,7 @@ export class Deck {
     this.retiring = null;
     this.cancelRamp(el);
     el.pause();
-    el.volume = 0;
+    this.setFade(el, 0);
     if (notify) {
       const dur = el.duration || 0;
       const reachedEnd = el.ended || (dur > 0 && el.currentTime >= dur - 1);
@@ -518,10 +544,10 @@ export class Deck {
   ) {
     this.cancelRamp(el);
     const t0 = performance.now();
-    el.volume = clamp01(gain(0) * this.masterVolume);
+    this.setFade(el, gain(0));
     const timer = window.setInterval(() => {
       const t = (performance.now() - t0) / (durSec * 1000);
-      el.volume = clamp01(gain(t) * this.masterVolume);
+      this.setFade(el, gain(t));
       if (t >= 1) {
         this.cancelRamp(el);
         onDone?.();
@@ -536,6 +562,47 @@ export class Deck {
       window.clearInterval(timer);
       this.ramps.delete(el);
     }
+  }
+
+  // ── gain (loudness + fade + master) ──────────────────────────────────────
+
+  /**
+   * Apply `el`'s output gain from its fade envelope, ReplayGain multiplier, and
+   * the global master. Web Audio path: the fade + replay nodes (master is the
+   * shared node). Fallback path: fold all three into `el.volume`, clamped to
+   * [0,1] — so a >1 ReplayGain boost is only available with Web Audio.
+   */
+  private applyGain(el: HTMLAudioElement) {
+    const fade = this.fadeVal.get(el) ?? 1;
+    const replay = this.replayVal.get(el) ?? 1;
+    if (audioGraph.hasGraph(el)) {
+      audioGraph.setFade(el, fade);
+      audioGraph.setReplay(el, replay);
+    } else {
+      el.volume = clamp01(this.masterVolume * fade * Math.min(replay, 1));
+    }
+  }
+
+  /** Set `el`'s crossfade envelope (0..1) and apply it. */
+  private setFade(el: HTMLAudioElement, v: number) {
+    this.fadeVal.set(el, v);
+    this.applyGain(el);
+  }
+
+  /** Set `el`'s per-track loudness gain from `item` (null → unity) and apply it. */
+  private setTrackGain(el: HTMLAudioElement, item: QueueItem | null) {
+    this.replayVal.set(el, audioGraph.trackGain(item));
+    this.applyGain(el);
+  }
+
+  /**
+   * Re-derive the loudness gain for the loaded elements — call when the loudness
+   * prefs change so the audible track updates immediately rather than at the
+   * next boundary.
+   */
+  refreshGain() {
+    if (this.current) this.setTrackGain(this.activeEl, this.current.item);
+    if (this.retiring) this.setTrackGain(this.retiring.el, this.retiring.item);
   }
 
   // ── misc ───────────────────────────────────────────────────────────────

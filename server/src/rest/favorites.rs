@@ -96,6 +96,10 @@ pub struct FavTrackDto {
     pub channels: Option<i32>,
     pub metadata_json: String,
     pub is_single_release: bool,
+    /// Loudness normalization (Phase 16).
+    pub loudness_lufs: Option<f32>,
+    pub loudness_peak: Option<f32>,
+    pub album_loudness_lufs: Option<f32>,
 }
 fn track_dto(t: m::Track) -> FavTrackDto {
     FavTrackDto {
@@ -115,6 +119,9 @@ fn track_dto(t: m::Track) -> FavTrackDto {
         channels: t.channels,
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
     }
 }
 

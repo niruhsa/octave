@@ -273,25 +273,29 @@ pub async fn upsert_track(pool: &SqlitePool, track: &Track) -> AppResult<()> {
             id, album_id, artist_id, title, track_no, disc_no,
             duration_ms, codec, bitrate_kbps, file_size,
             sample_rate_hz, bit_depth, channels,
+            loudness_lufs, loudness_peak, album_loudness_lufs,
             local_file_path, metadata_json, downloaded_at, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
         ON CONFLICT(id) DO UPDATE SET
-            album_id        = excluded.album_id,
-            artist_id       = excluded.artist_id,
-            title           = excluded.title,
-            track_no        = excluded.track_no,
-            disc_no         = excluded.disc_no,
-            duration_ms     = excluded.duration_ms,
-            codec           = excluded.codec,
-            bitrate_kbps    = excluded.bitrate_kbps,
-            file_size       = excluded.file_size,
-            sample_rate_hz  = excluded.sample_rate_hz,
-            bit_depth       = excluded.bit_depth,
-            channels        = excluded.channels,
-            local_file_path = excluded.local_file_path,
-            metadata_json   = excluded.metadata_json,
-            updated_at      = excluded.updated_at
+            album_id            = excluded.album_id,
+            artist_id           = excluded.artist_id,
+            title               = excluded.title,
+            track_no            = excluded.track_no,
+            disc_no             = excluded.disc_no,
+            duration_ms         = excluded.duration_ms,
+            codec               = excluded.codec,
+            bitrate_kbps        = excluded.bitrate_kbps,
+            file_size           = excluded.file_size,
+            sample_rate_hz      = excluded.sample_rate_hz,
+            bit_depth           = excluded.bit_depth,
+            channels            = excluded.channels,
+            loudness_lufs       = excluded.loudness_lufs,
+            loudness_peak       = excluded.loudness_peak,
+            album_loudness_lufs = excluded.album_loudness_lufs,
+            local_file_path     = excluded.local_file_path,
+            metadata_json       = excluded.metadata_json,
+            updated_at          = excluded.updated_at
         "#,
     )
     .bind(&track.id)
@@ -307,6 +311,9 @@ pub async fn upsert_track(pool: &SqlitePool, track: &Track) -> AppResult<()> {
     .bind(track.sample_rate_hz)
     .bind(track.bit_depth)
     .bind(track.channels)
+    .bind(track.loudness_lufs)
+    .bind(track.loudness_peak)
+    .bind(track.album_loudness_lufs)
     .bind(&track.local_file_path)
     .bind(&track.metadata_json)
     .bind(&track.downloaded_at)
@@ -321,6 +328,7 @@ pub async fn get_track(pool: &SqlitePool, id: &str) -> AppResult<Option<Track>> 
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
                  sample_rate_hz, bit_depth, channels,
+                 loudness_lufs, loudness_peak, album_loudness_lufs,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks WHERE id = ?1"#,
     )
@@ -335,6 +343,7 @@ pub async fn list_tracks_by_album(pool: &SqlitePool, album_id: &str) -> AppResul
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
                  sample_rate_hz, bit_depth, channels,
+                 loudness_lufs, loudness_peak, album_loudness_lufs,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks WHERE album_id = ?1
            ORDER BY disc_no, track_no, title COLLATE NOCASE"#,
@@ -350,6 +359,7 @@ pub async fn list_tracks_by_artist(pool: &SqlitePool, artist_id: &str) -> AppRes
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
                  sample_rate_hz, bit_depth, channels,
+                 loudness_lufs, loudness_peak, album_loudness_lufs,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks WHERE artist_id = ?1
            ORDER BY album_id, disc_no, track_no, title COLLATE NOCASE"#,
@@ -365,6 +375,7 @@ pub async fn list_downloaded_tracks(pool: &SqlitePool) -> AppResult<Vec<Track>> 
         r#"SELECT id, album_id, artist_id, title, track_no, disc_no,
                  duration_ms, codec, bitrate_kbps, file_size,
                  sample_rate_hz, bit_depth, channels,
+                 loudness_lufs, loudness_peak, album_loudness_lufs,
                  local_file_path, metadata_json, downloaded_at, updated_at
            FROM tracks
            ORDER BY downloaded_at DESC"#,

@@ -143,43 +143,71 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()), // artists
     );
 
-    // Acoustic fingerprinting (Phase 12) — optional "sounds like" radio. When
-    // enabled it builds an embedding extractor + an in-memory similarity index,
-    // augments `discover` with true acoustic neighbors, and starts a background
-    // analysis pass. When disabled, the radio stays purely behavioral (the
-    // server boots + behaves exactly as before).
-    let (discover, fingerprint) = if let Some(fp_cfg) = config.fingerprint.clone() {
+    // Audio analysis pass (Phase 12 fingerprinting + Phase 16 loudness). The
+    // pass runs when *either* is enabled and shares one decode per track:
+    // fingerprinting builds an embedding index + augments `discover` with
+    // acoustic neighbors; loudness measures each track's integrated loudness for
+    // the client's ReplayGain gain. When both are off the server boots + the
+    // radio stays purely behavioral, exactly as before.
+    let fp_cfg = config.fingerprint.clone();
+    let loudness_on = config.loudness_enabled;
+    let (discover, fingerprint) = if fp_cfg.is_some() || loudness_on {
+        let fp_present = fp_cfg.is_some();
         let features: Arc<dyn TrackFeatureRepo> = Arc::new(repos.clone());
-        let extractor = build_extractor(fp_cfg.model_path.as_deref());
+        // Real extractor/index when fingerprinting; otherwise the DSP baseline
+        // is built only to satisfy the service (it stays unused — no embeddings
+        // are computed and the index isn't wired into `discover`).
+        let extractor = build_extractor(fp_cfg.as_ref().and_then(|c| c.model_path.as_deref()));
         let index = build_index(
-            fp_cfg.index_kind,
+            fp_cfg.as_ref().map(|c| c.index_kind).unwrap_or_default(),
             features.clone(),
             extractor.model_version(),
             extractor.dims(),
         );
-        // Prepare the index once up front so the first request is usable before
-        // the background pass finishes: bruteforce loads existing embeddings;
-        // pgvector ensures the derived column + HNSW index exist and backfills.
-        if let Err(e) = index.reload().await {
-            tracing::warn!(error = %e, "fingerprint: initial index reload failed");
+        if fp_present {
+            // Prepare the index once up front so the first request is usable
+            // before the background pass finishes.
+            if let Err(e) = index.reload().await {
+                tracing::warn!(error = %e, "fingerprint: initial index reload failed");
+            }
         }
-        let fp = FingerprintService::new(
+        // Pass cadence + concurrency reuse the FINGERPRINT_* knobs; loudness-only
+        // (no FingerprintConfig) falls back to the same defaults.
+        let concurrency = fp_cfg
+            .as_ref()
+            .map(|c| c.concurrency)
+            .unwrap_or_else(default_analysis_concurrency);
+        let interval_secs = fp_cfg.as_ref().map(|c| c.interval_secs).unwrap_or(21_600);
+
+        let mut fp = FingerprintService::new(
             Arc::new(repos.clone()), // tracks
             features,
             extractor,
             index.clone(),
-            fp_cfg.concurrency,
+            concurrency,
         )
-        .with_library_root(config.library_path.clone());
+        .with_library_root(config.library_path.clone())
+        .with_fingerprint_enabled(fp_present);
+        if loudness_on {
+            fp = fp.with_loudness(Arc::new(repos.clone())); // albums repo for the rollup
+        }
         info!(
+            fingerprint = fp_present,
+            loudness = loudness_on,
             model = %fp.model_version(),
-            interval_secs = fp_cfg.interval_secs,
-            concurrency = fp_cfg.concurrency,
-            "acoustic fingerprinting enabled"
+            interval_secs,
+            concurrency,
+            "audio analysis pass enabled"
         );
         // Background analysis pass: startup + interval (0 = startup-only).
-        std::sync::Arc::new(fp.clone()).spawn_poller(fp_cfg.interval_secs);
-        (discover.with_similarity(index), Some(fp))
+        std::sync::Arc::new(fp.clone()).spawn_poller(interval_secs);
+        // Only augment discover with acoustic similarity when fingerprinting.
+        let discover = if fp_present {
+            discover.with_similarity(index)
+        } else {
+            discover
+        };
+        (discover, Some(fp))
     } else {
         (discover, None)
     };
@@ -513,6 +541,16 @@ async fn main() -> Result<()> {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
+}
+
+/// Default analysis-pass concurrency when no `FingerprintConfig` provides one
+/// (loudness enabled but fingerprinting off): `min(4, cores-1)`, matching the
+/// fingerprint default.
+fn default_analysis_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1))
+        .unwrap_or(1)
+        .clamp(1, 4)
 }
 
 fn unwrap_join(

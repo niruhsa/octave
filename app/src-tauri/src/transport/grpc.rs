@@ -2270,6 +2270,8 @@ fn album_from_proto(a: super::proto::library::Album) -> Album {
         cover_path: opt_str(a.cover_path),
         aliases: a.aliases.into_iter().map(alias_from_proto).collect(),
         storage_bytes: a.storage_bytes,
+        loudness_lufs: a.loudness_lufs,
+        loudness_peak: a.loudness_peak,
     }
 }
 
@@ -2454,6 +2456,9 @@ fn track_from_proto(t: super::proto::library::Track) -> Track {
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
         is_explicit: t.is_explicit,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
         aliases: t.aliases.into_iter().map(alias_from_proto).collect(),
     }
 }
@@ -2503,6 +2508,10 @@ fn album_from_fav(a: fpb::FavAlbum) -> Album {
         cover_path: opt_str(a.cover_path),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
+        // The favorites shelf proto carries no album loudness (the player reads
+        // per-track loudness from the FavTrack instead).
+        loudness_lufs: None,
+        loudness_peak: None,
     }
 }
 
@@ -2525,6 +2534,9 @@ fn track_from_fav(t: fpb::FavTrack) -> Track {
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
         is_explicit: false,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
         aliases: Vec::new(),
     }
 }
@@ -2541,6 +2553,8 @@ fn album_from_disc(a: dpb::DiscAlbum) -> Album {
         cover_path: opt_str(a.cover_path),
         aliases: Vec::new(),
         storage_bytes: a.storage_bytes,
+        loudness_lufs: None,
+        loudness_peak: None,
     }
 }
 
@@ -2563,6 +2577,9 @@ fn track_from_disc(t: dpb::DiscTrack) -> Track {
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
         is_explicit: false,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
         aliases: Vec::new(),
     }
 }

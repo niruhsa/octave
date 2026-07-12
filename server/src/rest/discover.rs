@@ -64,6 +64,10 @@ pub struct DiscTrackDto {
     pub channels: Option<i32>,
     pub metadata_json: String,
     pub is_single_release: bool,
+    /// Loudness normalization (Phase 16).
+    pub loudness_lufs: Option<f32>,
+    pub loudness_peak: Option<f32>,
+    pub album_loudness_lufs: Option<f32>,
 }
 fn track_dto(t: m::Track) -> DiscTrackDto {
     DiscTrackDto {
@@ -83,6 +87,9 @@ fn track_dto(t: m::Track) -> DiscTrackDto {
         channels: t.channels,
         metadata_json: t.metadata_json,
         is_single_release: t.is_single_release,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
     }
 }
 
@@ -207,6 +214,10 @@ pub struct FingerprintStatusDto {
     pub total: i64,
     pub model_version: String,
     pub enabled: bool,
+    /// Tracks with a measured loudness value (Phase 16).
+    pub loudness_measured: i64,
+    /// Whether loudness normalization is enabled.
+    pub loudness_enabled: bool,
 }
 
 /// `GET /fingerprint/status` — analysis coverage (any authed user, read-only).
@@ -223,6 +234,8 @@ async fn fingerprint_status(
                 total: st.total,
                 model_version: st.model_version,
                 enabled: true,
+                loudness_measured: st.loudness_measured,
+                loudness_enabled: st.loudness_enabled,
             }
         }
         None => FingerprintStatusDto {
@@ -230,6 +243,8 @@ async fn fingerprint_status(
             total: 0,
             model_version: String::new(),
             enabled: false,
+            loudness_measured: 0,
+            loudness_enabled: false,
         },
     };
     Ok(Json(dto))
@@ -251,5 +266,7 @@ async fn fingerprint_scan(
         total: st.total,
         model_version: st.model_version,
         enabled: true,
+        loudness_measured: st.loudness_measured,
+        loudness_enabled: st.loudness_enabled,
     }))
 }

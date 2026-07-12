@@ -68,6 +68,10 @@ export function episodeToQueueItem(ep: MergedEpisode): QueueItem {
     local_file_path: ep.local_file_path,
     is_single_release: false,
     is_explicit: false,
+    // Episodes aren't loudness-analyzed → no gain applied.
+    loudness_lufs: null,
+    loudness_peak: null,
+    album_loudness_lufs: null,
     aliases: [],
     downloaded: ep.downloaded,
     mediaKind: "episode",
@@ -102,6 +106,9 @@ export function serverTrackToQueueItem(t: FavoriteTrack): QueueItem {
     local_file_path: null,
     is_single_release: t.is_single_release,
     is_explicit: false,
+    loudness_lufs: t.loudness_lufs,
+    loudness_peak: t.loudness_peak,
+    album_loudness_lufs: t.album_loudness_lufs,
     aliases: [],
     downloaded: false,
   };
@@ -137,6 +144,8 @@ export type PlayerState = {
   prev: () => void;
   seekTo: (sec: number) => void;
   setVolume: (v: number) => void;
+  /** Re-apply loudness gain to the playing track (call after a loudness pref change). */
+  refreshLoudness: () => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   clearQueue: () => void;
@@ -274,6 +283,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const clamped = Math.max(0, Math.min(1, v));
     _deck?.setMasterVolume(clamped);
     set({ volume: clamped });
+  },
+
+  refreshLoudness: () => {
+    _deck?.refreshGain();
   },
 
   toggleShuffle: () => {

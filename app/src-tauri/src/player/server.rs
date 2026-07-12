@@ -43,8 +43,9 @@ use std::time::Duration;
 use axum::{
     Router,
     body::Body,
-    extract::{Path, Query, State},
-    http::{HeaderMap, Method, StatusCode, header},
+    extract::{Path, Query, Request, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -75,7 +76,45 @@ pub fn router(app: tauri::AppHandle, token: Arc<str>) -> Router {
         .route("/s/:token/:id", get(serve).head(serve))
         .route("/cover/:token/:id", get(serve_cover).head(serve_cover))
         .route("/action/:token/:action", get(serve_action))
+        // CORS so the webview's `<audio crossorigin="anonymous">` treats the
+        // cross-origin loopback stream as CORS-clean — required for the Web Audio
+        // graph (`createMediaElementSource`) to tap it without tainting to
+        // silence (loudness normalization, Phase 16). Loopback + per-launch token
+        // already gate access, so `*` is safe here.
+        .layer(middleware::from_fn(cors))
         .with_state(ServerState { app, token })
+}
+
+/// Add permissive CORS headers to every response and answer preflight `OPTIONS`
+/// directly. See [`router`].
+async fn cors(req: Request, next: Next) -> Response {
+    if req.method() == Method::OPTIONS {
+        let mut resp = (StatusCode::NO_CONTENT, "").into_response();
+        add_cors(resp.headers_mut());
+        return resp;
+    }
+    let mut resp = next.run(req).await;
+    add_cors(resp.headers_mut());
+    resp
+}
+
+fn add_cors(h: &mut header::HeaderMap) {
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, HEAD, OPTIONS"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Range"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("Content-Range, Content-Length, Accept-Ranges"),
+    );
 }
 
 /// The loopback URL the webview's `<audio>` element loads for `track_id`.
@@ -612,6 +651,29 @@ fn encode_segment(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cors_headers_allow_web_audio_tap() {
+        // The Web Audio loudness tap taints to silence unless the loopback media
+        // is CORS-clean — assert the exact headers the webview needs.
+        let mut h = header::HeaderMap::new();
+        add_cors(&mut h);
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(), "*");
+        assert!(
+            h.get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("Content-Range")
+        );
+        assert!(
+            h.get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("Range")
+        );
+    }
 
     #[test]
     fn media_url_shape() {

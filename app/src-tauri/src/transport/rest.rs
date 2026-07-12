@@ -2653,6 +2653,10 @@ struct AlbumJson {
     aliases: Vec<AliasJson>,
     #[serde(default)]
     storage_bytes: i64,
+    #[serde(default)]
+    loudness_lufs: Option<f32>,
+    #[serde(default)]
+    loudness_peak: Option<f32>,
 }
 impl From<AlbumJson> for Album {
     fn from(a: AlbumJson) -> Self {
@@ -2666,6 +2670,8 @@ impl From<AlbumJson> for Album {
             cover_path: a.cover_path,
             aliases: a.aliases.into_iter().map(Into::into).collect(),
             storage_bytes: a.storage_bytes,
+            loudness_lufs: a.loudness_lufs,
+            loudness_peak: a.loudness_peak,
         }
     }
 }
@@ -2695,6 +2701,12 @@ struct TrackJson {
     #[serde(default)]
     is_explicit: bool,
     #[serde(default)]
+    loudness_lufs: Option<f32>,
+    #[serde(default)]
+    loudness_peak: Option<f32>,
+    #[serde(default)]
+    album_loudness_lufs: Option<f32>,
+    #[serde(default)]
     aliases: Vec<AliasJson>,
 }
 impl From<TrackJson> for Track {
@@ -2717,6 +2729,9 @@ impl From<TrackJson> for Track {
             metadata_json: t.metadata_json,
             is_single_release: t.is_single_release,
             is_explicit: t.is_explicit,
+            loudness_lufs: t.loudness_lufs,
+            loudness_peak: t.loudness_peak,
+            album_loudness_lufs: t.album_loudness_lufs,
             aliases: t.aliases.into_iter().map(Into::into).collect(),
         }
     }

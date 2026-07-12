@@ -126,6 +126,11 @@ pub struct Album {
     /// Sum of the on-disk bytes of every track on this album.
     #[serde(default)]
     pub storage_bytes: i64,
+    /// Album-level integrated loudness (LUFS) + peak (Phase 16 — loudness norm).
+    #[serde(default)]
+    pub loudness_lufs: Option<f32>,
+    #[serde(default)]
+    pub loudness_peak: Option<f32>,
 }
 
 fn default_album_type() -> String {
@@ -161,6 +166,15 @@ pub struct Track {
     /// `true` when this track is explicit (independent of the title text).
     #[serde(default)]
     pub is_explicit: bool,
+    /// Loudness normalization (Phase 16): per-track integrated loudness (LUFS) +
+    /// sample peak, plus the owning album's loudness for album-mode gain. The
+    /// player derives a per-track gain multiplier from these.
+    #[serde(default)]
+    pub loudness_lufs: Option<f32>,
+    #[serde(default)]
+    pub loudness_peak: Option<f32>,
+    #[serde(default)]
+    pub album_loudness_lufs: Option<f32>,
     /// Alternate title spellings (populated on single-entity reads only).
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,

@@ -847,6 +847,8 @@ mod tests {
                 is_explicit: false,
                 cover_path: None,
                 storage_bytes: 0,
+                loudness_lufs: None,
+                loudness_peak: None,
                 created_at: now(),
                 updated_at: now(),
             };
@@ -935,6 +937,11 @@ mod tests {
                 lyrics_instrumental: false,
                 lyrics_source_sig: None,
                 lyrics_synced_at: None,
+                loudness_lufs: None,
+                loudness_peak: None,
+                album_loudness_lufs: None,
+                loudness_source_sig: None,
+                loudness_analyzed_at: None,
                 created_at: now(),
                 updated_at: now(),
             };

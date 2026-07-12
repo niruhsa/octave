@@ -93,8 +93,10 @@ export default function PlayerBar() {
   // whether something is queued — the same rule now covers both elements.
   return (
     <>
-      <audio ref={audioARef} preload="auto" className="hidden" />
-      <audio ref={audioBRef} preload="auto" className="hidden" />
+      {/* crossOrigin=anonymous makes the loopback stream CORS-clean so the Web
+          Audio graph (loudness normalization) can tap it without tainting. */}
+      <audio ref={audioARef} preload="auto" className="hidden" crossOrigin="anonymous" />
+      <audio ref={audioBRef} preload="auto" className="hidden" crossOrigin="anonymous" />
       {!empty && (
     <div className="shrink-0 border-t border-oct-border bg-oct-surface">
       {error && (

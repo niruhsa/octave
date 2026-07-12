@@ -92,6 +92,14 @@ pub struct Config {
     /// radio). `Some` when `FINGERPRINT_ENABLED` is on. The server boots + the
     /// radio stays purely behavioral when this is `None`.
     pub fingerprint: Option<FingerprintConfig>,
+    /// Loudness normalization (Phase 16 — ReplayGain / EBU R128). `true` when
+    /// `LOUDNESS_ENABLED` is on: the background analysis pass measures each
+    /// track's integrated loudness (sharing the fingerprint decode when both are
+    /// on) and the client applies a compensating gain. Independent of
+    /// `fingerprint`; the pass runs when either is enabled. Pass cadence +
+    /// concurrency reuse the `FINGERPRINT_INTERVAL_SECS` / `FINGERPRINT_CONCURRENCY`
+    /// knobs (they tune the shared analysis pass).
+    pub loudness_enabled: bool,
     /// Optional discography-sync subsystem (Phase 14). `Some` when
     /// `DISCOGRAPHY_ENABLED` is on. The server boots + the discography endpoints
     /// report `enabled = false` when this is `None`.
@@ -272,6 +280,7 @@ impl Config {
 
         let podcast = load_podcast(&anchor, library_path.as_ref())?;
         let fingerprint = load_fingerprint(&anchor);
+        let loudness_enabled = env_flag("LOUDNESS_ENABLED");
         let discography = load_discography();
         let lyrics = load_lyrics(&anchor, library_path.as_ref());
 
@@ -317,6 +326,7 @@ impl Config {
             fcm,
             podcast,
             fingerprint,
+            loudness_enabled,
             discography,
             lyrics,
             config_anchor: anchor,

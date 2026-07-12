@@ -131,6 +131,8 @@ fn album_to_pb(a: m::Album) -> pb::Album {
         storage_bytes: a.storage_bytes,
         album_type: a.album_type,
         is_explicit: a.is_explicit,
+        loudness_lufs: a.loudness_lufs,
+        loudness_peak: a.loudness_peak,
     }
 }
 fn track_to_pb(t: m::Track) -> pb::Track {
@@ -155,6 +157,9 @@ fn track_to_pb(t: m::Track) -> pb::Track {
         channels: t.channels.unwrap_or(0),
         aliases: Vec::new(),
         is_explicit: t.is_explicit,
+        loudness_lufs: t.loudness_lufs,
+        loudness_peak: t.loudness_peak,
+        album_loudness_lufs: t.album_loudness_lufs,
     }
 }
 fn library_storage_to_pb(s: m::LibraryStorage) -> pb::LibraryStorage {

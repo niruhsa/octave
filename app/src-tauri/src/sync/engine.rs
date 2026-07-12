@@ -374,6 +374,11 @@ impl SyncEngine {
                         &srv.sample_rate_hz.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.bit_depth.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.channels.map(|n| n.to_string()).unwrap_or_default(),
+                        // Loudness (Phase 16) — so a track measured *after* it was
+                        // downloaded re-syncs and normalizes offline.
+                        &srv.loudness_lufs.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.loudness_peak.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.album_loudness_lufs.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.metadata_json,
                     ]);
                     if self.changed("track", &row.id, &hash).await? {
@@ -391,6 +396,9 @@ impl SyncEngine {
                             sample_rate_hz: srv.sample_rate_hz,
                             bit_depth: srv.bit_depth,
                             channels: srv.channels,
+                            loudness_lufs: srv.loudness_lufs,
+                            loudness_peak: srv.loudness_peak,
+                            album_loudness_lufs: srv.album_loudness_lufs,
                             // preserve client-owned fields
                             local_file_path: row.local_file_path.clone(),
                             metadata_json: srv.metadata_json,

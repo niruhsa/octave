@@ -61,6 +61,15 @@ pub trait AlbumRepo: Send + Sync {
     /// Recompute the album's `is_explicit` rollup from its tracks (true when any
     /// track on the album is explicit). Idempotent.
     async fn recompute_explicit(&self, album_id: Uuid) -> Result<()>;
+    /// Recompute the album's loudness rollup (Phase 16) from its measured tracks:
+    /// a duration-weighted energy mean of the track LUFS + the max track peak,
+    /// written to `albums.loudness_*` **and** denormalized to each track's
+    /// `album_loudness_lufs` (so the player gets album-mode gain without a JOIN).
+    /// Idempotent. Default no-op so in-memory `AlbumRepo` fakes compile unchanged;
+    /// the Postgres repo overrides it.
+    async fn recompute_loudness(&self, _album_id: Uuid) -> Result<()> {
+        Ok(())
+    }
     async fn find_by_artist_and_title(
         &self,
         artist_id: Uuid,
@@ -173,6 +182,24 @@ pub trait TrackRepo: Send + Sync {
     /// Library-wide lyric coverage counts (status endpoint).
     async fn lyrics_counts(&self) -> Result<LyricsCounts> {
         Ok(LyricsCounts::default())
+    }
+
+    // --- Loudness (Phase 16) -----------------------------------------------
+    // Default no-op impls (the lyrics-method trick) so the many in-memory test
+    // fakes compile unchanged; the Postgres repo overrides them.
+    /// Persist a measured integrated loudness + peak + freshness signature.
+    /// Returns the updated row.
+    async fn set_loudness(&self, _id: Uuid, _meta: LoudnessMeta) -> Result<Option<Track>> {
+        Ok(None)
+    }
+    /// `(track_id, loudness_source_sig)` for every measured track — drives the
+    /// analysis pass's incremental skip (mirrors `TrackFeatureRepo::statuses`).
+    async fn loudness_statuses(&self) -> Result<Vec<(Uuid, String)>> {
+        Ok(Vec::new())
+    }
+    /// Library-wide loudness coverage counts (status endpoint).
+    async fn loudness_counts(&self) -> Result<LoudnessCounts> {
+        Ok(LoudnessCounts::default())
     }
 }
 

@@ -99,6 +99,15 @@ pub struct MergedTrack {
     /// `true` when this track is explicit (independent of the title text).
     #[serde(default)]
     pub is_explicit: bool,
+    /// Loudness normalization (Phase 16): per-track integrated loudness (LUFS) +
+    /// sample peak, plus the owning album's loudness for album-mode gain. The
+    /// player derives a per-track gain from these.
+    #[serde(default)]
+    pub loudness_lufs: Option<f32>,
+    #[serde(default)]
+    pub loudness_peak: Option<f32>,
+    #[serde(default)]
+    pub album_loudness_lufs: Option<f32>,
     /// Every known title spelling (populated on single-track reads only).
     #[serde(default)]
     pub aliases: Vec<AliasInfo>,
@@ -191,6 +200,9 @@ impl MergedTrack {
             local_file_path,
             is_single_release: t.is_single_release,
             is_explicit: t.is_explicit,
+            loudness_lufs: t.loudness_lufs,
+            loudness_peak: t.loudness_peak,
+            album_loudness_lufs: t.album_loudness_lufs,
             aliases: t.aliases,
             downloaded,
         }
@@ -220,6 +232,10 @@ impl MergedTrack {
             is_single_release: false,
             // The offline cache doesn't track the explicit flag.
             is_explicit: false,
+            // Loudness is cached so downloaded tracks normalize offline.
+            loudness_lufs: t.loudness_lufs,
+            loudness_peak: t.loudness_peak,
+            album_loudness_lufs: t.album_loudness_lufs,
             // The offline cache doesn't store title aliases.
             aliases: Vec::new(),
             downloaded: true,

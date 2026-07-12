@@ -16,7 +16,7 @@ use rustfft::num_complex::Complex;
 
 use crate::error::{AppError, Result};
 
-use super::decode::{decode_mono, DecodeError};
+use super::decode::{decode_mono, DecodeError, MonoPcm};
 
 /// Decode + embed an audio file into a fixed-length, unit-normalized vector
 /// whose cosine distance approximates perceptual similarity.
@@ -31,6 +31,15 @@ pub trait FeatureExtractor: Send + Sync {
     /// pass treats that as "skip", not "fail". (MP3, FLAC, AAC/ALAC, OGG/Vorbis,
     /// WAV/AIFF all decode.)
     async fn extract(&self, path: &Path) -> Result<Vec<f32>>;
+
+    /// Embed from an already-decoded native-rate mono PCM buffer, if this
+    /// extractor supports it — lets the analysis pass decode **once** and share
+    /// that buffer with the loudness meter (Phase 16). `None` (the default) means
+    /// the extractor needs its own decode (e.g. ONNX, which feeds the model a
+    /// specific rate/layout), so the pass falls back to [`Self::extract`].
+    async fn embed_from_pcm(&self, _pcm: MonoPcm) -> Option<Result<Vec<f32>>> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -72,10 +81,18 @@ impl FeatureExtractor for DspExtractor {
     async fn extract(&self, path: &Path) -> Result<Vec<f32>> {
         let path: PathBuf = path.to_path_buf();
         // Decode + DSP is CPU-bound — keep it off the async runtime.
-        let result = tokio::task::spawn_blocking(move || extract_blocking(&path))
+        tokio::task::spawn_blocking(move || extract_blocking(&path))
             .await
-            .map_err(|e| AppError::Internal(format!("extract task join: {e}")))?;
-        result
+            .map_err(|e| AppError::Internal(format!("extract task join: {e}")))?
+    }
+
+    async fn embed_from_pcm(&self, pcm: MonoPcm) -> Option<Result<Vec<f32>>> {
+        // Reuse the pass's already-decoded PCM — DSP-only, no decode. Still
+        // CPU-bound (resample + FFT), so keep it off the async runtime.
+        let res = tokio::task::spawn_blocking(move || embed_mono(&pcm))
+            .await
+            .unwrap_or_else(|e| Err(AppError::Internal(format!("embed task join: {e}"))));
+        Some(res)
     }
 }
 
@@ -89,7 +106,13 @@ fn extract_blocking(path: &Path) -> Result<Vec<f32>> {
         }
         other => AppError::Internal(format!("decode {}: {other}", path.display())),
     })?;
+    embed_mono(&pcm)
+}
 
+/// The DSP feature pipeline over already-decoded mono PCM (resample → frame →
+/// aggregate → L2-normalize). Split out of [`extract_blocking`] so the pass can
+/// feed it the same PCM the loudness meter measured (see `embed_from_pcm`).
+pub(super) fn embed_mono(pcm: &MonoPcm) -> Result<Vec<f32>> {
     let mono = resample(&pcm.samples, pcm.sample_rate, TARGET_RATE);
     if mono.len() < FRAME {
         return Err(AppError::InvalidArgument(

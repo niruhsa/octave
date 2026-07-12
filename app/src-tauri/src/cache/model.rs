@@ -73,6 +73,18 @@ pub struct Track {
     pub bit_depth: Option<i64>,
     #[serde(default)]
     pub channels: Option<i64>,
+    /// Loudness normalization (Phase 16): integrated loudness (LUFS) + peak +
+    /// the owning album's loudness, so downloaded tracks normalize offline.
+    /// `#[sqlx(default)]` so any track SELECT that omits them still maps.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub loudness_lufs: Option<f32>,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub loudness_peak: Option<f32>,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub album_loudness_lufs: Option<f32>,
     pub local_file_path: String,
     pub metadata_json: String,
     pub downloaded_at: String,
