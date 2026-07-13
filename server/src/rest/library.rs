@@ -21,37 +21,67 @@ pub fn router() -> Router<RestState> {
         // Artists
         .route("/artists", post(create_artist).get(list_artists))
         .route("/artists/search", get(search_artists))
-        .route("/artists/:id", get(get_artist).put(update_artist).delete(delete_artist))
+        .route(
+            "/artists/:id",
+            get(get_artist).put(update_artist).delete(delete_artist),
+        )
         .route("/artists/:id/albums", get(list_albums_by_artist))
-        .route("/artists/:id/image", get(serve_artist_image).post(upload_artist_image))
+        .route(
+            "/artists/:id/image",
+            get(serve_artist_image).post(upload_artist_image),
+        )
         .route("/artists/:id/merge", post(merge_artists))
         .route("/artists/:id/library-paths", get(list_artist_library_paths))
         .route("/artists/:id/library-language", post(set_artist_language))
-        .route("/artists/:id/aliases", get(list_artist_aliases).post(add_artist_alias))
-        .route("/artists/:id/aliases/:alias_id", delete(remove_artist_alias))
+        .route(
+            "/artists/:id/aliases",
+            get(list_artist_aliases).post(add_artist_alias),
+        )
+        .route(
+            "/artists/:id/aliases/:alias_id",
+            delete(remove_artist_alias),
+        )
         .route("/artists/:id/primary-alias", put(set_primary_artist_alias))
         // Albums
         .route("/albums", post(create_album))
         .route("/albums/search", get(search_albums))
-        .route("/albums/:id", get(get_album).put(update_album).delete(delete_album))
+        .route(
+            "/albums/:id",
+            get(get_album).put(update_album).delete(delete_album),
+        )
         .route("/albums/:id/type", post(set_album_type))
-        .route("/albums/:id/folder", get(get_album_folder).post(rename_album_folder))
+        .route(
+            "/albums/:id/folder",
+            get(get_album_folder).post(rename_album_folder),
+        )
         .route("/albums/:id/tracks", get(list_tracks_by_album))
-        .route("/albums/:id/cover", get(serve_album_cover).post(upload_album_cover))
+        .route(
+            "/albums/:id/cover",
+            get(serve_album_cover).post(upload_album_cover),
+        )
         .route("/albums/:id/artwork", post(fetch_album_artwork))
         .route("/albums/:id/merge", post(merge_albums))
-        .route("/albums/:id/aliases", get(list_album_aliases).post(add_album_alias))
+        .route(
+            "/albums/:id/aliases",
+            get(list_album_aliases).post(add_album_alias),
+        )
         .route("/albums/:id/aliases/:alias_id", delete(remove_album_alias))
         .route("/albums/:id/primary-alias", put(set_primary_album_alias))
         // Tracks
         .route("/tracks", post(create_track))
         .route("/tracks/search", get(search_tracks))
-        .route("/tracks/:id", get(get_track).put(update_track).delete(delete_track))
+        .route(
+            "/tracks/:id",
+            get(get_track).put(update_track).delete(delete_track),
+        )
         .route("/tracks/:id/metadata", patch(edit_track_metadata))
         .route("/tracks/:id/move", post(move_track))
         .route("/tracks/:id/single-release", post(set_track_single_release))
         .route("/tracks/:id/explicit", post(set_track_explicit))
-        .route("/tracks/:id/aliases", get(list_track_aliases).post(add_track_alias))
+        .route(
+            "/tracks/:id/aliases",
+            get(list_track_aliases).post(add_track_alias),
+        )
         .route("/tracks/:id/aliases/:alias_id", delete(remove_track_alias))
         .route("/tracks/:id/primary-alias", put(set_primary_track_alias))
         // Storage breakdown (homepage widget)
@@ -303,7 +333,10 @@ async fn list_artists(
     req: Request<Body>,
 ) -> Result<Json<ListArtistsDto>, ApiError> {
     let caller = id(&req)?;
-    let (rows, total) = state.library.list_artists(&caller, p.limit, p.offset).await?;
+    let (rows, total) = state
+        .library
+        .list_artists(&caller, p.limit, p.offset)
+        .await?;
     Ok(Json(ListArtistsDto {
         artists: rows.into_iter().map(artist_dto).collect(),
         total,
@@ -354,7 +387,11 @@ async fn delete_artist(
 ) -> Result<StatusCode, ApiError> {
     let caller = id(&req)?;
     let deleted = state.library.delete_artist(&caller, id_path).await?;
-    Ok(if deleted { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
+    Ok(if deleted {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +443,10 @@ async fn list_albums_by_artist(
     req: Request<Body>,
 ) -> Result<Json<ListAlbumsDto>, ApiError> {
     let caller = id(&req)?;
-    let rows = state.library.list_albums_by_artist(&caller, artist_id).await?;
+    let rows = state
+        .library
+        .list_albums_by_artist(&caller, artist_id)
+        .await?;
     let total = rows.len() as i64;
     Ok(Json(ListAlbumsDto {
         albums: rows.into_iter().map(album_dto).collect(),
@@ -464,7 +504,11 @@ async fn delete_album(
 ) -> Result<StatusCode, ApiError> {
     let caller = id(&req)?;
     let deleted = state.library.delete_album(&caller, id_path).await?;
-    Ok(if deleted { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
+    Ok(if deleted {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +595,11 @@ async fn delete_track(
 ) -> Result<StatusCode, ApiError> {
     let caller = id(&req)?;
     let deleted = state.library.delete_track(&caller, id_path).await?;
-    Ok(if deleted { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
+    Ok(if deleted {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    })
 }
 
 #[derive(Serialize)]
@@ -566,7 +614,10 @@ async fn list_tracks_by_album(
     req: Request<Body>,
 ) -> Result<Json<ListTracksDto>, ApiError> {
     let caller = id(&req)?;
-    let rows = state.library.list_tracks_by_album(&caller, album_id).await?;
+    let rows = state
+        .library
+        .list_tracks_by_album(&caller, album_id)
+        .await?;
     let total = rows.len() as i64;
     Ok(Json(ListTracksDto {
         tracks: rows.into_iter().map(track_dto).collect(),
@@ -666,9 +717,11 @@ async fn serve_album_cover(
             if let Some(artwork) = state.artwork.as_ref().filter(|a| a.auto_fetch_enabled()) {
                 match artwork.fetch_for_album(&caller, album_id).await {
                     Ok(Some(new_path)) => std::path::PathBuf::from(&new_path),
-                    Ok(None) => return Err(ApiError::from(crate::error::AppError::NotFound(
-                        "no cover art available for this album".into(),
-                    ))),
+                    Ok(None) => {
+                        return Err(ApiError::from(crate::error::AppError::NotFound(
+                            "no cover art available for this album".into(),
+                        )));
+                    }
                     Err(e) => return Err(ApiError::from(e)),
                 }
             } else {
@@ -691,8 +744,12 @@ async fn serve_album_cover(
     let variant = lowres_variant(&req);
     let serve_path = match &state.optimizer {
         Some(o) => {
-            o.ensure_optimized(&crate::services::ImageOptimizer::album_key(album_id), &cover_path, variant)
-                .await
+            o.ensure_optimized(
+                &crate::services::ImageOptimizer::album_key(album_id),
+                &cover_path,
+                variant,
+            )
+            .await
         }
         None => cover_path,
     };
@@ -900,7 +957,10 @@ async fn list_artist_aliases(
     req: Request<Body>,
 ) -> Result<Json<Vec<AliasDto>>, ApiError> {
     let caller = id(&req)?;
-    let rows = state.library.list_artist_aliases(&caller, artist_id).await?;
+    let rows = state
+        .library
+        .list_artist_aliases(&caller, artist_id)
+        .await?;
     Ok(Json(rows.into_iter().map(artist_alias_dto).collect()))
 }
 
@@ -1112,7 +1172,13 @@ async fn read_image_body(
     if bytes.is_empty() {
         return Err(crate::error::AppError::InvalidArgument("empty image body".into()).into());
     }
-    Ok((caller, crate::services::artwork::CoverImage { bytes, content_type }))
+    Ok((
+        caller,
+        crate::services::artwork::CoverImage {
+            bytes,
+            content_type,
+        },
+    ))
 }
 
 fn require_artwork(state: &RestState) -> Result<&crate::services::ArtworkService, ApiError> {
@@ -1131,8 +1197,14 @@ async fn upload_album_cover(
 ) -> Result<Json<AlbumDto>, ApiError> {
     let (caller, image) = read_image_body(req).await?;
     let artwork = require_artwork(&state)?;
-    let cover_path = artwork.set_cover_from_bytes(&caller, album_id, &image).await?;
-    warm_optimized(&state, crate::services::ImageOptimizer::album_key(album_id), cover_path);
+    let cover_path = artwork
+        .set_cover_from_bytes(&caller, album_id, &image)
+        .await?;
+    warm_optimized(
+        &state,
+        crate::services::ImageOptimizer::album_key(album_id),
+        cover_path,
+    );
     let album = state.library.get_album(&caller, album_id).await?;
     Ok(Json(album_dto(album)))
 }
@@ -1148,7 +1220,11 @@ async fn upload_artist_image(
     let image_path = artwork
         .set_artist_image_from_bytes(&caller, artist_id, &image)
         .await?;
-    warm_optimized(&state, crate::services::ImageOptimizer::artist_key(artist_id), image_path);
+    warm_optimized(
+        &state,
+        crate::services::ImageOptimizer::artist_key(artist_id),
+        image_path,
+    );
     let artist = state.library.get_artist(&caller, artist_id).await?;
     Ok(Json(artist_dto(artist)))
 }
@@ -1179,8 +1255,12 @@ async fn serve_artist_image(
     let variant = lowres_variant(&req);
     let serve_path = match &state.optimizer {
         Some(o) => {
-            o.ensure_optimized(&crate::services::ImageOptimizer::artist_key(artist_id), &image_path, variant)
-                .await
+            o.ensure_optimized(
+                &crate::services::ImageOptimizer::artist_key(artist_id),
+                &image_path,
+                variant,
+            )
+            .await
         }
         None => image_path,
     };
@@ -1207,7 +1287,9 @@ async fn image_file_response(
     path: &std::path::Path,
 ) -> Result<(axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>), ApiError> {
     use axum::http::header::{CONTENT_TYPE, HeaderValue};
-    let bytes = tokio::fs::read(path).await.map_err(crate::error::AppError::Io)?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(crate::error::AppError::Io)?;
     let content_type = match path
         .extension()
         .and_then(|e| e.to_str())
@@ -1330,4 +1412,6 @@ fn _route_keepalive() {
         .route("/__noop__", delete(noop_h))
         .route("/__noop2__", put(noop_h));
 }
-async fn noop_h() -> StatusCode { StatusCode::NO_CONTENT }
+async fn noop_h() -> StatusCode {
+    StatusCode::NO_CONTENT
+}

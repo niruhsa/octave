@@ -41,22 +41,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
-    Router,
     body::Body,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
 use tauri::{Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
-use crate::AppStateHandle;
 use crate::cache::repo;
 use crate::error::{AppError, AppResult};
 use crate::transport::{Credential, ServerConfig};
+use crate::AppStateHandle;
 
 /// Loopback bind + token, published to the frontend via `player_media_url`.
 pub struct MediaServer {
@@ -119,7 +119,10 @@ fn add_cors(h: &mut header::HeaderMap) {
 
 /// The loopback URL the webview's `<audio>` element loads for `track_id`.
 pub fn media_url(port: u16, token: &str, track_id: &str) -> String {
-    format!("http://127.0.0.1:{port}/s/{token}/{}", encode_segment(track_id))
+    format!(
+        "http://127.0.0.1:{port}/s/{token}/{}",
+        encode_segment(track_id)
+    )
 }
 
 /// Like [`media_url`] but for a podcast **episode** id — adds `?kind=episode`
@@ -137,7 +140,10 @@ pub fn episode_media_url(port: u16, token: &str, episode_id: &str) -> String {
 /// is native Kotlin and can only reach a real HTTP origin — so it loads the
 /// cover from this loopback route, which resolves it the same way.
 pub fn cover_url(port: u16, token: &str, album_id: &str) -> String {
-    format!("http://127.0.0.1:{port}/cover/{token}/{}", encode_segment(album_id))
+    format!(
+        "http://127.0.0.1:{port}/cover/{token}/{}",
+        encode_segment(album_id)
+    )
 }
 
 /// Base URL the native media-session code hits to deliver a transport-button
@@ -162,6 +168,10 @@ struct MediaActionEvent {
     position_ms: Option<i64>,
 }
 
+fn valid_loopback_token(provided: &str, expected: &str) -> bool {
+    provided.as_bytes() == expected.as_bytes()
+}
+
 /// Receive a transport action from the native media notification / lock screen
 /// and re-broadcast it as a `media-session-action` Tauri event for the player
 /// store to act on.
@@ -170,8 +180,12 @@ async fn serve_action(
     Path((token, action)): Path<(String, String)>,
     Query(q): Query<ActionQuery>,
 ) -> Response {
-    if token.as_bytes() != st.token.as_bytes() {
+    if !valid_loopback_token(&token, &st.token) {
         return (StatusCode::FORBIDDEN, "bad token").into_response();
+    }
+    if action == "equalizer-route-changed" {
+        crate::schedule_equalizer_output_refresh(st.app);
+        return (StatusCode::OK, "ok").into_response();
     }
     let _ = st.app.emit(
         "media-session-action",
@@ -198,7 +212,7 @@ async fn serve(
 ) -> Response {
     // Constant work regardless; the token is short and local, so a plain
     // compare is fine (this gates other local apps, not network attackers).
-    if token.as_bytes() != st.token.as_bytes() {
+    if !valid_loopback_token(&token, &st.token) {
         return (StatusCode::FORBIDDEN, "bad token").into_response();
     }
 
@@ -321,7 +335,7 @@ async fn serve_cover(
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    if token.as_bytes() != st.token.as_bytes() {
+    if !valid_loopback_token(&token, &st.token) {
         return (StatusCode::FORBIDDEN, "bad token").into_response();
     }
     let Some(state) = st.app.try_state::<AppStateHandle>() else {
@@ -439,7 +453,10 @@ async fn serve_local_typed(
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_LENGTH, len.to_string());
     if status == StatusCode::PARTIAL_CONTENT {
-        builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"));
+        builder = builder.header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        );
     }
 
     // HEAD (and the empty-file edge case) return headers only.
@@ -659,20 +676,18 @@ mod tests {
         let mut h = header::HeaderMap::new();
         add_cors(&mut h);
         assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(), "*");
-        assert!(
-            h.get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("Content-Range")
-        );
-        assert!(
-            h.get(header::ACCESS_CONTROL_ALLOW_HEADERS)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("Range")
-        );
+        assert!(h
+            .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Content-Range"));
+        assert!(h
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Range"));
     }
 
     #[test]
@@ -692,25 +707,47 @@ mod tests {
     }
 
     #[test]
+    fn android_equalizer_route_hint_requires_the_exact_launch_token() {
+        assert!(valid_loopback_token("launch-token", "launch-token"));
+        assert!(!valid_loopback_token("", "launch-token"));
+        assert!(!valid_loopback_token("other-token", "launch-token"));
+    }
+
+    #[test]
     fn range_explicit_and_open() {
         assert!(matches!(parse_range("bytes=0-99", 1000), Rng::Sat(0, 99)));
-        assert!(matches!(parse_range("bytes=500-", 1000), Rng::Sat(500, 999)));
+        assert!(matches!(
+            parse_range("bytes=500-", 1000),
+            Rng::Sat(500, 999)
+        ));
         // upper bound clipped to EOF
-        assert!(matches!(parse_range("bytes=0-99999", 1000), Rng::Sat(0, 999)));
+        assert!(matches!(
+            parse_range("bytes=0-99999", 1000),
+            Rng::Sat(0, 999)
+        ));
     }
 
     #[test]
     fn range_suffix() {
-        assert!(matches!(parse_range("bytes=-200", 1000), Rng::Sat(800, 999)));
+        assert!(matches!(
+            parse_range("bytes=-200", 1000),
+            Rng::Sat(800, 999)
+        ));
         assert!(matches!(parse_range("bytes=-5000", 1000), Rng::Sat(0, 999)));
     }
 
     #[test]
     fn range_unsatisfiable_and_malformed() {
-        assert!(matches!(parse_range("bytes=1000-1100", 1000), Rng::Unsatisfiable));
+        assert!(matches!(
+            parse_range("bytes=1000-1100", 1000),
+            Rng::Unsatisfiable
+        ));
         assert!(matches!(parse_range("bytes=-0", 1000), Rng::Unsatisfiable));
         assert!(matches!(parse_range("octets=0-1", 1000), Rng::Malformed));
-        assert!(matches!(parse_range("bytes=0-9,20-29", 1000), Rng::Malformed));
+        assert!(matches!(
+            parse_range("bytes=0-9,20-29", 1000),
+            Rng::Malformed
+        ));
     }
 
     // ---- local-file serving (the seek + take + ReaderStream path) ----
@@ -738,7 +775,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers().get(header::CONTENT_LENGTH).unwrap(), "10000");
         assert_eq!(resp.headers().get(header::ACCEPT_RANGES).unwrap(), "bytes");
-        assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), "audio/mpeg");
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "audio/mpeg"
+        );
         assert_eq!(body_bytes(resp).await, data);
     }
 
@@ -751,7 +791,10 @@ mod tests {
         h.insert(header::RANGE, "bytes=10-19".parse().unwrap());
         let resp = serve_local(p.to_str().unwrap(), &h, &Method::GET).await;
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 10-19/100");
+        assert_eq!(
+            resp.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 10-19/100"
+        );
         assert_eq!(resp.headers().get(header::CONTENT_LENGTH).unwrap(), "10");
         assert_eq!(body_bytes(resp).await, (10..20u8).collect::<Vec<_>>());
     }
@@ -765,7 +808,10 @@ mod tests {
         h.insert(header::RANGE, "bytes=90-".parse().unwrap());
         let resp = serve_local(p.to_str().unwrap(), &h, &Method::GET).await;
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(), "bytes 90-99/100");
+        assert_eq!(
+            resp.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 90-99/100"
+        );
         assert_eq!(body_bytes(resp).await, (90..100u8).collect::<Vec<_>>());
     }
 
@@ -787,7 +833,10 @@ mod tests {
         h.insert(header::RANGE, "bytes=100-200".parse().unwrap());
         let resp = serve_local(p.to_str().unwrap(), &h, &Method::GET).await;
         assert_eq!(resp.status(), StatusCode::RANGE_NOT_SATISFIABLE);
-        assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(), "bytes */50");
+        assert_eq!(
+            resp.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes */50"
+        );
     }
 
     #[tokio::test]

@@ -475,9 +475,8 @@ fn load_fcm(anchor: &Path) -> Result<Option<FcmConfig>> {
     if !env_flag("FCM_ENABLED") {
         return Ok(None);
     }
-    let project_id = env::var("FCM_PROJECT_ID").map_err(|_| {
-        AppError::Config("FCM_ENABLED is on but FCM_PROJECT_ID is not set".into())
-    })?;
+    let project_id = env::var("FCM_PROJECT_ID")
+        .map_err(|_| AppError::Config("FCM_ENABLED is on but FCM_PROJECT_ID is not set".into()))?;
     let credentials = env::var("FCM_CREDENTIALS").map_err(|_| {
         AppError::Config(
             "FCM_ENABLED is on but FCM_CREDENTIALS (service-account JSON path) is not set".into(),
@@ -525,7 +524,10 @@ fn load_podcastindex() -> Result<Option<PodcastIndexCreds>> {
         .ok()
         .filter(|s| !s.trim().is_empty());
     match (key, secret) {
-        (Some(api_key), Some(api_secret)) => Ok(Some(PodcastIndexCreds { api_key, api_secret })),
+        (Some(api_key), Some(api_secret)) => Ok(Some(PodcastIndexCreds {
+            api_key,
+            api_secret,
+        })),
         (None, None) => Ok(None),
         _ => Err(AppError::Config(
             "PODCASTINDEX_API_KEY and PODCASTINDEX_API_SECRET must both be set (or neither)".into(),

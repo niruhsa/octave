@@ -7,13 +7,13 @@
 use std::path::Path as FsPath;
 
 use axum::{
+    Json, Router,
     body::Body,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
     http::header::CONTENT_TYPE,
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::Response,
     routing::{get, post, put},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -64,10 +64,9 @@ fn caller_id(req: &Request<Body>) -> Result<Identity, ApiError> {
 }
 
 fn svc(state: &RestState) -> Result<&PodcastService, ApiError> {
-    state
-        .podcasts
-        .as_ref()
-        .ok_or_else(|| AppError::NotFound("podcasts are not enabled (set PODCAST_PATH)".into()).into())
+    state.podcasts.as_ref().ok_or_else(|| {
+        AppError::NotFound("podcasts are not enabled (set PODCAST_PATH)".into()).into()
+    })
 }
 
 #[derive(Serialize)]

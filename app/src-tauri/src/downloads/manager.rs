@@ -29,8 +29,8 @@ use super::paths::{
     track_file_name, track_path, PART_SUFFIX, SETTING_DOWNLOADS_DIR, SETTING_WIFI_ONLY,
 };
 use crate::auth::AuthManager;
-use crate::cache::repo;
 use crate::cache::model as cm;
+use crate::cache::repo;
 use crate::error::{AppError, AppResult};
 use crate::transport::Credential;
 
@@ -196,7 +196,12 @@ impl DownloadManager {
     }
 
     pub async fn set_wifi_only(&self, on: bool) -> AppResult<()> {
-        repo::set_setting(&self.pool, SETTING_WIFI_ONLY, if on { "true" } else { "false" }).await
+        repo::set_setting(
+            &self.pool,
+            SETTING_WIFI_ONLY,
+            if on { "true" } else { "false" },
+        )
+        .await
     }
 
     /// Fetch cover bytes from the server's `GET /albums/:id/cover` endpoint
@@ -304,7 +309,9 @@ impl DownloadManager {
         ensure_dir(final_path.parent().unwrap_or(&self.downloads_root)).await?;
 
         let track_url = format!("{}/tracks/{}/stream", server.config().rest_root(), track_id);
-        let bytes = self.stream_to_file(&cred, &track_url, track_id, &final_path).await?;
+        let bytes = self
+            .stream_to_file(&cred, &track_url, track_id, &final_path)
+            .await?;
 
         // Cache rows: artist + album + track + sync_state for each.
         let now = now_iso();
@@ -406,7 +413,9 @@ impl DownloadManager {
                 true
             } else {
                 // Fall back to the client-side CAA lookup.
-                match artwork::fetch_cover(&self.http, &artist.name, &album.title, &cover_path).await {
+                match artwork::fetch_cover(&self.http, &artist.name, &album.title, &cover_path)
+                    .await
+                {
                     Ok(b) => b,
                     Err(e) => {
                         tracing::warn!(
@@ -476,7 +485,10 @@ impl DownloadManager {
         // Resume: if a .part exists, append from its current length.
         let mut existing: u64 = 0;
         if tokio::fs::try_exists(&part_path).await.unwrap_or(false) {
-            existing = tokio::fs::metadata(&part_path).await.map(|m| m.len()).unwrap_or(0);
+            existing = tokio::fs::metadata(&part_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
         }
 
         let auth = auth_header(cred);
@@ -573,7 +585,10 @@ impl DownloadManager {
         let final_size = if total > 0 {
             total
         } else {
-            tokio::fs::metadata(final_path).await.map(|m| m.len()).unwrap_or(received)
+            tokio::fs::metadata(final_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(received)
         };
         Ok(final_size)
     }
@@ -589,8 +604,12 @@ impl DownloadManager {
             return Err(AppError::Transport(format!("album {album_id} not found")));
         }
         let tracks = server.list_tracks_by_album(&cred, album_id).await?;
-        self.run_batch(album_id, BatchKind::Album, tracks.into_iter().map(|t| t.id).collect())
-            .await
+        self.run_batch(
+            album_id,
+            BatchKind::Album,
+            tracks.into_iter().map(|t| t.id).collect(),
+        )
+        .await
     }
 
     // ----- batch: playlist -----------------------------------------------
@@ -665,7 +684,9 @@ impl DownloadManager {
             server.config().rest_root(),
             episode_id
         );
-        let bytes = self.stream_to_file(&cred, &url, episode_id, &final_path).await?;
+        let bytes = self
+            .stream_to_file(&cred, &url, episode_id, &final_path)
+            .await?;
 
         let now = now_iso();
         let local_path = final_path.to_string_lossy().into_owned();
@@ -1004,5 +1025,3 @@ async fn stamp(pool: &sqlx::SqlitePool, entity_type: &str, id: &str) -> AppResul
     )
     .await
 }
-
-

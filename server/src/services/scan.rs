@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
+use super::duration;
 use crate::auth::Identity;
 use crate::db::models::{NewTrack, PermissionLevel};
 use crate::error::{AppError, Result};
 use crate::services::library::LibraryService;
 use crate::services::storage::StorageService;
 use crate::services::tag;
-use super::duration;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScanReport {
@@ -121,12 +121,9 @@ impl ScanService {
 
         let root = match root {
             Some(p) => p.to_path_buf(),
-            None => self
-                .default_root
-                .clone()
-                .ok_or_else(|| AppError::InvalidArgument(
-                    "no scan root provided and LIBRARY_PATH is unset".into(),
-                ))?,
+            None => self.default_root.clone().ok_or_else(|| {
+                AppError::InvalidArgument("no scan root provided and LIBRARY_PATH is unset".into())
+            })?,
         };
         if !root.is_dir() {
             return Err(AppError::InvalidArgument(format!(
@@ -136,7 +133,11 @@ impl ScanService {
         }
 
         let mut report = ScanReport::default();
-        for entry in WalkDir::new(&root).follow_links(false).into_iter().flatten() {
+        for entry in WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -199,10 +200,11 @@ impl ScanService {
         // Upsert artist (find-by-name, else create).
         let artist = match self.library.artists.find_by_name(&info.artist).await? {
             Some(a) => a,
-            None => self
-                .library
-                .create_artist(caller, &info.artist, None)
-                .await?,
+            None => {
+                self.library
+                    .create_artist(caller, &info.artist, None)
+                    .await?
+            }
         };
         // Upsert album (find by artist+title, else create).
         let album = match self
@@ -250,11 +252,7 @@ impl ScanService {
     /// Returns `Ok(None)` when the file was already indexed (same
     /// `file_path`), or `Ok(Some(track_id))` on a fresh insert.  Errors
     /// bubble up for the caller to handle (bad probe, missing FK, etc.).
-    pub async fn index_file(
-        &self,
-        caller: &Identity,
-        path: &Path,
-    ) -> Result<Option<uuid::Uuid>> {
+    pub async fn index_file(&self, caller: &Identity, path: &Path) -> Result<Option<uuid::Uuid>> {
         let file_path = path.to_string_lossy().to_string();
 
         if self
@@ -294,7 +292,11 @@ impl ScanService {
 
         let artist = match self.library.artists.find_by_name(&info.artist).await? {
             Some(a) => a,
-            None => self.library.create_artist(caller, &info.artist, None).await?,
+            None => {
+                self.library
+                    .create_artist(caller, &info.artist, None)
+                    .await?
+            }
         };
         let album = match self
             .library
@@ -390,10 +392,7 @@ impl ScanService {
     /// Walks all tracks in the DB, opens each file, measures actual audio
     /// duration via Symphonia, and updates the DB row when the measured
     /// value differs from the stored one.  Manager+ only.
-    pub async fn refresh_durations(
-        &self,
-        caller: &Identity,
-    ) -> Result<DurationRefreshReport> {
+    pub async fn refresh_durations(&self, caller: &Identity) -> Result<DurationRefreshReport> {
         caller.require(PermissionLevel::Manager)?;
 
         let rows = self.library.tracks.list_all_ids_paths().await?;
@@ -426,11 +425,7 @@ impl ScanService {
                     // Same threshold as index_file: >1% and >500ms.
                     let threshold = (row.duration_ms.max(1) / 100).max(500);
                     if diff > threshold {
-                        if let Err(e) = self
-                            .library
-                            .tracks
-                            .update_duration(row.id, actual_ms)
-                            .await
+                        if let Err(e) = self.library.tracks.update_duration(row.id, actual_ms).await
                         {
                             tracing::warn!(
                                 id = %row.id,
@@ -511,12 +506,7 @@ impl ScanService {
                 let diff = (row.duration_ms - actual_ms).abs();
                 let threshold = (row.duration_ms.max(1) / 100).max(500);
                 if diff > threshold {
-                    if let Err(e) = self
-                        .library
-                        .tracks
-                        .update_duration(row.id, actual_ms)
-                        .await
-                    {
+                    if let Err(e) = self.library.tracks.update_duration(row.id, actual_ms).await {
                         tracing::warn!(id=%row.id, error=%e, "rescan: duration update failed");
                         errors += 1;
                         continue;
@@ -534,13 +524,7 @@ impl ScanService {
                         if let Err(e) = self
                             .library
                             .tracks
-                            .update(
-                                row.id,
-                                &info.title,
-                                info.track_no,
-                                info.disc_no,
-                                "{}",
-                            )
+                            .update(row.id, &info.title, info.track_no, info.disc_no, "{}")
                             .await
                         {
                             tracing::warn!(id=%row.id, error=%e, "rescan: tag update failed");
@@ -589,7 +573,13 @@ impl ScanService {
             skipped_missing,
             errors,
         };
-        tracing::info!(total, corrected, skipped_missing, errors, "rescan_library: complete");
+        tracing::info!(
+            total,
+            corrected,
+            skipped_missing,
+            errors,
+            "rescan_library: complete"
+        );
         // A rescan can change file sizes (re-tagged/replaced files), so refresh
         // the storage stats too.
         self.recompute_storage_full().await;

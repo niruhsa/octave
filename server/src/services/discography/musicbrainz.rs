@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::{AppError, Result};
-use crate::services::musicbrainz::{user_agent, RateLimiter, WS2_BASE};
+use crate::services::musicbrainz::{RateLimiter, WS2_BASE, user_agent};
 
 use super::provider::{ArtistCandidate, DiscographyProvider, ProviderReleaseGroup, ProviderTrack};
 
@@ -70,7 +70,10 @@ impl DiscographyProvider for MusicBrainzDiscography {
         let query = format!("artist:\"{}\"", name.replace('"', " "));
         let url = format!("{WS2_BASE}/artist");
         let body = self
-            .get_json(&url, &[("query", query.as_str()), ("fmt", "json"), ("limit", "8")])
+            .get_json(
+                &url,
+                &[("query", query.as_str()), ("fmt", "json"), ("limit", "8")],
+            )
             .await?;
         let mut out = Vec::new();
         if let Some(arr) = body.get("artists").and_then(|v| v.as_array()) {
@@ -87,7 +90,10 @@ impl DiscographyProvider for MusicBrainzDiscography {
                 // the MB version; accept either.
                 let score = a
                     .get("score")
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    })
                     .unwrap_or(0)
                     .clamp(0, 100) as u8;
                 out.push(ArtistCandidate {
@@ -207,10 +213,7 @@ impl DiscographyProvider for MusicBrainzDiscography {
                         if title.is_empty() {
                             continue;
                         }
-                        let position = t
-                            .get("position")
-                            .and_then(|v| v.as_i64())
-                            .map(|n| n as i32);
+                        let position = t.get("position").and_then(|v| v.as_i64()).map(|n| n as i32);
                         let recording_id = t
                             .get("recording")
                             .and_then(|r| r.get("id"))
@@ -240,8 +243,16 @@ fn map_album_type(primary: Option<&str>, secondary: &[String]) -> String {
     if secondary.iter().any(|s| {
         matches!(
             s.as_str(),
-            "compilation" | "soundtrack" | "remix" | "dj-mix" | "mixtape/street" | "interview"
-                | "demo" | "audio drama" | "field recording" | "spokenword"
+            "compilation"
+                | "soundtrack"
+                | "remix"
+                | "dj-mix"
+                | "mixtape/street"
+                | "interview"
+                | "demo"
+                | "audio drama"
+                | "field recording"
+                | "spokenword"
         )
     }) {
         return "other".to_string();
@@ -309,10 +320,7 @@ mod tests {
         assert_eq!(map_album_type(Some("Album"), &[]), "album");
         assert_eq!(map_album_type(Some("EP"), &[]), "ep");
         assert_eq!(map_album_type(Some("Single"), &[]), "single");
-        assert_eq!(
-            map_album_type(Some("Album"), &["live".to_string()]),
-            "live"
-        );
+        assert_eq!(map_album_type(Some("Album"), &["live".to_string()]), "live");
         assert_eq!(
             map_album_type(Some("Album"), &["compilation".to_string()]),
             "other"

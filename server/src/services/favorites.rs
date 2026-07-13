@@ -55,10 +55,7 @@ impl FavoritesService {
         caller.require(PermissionLevel::User)?;
         let user_id = self.caller_user_id(caller)?;
         if !self.entity_exists(kind, entity_id).await? {
-            return Err(AppError::NotFound(format!(
-                "{} {entity_id}",
-                kind.as_str()
-            )));
+            return Err(AppError::NotFound(format!("{} {entity_id}", kind.as_str())));
         }
         self.favorites.add(user_id, kind, entity_id).await?;
         self.audit(caller, "favorite.add", kind, entity_id).await?;
@@ -75,7 +72,8 @@ impl FavoritesService {
         caller.require(PermissionLevel::User)?;
         let user_id = self.caller_user_id(caller)?;
         self.favorites.remove(user_id, kind, entity_id).await?;
-        self.audit(caller, "favorite.remove", kind, entity_id).await?;
+        self.audit(caller, "favorite.remove", kind, entity_id)
+            .await?;
         Ok(())
     }
 
@@ -96,7 +94,10 @@ impl FavoritesService {
     pub async fn list_tracks(&self, caller: &Identity) -> Result<Vec<Track>> {
         caller.require(PermissionLevel::User)?;
         let user_id = self.caller_user_id(caller)?;
-        let ids = self.favorites.list_ids(user_id, FavoriteKind::Track).await?;
+        let ids = self
+            .favorites
+            .list_ids(user_id, FavoriteKind::Track)
+            .await?;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(t) = self.tracks.get(id).await? {
@@ -110,7 +111,10 @@ impl FavoritesService {
     pub async fn list_albums(&self, caller: &Identity) -> Result<Vec<Album>> {
         caller.require(PermissionLevel::User)?;
         let user_id = self.caller_user_id(caller)?;
-        let ids = self.favorites.list_ids(user_id, FavoriteKind::Album).await?;
+        let ids = self
+            .favorites
+            .list_ids(user_id, FavoriteKind::Album)
+            .await?;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(a) = self.albums.get(id).await? {
@@ -124,7 +128,10 @@ impl FavoritesService {
     pub async fn list_artists(&self, caller: &Identity) -> Result<Vec<Artist>> {
         caller.require(PermissionLevel::User)?;
         let user_id = self.caller_user_id(caller)?;
-        let ids = self.favorites.list_ids(user_id, FavoriteKind::Artist).await?;
+        let ids = self
+            .favorites
+            .list_ids(user_id, FavoriteKind::Artist)
+            .await?;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(a) = self.artists.get(id).await? {
@@ -213,7 +220,10 @@ mod tests {
     impl FavoriteRepo for FakeFavorites {
         async fn add(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()> {
             let mut g = self.rows.lock().unwrap();
-            if !g.iter().any(|(u, k, e)| *u == user_id && *k == kind.as_str() && *e == entity_id) {
+            if !g
+                .iter()
+                .any(|(u, k, e)| *u == user_id && *k == kind.as_str() && *e == entity_id)
+            {
                 g.push((user_id, kind.as_str(), entity_id));
             }
             Ok(())
@@ -299,7 +309,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Track>> {
-            Ok(self.rows.lock().unwrap().iter().find(|t| t.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == id)
+                .cloned())
         }
         async fn list_by_album(&self, _: Uuid) -> Result<Vec<Track>> {
             Ok(vec![])
@@ -369,7 +385,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Album>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list_by_artist(&self, _: Uuid) -> Result<Vec<Album>> {
             Ok(vec![])
@@ -435,7 +457,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Artist>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list(&self, _: i64, _: i64) -> Result<Vec<Artist>> {
             Ok(vec![])
@@ -528,18 +556,31 @@ mod tests {
         // Idempotent.
         svc.favorite(&me, FavoriteKind::Track, t.id).await.unwrap();
 
-        assert!(svc.is_favorite(&me, FavoriteKind::Track, t.id).await.unwrap());
+        assert!(
+            svc.is_favorite(&me, FavoriteKind::Track, t.id)
+                .await
+                .unwrap()
+        );
         let listed = svc.list_tracks(&me).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, t.id);
         assert_eq!(svc.favorited_track_ids(&me).await.unwrap(), vec![t.id]);
 
-        svc.unfavorite(&me, FavoriteKind::Track, t.id).await.unwrap();
-        assert!(!svc.is_favorite(&me, FavoriteKind::Track, t.id).await.unwrap());
+        svc.unfavorite(&me, FavoriteKind::Track, t.id)
+            .await
+            .unwrap();
+        assert!(
+            !svc.is_favorite(&me, FavoriteKind::Track, t.id)
+                .await
+                .unwrap()
+        );
         assert!(svc.list_tracks(&me).await.unwrap().is_empty());
 
         let actions = audit.actions.lock().unwrap().clone();
-        assert_eq!(actions, vec!["favorite.add", "favorite.add", "favorite.remove"]);
+        assert_eq!(
+            actions,
+            vec!["favorite.add", "favorite.add", "favorite.remove"]
+        );
     }
 
     #[tokio::test]
@@ -573,12 +614,26 @@ mod tests {
         let other = user();
         let artist = artists.insert();
 
-        svc.favorite(&me, FavoriteKind::Artist, artist.id).await.unwrap();
-        assert!(svc.is_favorite(&me, FavoriteKind::Artist, artist.id).await.unwrap());
+        svc.favorite(&me, FavoriteKind::Artist, artist.id)
+            .await
+            .unwrap();
+        assert!(
+            svc.is_favorite(&me, FavoriteKind::Artist, artist.id)
+                .await
+                .unwrap()
+        );
         // A different kind for the same id is independent.
-        assert!(!svc.is_favorite(&me, FavoriteKind::Track, artist.id).await.unwrap());
+        assert!(
+            !svc.is_favorite(&me, FavoriteKind::Track, artist.id)
+                .await
+                .unwrap()
+        );
         // Another user doesn't see it.
-        assert!(!svc.is_favorite(&other, FavoriteKind::Artist, artist.id).await.unwrap());
+        assert!(
+            !svc.is_favorite(&other, FavoriteKind::Artist, artist.id)
+                .await
+                .unwrap()
+        );
         assert_eq!(svc.list_artists(&me).await.unwrap().len(), 1);
         assert!(svc.list_artists(&other).await.unwrap().is_empty());
     }

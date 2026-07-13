@@ -208,7 +208,12 @@ impl ArtistRepo for PgRepos {
         .map_err(db)
     }
 
-    async fn update(&self, id: Uuid, name: &str, sort_name: Option<&str>) -> Result<Option<Artist>> {
+    async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        sort_name: Option<&str>,
+    ) -> Result<Option<Artist>> {
         sqlx::query_as::<_, Artist>(
             r#"UPDATE artists
                SET name = $2, sort_name = $3, updated_at = now()
@@ -475,12 +480,14 @@ impl AlbumRepo for PgRepos {
     }
 
     async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<u64> {
-        let res = sqlx::query("UPDATE albums SET artist_id = $2, updated_at = now() WHERE artist_id = $1")
-            .bind(from_artist)
-            .bind(to_artist)
-            .execute(&self.pool)
-            .await
-            .map_err(db)?;
+        let res = sqlx::query(
+            "UPDATE albums SET artist_id = $2, updated_at = now() WHERE artist_id = $1",
+        )
+        .bind(from_artist)
+        .bind(to_artist)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
         Ok(res.rows_affected())
     }
 
@@ -725,22 +732,25 @@ impl TrackRepo for PgRepos {
     }
 
     async fn reassign_artist(&self, from_artist: Uuid, to_artist: Uuid) -> Result<u64> {
-        let res = sqlx::query("UPDATE tracks SET artist_id = $2, updated_at = now() WHERE artist_id = $1")
-            .bind(from_artist)
-            .bind(to_artist)
-            .execute(&self.pool)
-            .await
-            .map_err(db)?;
+        let res = sqlx::query(
+            "UPDATE tracks SET artist_id = $2, updated_at = now() WHERE artist_id = $1",
+        )
+        .bind(from_artist)
+        .bind(to_artist)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
         Ok(res.rows_affected())
     }
 
     async fn reassign_album(&self, from_album: Uuid, to_album: Uuid) -> Result<u64> {
-        let res = sqlx::query("UPDATE tracks SET album_id = $2, updated_at = now() WHERE album_id = $1")
-            .bind(from_album)
-            .bind(to_album)
-            .execute(&self.pool)
-            .await
-            .map_err(db)?;
+        let res =
+            sqlx::query("UPDATE tracks SET album_id = $2, updated_at = now() WHERE album_id = $1")
+                .bind(from_album)
+                .bind(to_album)
+                .execute(&self.pool)
+                .await
+                .map_err(db)?;
         Ok(res.rows_affected())
     }
 
@@ -1239,13 +1249,12 @@ impl PlaylistRepo for PgRepos {
     }
 
     async fn next_position(&self, playlist_id: Uuid) -> Result<i32> {
-        let (n,): (Option<i32>,) = sqlx::query_as(
-            r#"SELECT MAX(position) FROM playlist_tracks WHERE playlist_id = $1"#,
-        )
-        .bind(playlist_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(db)?;
+        let (n,): (Option<i32>,) =
+            sqlx::query_as(r#"SELECT MAX(position) FROM playlist_tracks WHERE playlist_id = $1"#)
+                .bind(playlist_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(db)?;
         Ok(n.map(|m| m + 1).unwrap_or(1))
     }
 
@@ -1297,22 +1306,20 @@ impl FollowRepo for PgRepos {
     }
 
     async fn followers_of(&self, artist_id: Uuid) -> Result<Vec<Uuid>> {
-        let rows: Vec<(Uuid,)> =
-            sqlx::query_as("SELECT user_id FROM follows WHERE artist_id = $1")
-                .bind(artist_id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(db)?;
+        let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT user_id FROM follows WHERE artist_id = $1")
+            .bind(artist_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
         Ok(rows.into_iter().map(|(u,)| u).collect())
     }
 
     async fn following(&self, user_id: Uuid) -> Result<Vec<Uuid>> {
-        let rows: Vec<(Uuid,)> =
-            sqlx::query_as("SELECT artist_id FROM follows WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(db)?;
+        let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT artist_id FROM follows WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
         Ok(rows.into_iter().map(|(a,)| a).collect())
     }
 
@@ -1731,11 +1738,7 @@ impl AuditRepo for PgRepos {
         .map_err(db)
     }
 
-    async fn list_for_entity(
-        &self,
-        entity_type: &str,
-        entity_id: Uuid,
-    ) -> Result<Vec<AuditEntry>> {
+    async fn list_for_entity(&self, entity_type: &str, entity_id: Uuid) -> Result<Vec<AuditEntry>> {
         sqlx::query_as::<_, AuditEntry>(
             r#"SELECT id, actor_id, action, entity_type, entity_id,
                        before_json, after_json, created_at
@@ -1749,14 +1752,54 @@ impl AuditRepo for PgRepos {
         .await
         .map_err(db)
     }
+
+    async fn get_by_id(&self, id: Uuid) -> Result<Option<AuditEntry>> {
+        sqlx::query_as::<_, AuditEntry>(
+            r#"SELECT id, actor_id, action, entity_type, entity_id,
+                      before_json, after_json, created_at
+               FROM audit_log WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn list_equalizer_changes(
+        &self,
+        subject_user_id: Option<Uuid>,
+        before_created: Option<OffsetDateTime>,
+        before_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<Vec<AuditEntry>> {
+        sqlx::query_as::<_, AuditEntry>(
+            r#"SELECT id, actor_id, action, entity_type, entity_id,
+                      before_json, after_json, created_at
+               FROM audit_log
+               WHERE entity_type = 'equalizer_state'
+                 AND ($1::uuid IS NULL OR entity_id = $1)
+                 AND (
+                   $2::timestamptz IS NULL
+                   OR (created_at, id) < ($2, $3)
+                 )
+               ORDER BY created_at DESC, id DESC
+               LIMIT $4"#,
+        )
+        .bind(subject_user_id)
+        .bind(before_created)
+        .bind(before_id)
+        .bind(limit.clamp(1, 101))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // NotificationRepo
 // ---------------------------------------------------------------------------
 
-const NOTIFICATION_COLS: &str =
-    "id, user_id, kind, artist_id, album_id, podcast_id, episode_id, title, body, read_at, created_at";
+const NOTIFICATION_COLS: &str = "id, user_id, kind, artist_id, album_id, podcast_id, episode_id, title, body, read_at, created_at";
 
 #[async_trait]
 impl NotificationRepo for PgRepos {
@@ -1974,14 +2017,13 @@ impl PlayHistoryRepo for PgRepos {
     }
 
     async fn play_count(&self, user_id: Uuid, track_id: Uuid) -> Result<i64> {
-        let (n,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM play_events WHERE user_id = $1 AND track_id = $2",
-        )
-        .bind(user_id)
-        .bind(track_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(db)?;
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM play_events WHERE user_id = $1 AND track_id = $2")
+                .bind(user_id)
+                .bind(track_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(db)?;
         Ok(n)
     }
 }
@@ -2126,12 +2168,7 @@ impl TrackFeatureRepo for PgRepos {
         Ok(())
     }
 
-    async fn nearest(
-        &self,
-        seed: Uuid,
-        model_version: &str,
-        k: usize,
-    ) -> Result<Vec<(Uuid, f32)>> {
+    async fn nearest(&self, seed: Uuid, model_version: &str, k: usize) -> Result<Vec<(Uuid, f32)>> {
         // One round-trip: resolve the seed's vector and rank against it. The
         // CROSS JOIN yields no rows when the seed has no vector → empty result.
         let rows = sqlx::query_as::<_, (Uuid, f64)>(
@@ -2387,8 +2424,7 @@ impl SessionRepo for PgRepos {
 
 const UPLOAD_COLS: &str =
     "id, user_id, state, total_files, total_bytes, report_json, error, created_at, updated_at";
-const UPLOAD_FILE_COLS: &str =
-    "id, upload_id, file_index, filename, file_hash, total_size, chunk_size, \
+const UPLOAD_FILE_COLS: &str = "id, upload_id, file_index, filename, file_hash, total_size, chunk_size, \
      total_chunks, received_chunks, state, error, created_at";
 const UPLOAD_CHUNK_COLS: &str =
     "upload_file_id, chunk_index, start_byte, end_byte, hash, received, received_at";

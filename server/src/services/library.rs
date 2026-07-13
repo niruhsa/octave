@@ -17,7 +17,7 @@ use crate::db::models::{
     self as m, Album, AlbumAlias, Artist, ArtistAlias, NewAlbum, NewAlbumAlias, NewArtist,
     NewArtistAlias, NewAuditEntry, NewTrack, NewTrackAlias, PermissionLevel, Track, TrackAlias,
 };
-use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, AuditRepo, FollowRepo, TrackRepo};
+use crate::db::repo::{AlbumRepo, AliasRepo, ArtistRepo, AuditRepo, FollowRepo, TrackRepo};
 use crate::error::{AppError, Result};
 use crate::services::notification::NotificationService;
 use crate::services::organizer::sanitize;
@@ -188,8 +188,15 @@ impl LibraryService {
         {
             let _ = self.aliases.set_primary_artist_alias(id, a.id).await;
         }
-        self.audit(caller, "artist.update", "artist", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.update",
+            "artist",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -212,8 +219,15 @@ impl LibraryService {
             .set_image(id, image_path)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("artist {id}")))?;
-        self.audit(caller, "artist.image_update", "artist", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.image_update",
+            "artist",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -238,8 +252,15 @@ impl LibraryService {
             .set_lyrics(id, meta)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
-        self.audit(caller, "track.lyrics_update", "track", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.lyrics_update",
+            "track",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -262,8 +283,15 @@ impl LibraryService {
             .set_lyrics_instrumental(id, source_sig)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
-        self.audit(caller, "track.lyrics_instrumental", "track", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.lyrics_instrumental",
+            "track",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -280,8 +308,15 @@ impl LibraryService {
             .clear_lyrics(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {id}")))?;
-        self.audit(caller, "track.lyrics_clear", "track", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.lyrics_clear",
+            "track",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -300,8 +335,15 @@ impl LibraryService {
         }
 
         self.artists.delete(id).await?;
-        self.audit(caller, "artist.delete", "artist", Some(id), before.as_ref(), None::<&()>)
-            .await?;
+        self.audit(
+            caller,
+            "artist.delete",
+            "artist",
+            Some(id),
+            before.as_ref(),
+            None::<&()>,
+        )
+        .await?;
         Ok(true)
     }
 
@@ -440,8 +482,15 @@ impl LibraryService {
         {
             let _ = self.aliases.set_primary_album_alias(id, a.id).await;
         }
-        self.audit(caller, "album.update", "album", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.update",
+            "album",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -461,8 +510,15 @@ impl LibraryService {
         }
 
         self.albums.delete(id).await?;
-        self.audit(caller, "album.delete", "album", Some(id), before.as_ref(), None::<&()>)
-            .await?;
+        self.audit(
+            caller,
+            "album.delete",
+            "album",
+            Some(id),
+            before.as_ref(),
+            None::<&()>,
+        )
+        .await?;
         Ok(true)
     }
 
@@ -559,8 +615,15 @@ impl LibraryService {
         {
             let _ = self.aliases.set_primary_track_alias(id, a.id).await;
         }
-        self.audit(caller, "track.update", "track", Some(id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.update",
+            "track",
+            Some(id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -602,8 +665,15 @@ impl LibraryService {
         // Deleting a track can drop the album's last explicit song → recompute
         // the rollup (harmless when the album is itself being cascade-deleted).
         self.albums.recompute_explicit(album_id).await?;
-        self.audit(caller, "track.delete", "track", Some(id), before.as_ref(), None::<&()>)
-            .await?;
+        self.audit(
+            caller,
+            "track.delete",
+            "track",
+            Some(id),
+            before.as_ref(),
+            None::<&()>,
+        )
+        .await?;
         Ok(true)
     }
 
@@ -668,9 +738,15 @@ impl LibraryService {
         self.seed_artist_alias(&duplicate).await;
 
         // Re-point the duplicate's catalog + followers onto the survivor.
-        self.albums.reassign_artist(duplicate_id, survivor_id).await?;
-        self.tracks.reassign_artist(duplicate_id, survivor_id).await?;
-        self.follows.reassign_artist(duplicate_id, survivor_id).await?;
+        self.albums
+            .reassign_artist(duplicate_id, survivor_id)
+            .await?;
+        self.tracks
+            .reassign_artist(duplicate_id, survivor_id)
+            .await?;
+        self.follows
+            .reassign_artist(duplicate_id, survivor_id)
+            .await?;
 
         // Preserve the duplicate's spellings on the survivor, then delete it
         // (any leftover alias rows cascade with the row).
@@ -687,8 +763,15 @@ impl LibraryService {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("artist {survivor_id}")))?;
         let before = serde_json::json!({ "survivor": survivor, "duplicate": duplicate });
-        self.audit(caller, "artist.merge", "artist", Some(survivor_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.merge",
+            "artist",
+            Some(survivor_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -721,7 +804,9 @@ impl LibraryService {
         self.seed_album_alias(&survivor).await;
         self.seed_album_alias(&duplicate).await;
 
-        self.tracks.reassign_album(duplicate_id, survivor_id).await?;
+        self.tracks
+            .reassign_album(duplicate_id, survivor_id)
+            .await?;
         self.aliases
             .reassign_album_aliases(duplicate_id, survivor_id)
             .await?;
@@ -737,8 +822,15 @@ impl LibraryService {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("album {survivor_id}")))?;
         let before = serde_json::json!({ "survivor": survivor, "duplicate": duplicate });
-        self.audit(caller, "album.merge", "album", Some(survivor_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.merge",
+            "album",
+            Some(survivor_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -769,8 +861,15 @@ impl LibraryService {
             .set_single_release(track_id, single_release)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
-        self.audit(caller, "track.move", "track", Some(track_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.move",
+            "track",
+            Some(track_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
 
         // The moved track carries its explicit flag across, so both albums'
         // rollups may change (source may lose its only explicit track; target
@@ -831,8 +930,15 @@ impl LibraryService {
             .set_single_release(track_id, single_release)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
-        self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.update",
+            "track",
+            Some(track_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -857,8 +963,15 @@ impl LibraryService {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
         self.albums.recompute_explicit(after.album_id).await?;
-        self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.update",
+            "track",
+            Some(track_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -914,8 +1027,7 @@ impl LibraryService {
                 .count();
             if !single_song_rule_satisfied(&album_type, single_count) {
                 return Err(AppError::InvalidArgument(
-                    "a single album needs at least one track marked as its single song"
-                        .to_string(),
+                    "a single album needs at least one track marked as its single song".to_string(),
                 ));
             }
         }
@@ -925,8 +1037,15 @@ impl LibraryService {
             .set_album_type(album_id, &album_type)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
-        self.audit(caller, "album.set_type", "album", Some(album_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.set_type",
+            "album",
+            Some(album_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -975,8 +1094,15 @@ impl LibraryService {
             .get(artist_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("artist {artist_id}")))?;
-        self.audit(caller, "artist.alias.add", "artist", Some(artist_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.alias.add",
+            "artist",
+            Some(artist_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1016,8 +1142,15 @@ impl LibraryService {
             .get(artist_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("artist {artist_id}")))?;
-        self.audit(caller, "artist.alias.remove", "artist", Some(artist_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.alias.remove",
+            "artist",
+            Some(artist_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1046,15 +1179,26 @@ impl LibraryService {
                 "alias does not belong to this artist".into(),
             ));
         }
-        self.aliases.set_primary_artist_alias(artist_id, alias_id).await?;
-        self.artists.update(artist_id, &alias.name, alias.sort_name.as_deref()).await?;
+        self.aliases
+            .set_primary_artist_alias(artist_id, alias_id)
+            .await?;
+        self.artists
+            .update(artist_id, &alias.name, alias.sort_name.as_deref())
+            .await?;
         let after = self
             .artists
             .get(artist_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("artist {artist_id}")))?;
-        self.audit(caller, "artist.update", "artist", Some(artist_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.update",
+            "artist",
+            Some(artist_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1099,8 +1243,15 @@ impl LibraryService {
             .get(album_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
-        self.audit(caller, "album.alias.add", "album", Some(album_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.alias.add",
+            "album",
+            Some(album_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1138,8 +1289,15 @@ impl LibraryService {
             .get(album_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
-        self.audit(caller, "album.alias.remove", "album", Some(album_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.alias.remove",
+            "album",
+            Some(album_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1165,17 +1323,31 @@ impl LibraryService {
                 "alias does not belong to this album".into(),
             ));
         }
-        self.aliases.set_primary_album_alias(album_id, alias_id).await?;
+        self.aliases
+            .set_primary_album_alias(album_id, alias_id)
+            .await?;
         self.albums
-            .update(album_id, &alias.title, before.release_year, before.cover_path.as_deref())
+            .update(
+                album_id,
+                &alias.title,
+                before.release_year,
+                before.cover_path.as_deref(),
+            )
             .await?;
         let after = self
             .albums
             .get(album_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("album {album_id}")))?;
-        self.audit(caller, "album.update", "album", Some(album_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.update",
+            "album",
+            Some(album_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1220,8 +1392,15 @@ impl LibraryService {
             .get(track_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
-        self.audit(caller, "track.alias.add", "track", Some(track_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.alias.add",
+            "track",
+            Some(track_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1259,8 +1438,15 @@ impl LibraryService {
             .get(track_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
-        self.audit(caller, "track.alias.remove", "track", Some(track_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.alias.remove",
+            "track",
+            Some(track_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1286,17 +1472,32 @@ impl LibraryService {
                 "alias does not belong to this track".into(),
             ));
         }
-        self.aliases.set_primary_track_alias(track_id, alias_id).await?;
+        self.aliases
+            .set_primary_track_alias(track_id, alias_id)
+            .await?;
         self.tracks
-            .update(track_id, &alias.title, before.track_no, before.disc_no, &before.metadata_json)
+            .update(
+                track_id,
+                &alias.title,
+                before.track_no,
+                before.disc_no,
+                &before.metadata_json,
+            )
             .await?;
         let after = self
             .tracks
             .get(track_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
-        self.audit(caller, "track.update", "track", Some(track_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "track.update",
+            "track",
+            Some(track_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
         Ok(after)
     }
 
@@ -1340,7 +1541,9 @@ impl LibraryService {
         if let Some(cur) = self.artists.get(id).await?
             && (cur.name != chosen.name || cur.sort_name != chosen.sort_name)
         {
-            self.artists.update(id, &chosen.name, chosen.sort_name.as_deref()).await?;
+            self.artists
+                .update(id, &chosen.name, chosen.sort_name.as_deref())
+                .await?;
         }
         Ok(())
     }
@@ -1363,7 +1566,12 @@ impl LibraryService {
             && cur.title != chosen.title
         {
             self.albums
-                .update(id, &chosen.title, cur.release_year, cur.cover_path.as_deref())
+                .update(
+                    id,
+                    &chosen.title,
+                    cur.release_year,
+                    cur.cover_path.as_deref(),
+                )
                 .await?;
         }
         Ok(())
@@ -1391,7 +1599,13 @@ impl LibraryService {
             && cur.title != chosen.title
         {
             self.tracks
-                .update(id, &chosen.title, cur.track_no, cur.disc_no, &cur.metadata_json)
+                .update(
+                    id,
+                    &chosen.title,
+                    cur.track_no,
+                    cur.disc_no,
+                    &cur.metadata_json,
+                )
                 .await?;
         }
         Ok(())
@@ -1474,7 +1688,9 @@ impl LibraryService {
     ) -> Result<RelocateReport> {
         caller.require(PermissionLevel::Manager)?;
         if target_language.trim().is_empty() {
-            return Err(AppError::InvalidArgument("target_language is required".into()));
+            return Err(AppError::InvalidArgument(
+                "target_language is required".into(),
+            ));
         }
         let root = self
             .library_root
@@ -1496,9 +1712,10 @@ impl LibraryService {
         // Resolve the destination artist-folder spelling.
         let target_folder = match target_folder {
             Some(f) if !f.trim().is_empty() => sanitize(f),
-            _ => self
-                .resolve_target_folder(&tracks, &root, &target_lang, &artist)
-                .await,
+            _ => {
+                self.resolve_target_folder(&tracks, &root, &target_lang, &artist)
+                    .await
+            }
         };
         let target_relative_dir = format!("{target_lang}/{target_folder}");
 
@@ -1579,7 +1796,9 @@ impl LibraryService {
         // 3. Re-point album covers that lived under an old prefix at their new
         //    on-disk location (only when the moved file actually exists).
         for al in &albums {
-            let Some(cover) = &al.cover_path else { continue };
+            let Some(cover) = &al.cover_path else {
+                continue;
+            };
             let Some(rel) = relative_to_root(cover, &root) else {
                 continue;
             };
@@ -1592,7 +1811,12 @@ impl LibraryService {
             }
             if let Err(e) = self
                 .albums
-                .update(al.id, &al.title, al.release_year, Some(&new_abs.to_string_lossy()))
+                .update(
+                    al.id,
+                    &al.title,
+                    al.release_year,
+                    Some(&new_abs.to_string_lossy()),
+                )
                 .await
             {
                 warn!(album = %al.id, error = %e, "relocate: cover_path update failed");
@@ -1612,8 +1836,15 @@ impl LibraryService {
             "moved": report.moved,
             "skipped": report.skipped,
         });
-        self.audit(caller, "artist.relocate", "artist", Some(artist_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "artist.relocate",
+            "artist",
+            Some(artist_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
 
         // File sizes are unchanged by a move, so storage aggregates need no
         // recompute.
@@ -1628,11 +1859,7 @@ impl LibraryService {
     /// album's tracks is reported as `current_folder`. `suggested_folder` is the
     /// sanitised album title — what "rename to match title" would produce. User+
     /// (a read).
-    pub async fn album_folder(
-        &self,
-        caller: &Identity,
-        album_id: Uuid,
-    ) -> Result<AlbumFolderInfo> {
+    pub async fn album_folder(&self, caller: &Identity, album_id: Uuid) -> Result<AlbumFolderInfo> {
         caller.require(PermissionLevel::User)?;
         let album = self
             .albums
@@ -1776,7 +2003,9 @@ impl LibraryService {
         // 2. Sweep leftover files (cover.jpg, artwork, logs) from each source
         //    album dir into its renamed sibling so nothing is orphaned.
         for src_dir in &source_album_dirs {
-            let Some(parent) = src_dir.parent() else { continue };
+            let Some(parent) = src_dir.parent() else {
+                continue;
+            };
             let dst_dir = parent.join(&target_folder);
             if dst_dir == *src_dir {
                 continue;
@@ -1795,7 +2024,12 @@ impl LibraryService {
                 && new_abs.is_file()
                 && let Err(e) = self
                     .albums
-                    .update(album.id, &album.title, album.release_year, Some(&new_abs.to_string_lossy()))
+                    .update(
+                        album.id,
+                        &album.title,
+                        album.release_year,
+                        Some(&new_abs.to_string_lossy()),
+                    )
                     .await
             {
                 warn!(album = %album.id, error = %e, "rename_album_folder: cover_path update failed");
@@ -1816,8 +2050,15 @@ impl LibraryService {
             "moved": report.moved,
             "skipped": report.skipped,
         });
-        self.audit(caller, "album.rename_folder", "album", Some(album_id), Some(&before), Some(&after))
-            .await?;
+        self.audit(
+            caller,
+            "album.rename_folder",
+            "album",
+            Some(album_id),
+            Some(&before),
+            Some(&after),
+        )
+        .await?;
 
         // File sizes are unchanged by a move, so storage aggregates need no
         // recompute.
@@ -1984,9 +2225,7 @@ impl LibraryService {
 }
 
 fn paginate(limit: Option<i64>, offset: Option<i64>) -> (i64, i64) {
-    let limit = limit
-        .unwrap_or(DEFAULT_PAGE_LIMIT)
-        .clamp(1, MAX_PAGE_LIMIT);
+    let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT).clamp(1, MAX_PAGE_LIMIT);
     let offset = offset.unwrap_or(0).max(0);
     (limit, offset)
 }
@@ -2257,7 +2496,9 @@ fn move_leftover_files(src_dir: &Path, dst_dir: &Path) {
         if !path.is_file() {
             continue;
         }
-        let Some(name) = path.file_name() else { continue };
+        let Some(name) = path.file_name() else {
+            continue;
+        };
         let dst = dst_dir.join(name);
         if let Err(e) = move_file(&path, &dst) {
             warn!(
@@ -2292,7 +2533,10 @@ mod tests {
     fn retarget_album_renames_only_the_album_component() {
         // The <lang>/<artist>/ prefix and the file suffix are preserved.
         assert_eq!(
-            retarget_album(Path::new("English/aespa/Old Name/01 - Song.flac"), "Armageddon"),
+            retarget_album(
+                Path::new("English/aespa/Old Name/01 - Song.flac"),
+                "Armageddon"
+            ),
             Some(PathBuf::from("English/aespa/Armageddon/01 - Song.flac"))
         );
         // A disc subfolder after the album component rides along.
@@ -2301,7 +2545,10 @@ mod tests {
             Some(PathBuf::from("English/aespa/New/Disc 1/01.flac"))
         );
         // Too few components → None.
-        assert_eq!(retarget_album(Path::new("English/aespa/01.flac"), "New"), None);
+        assert_eq!(
+            retarget_album(Path::new("English/aespa/01.flac"), "New"),
+            None
+        );
     }
 
     #[test]
@@ -2344,12 +2591,16 @@ mod tests {
         let rel = Path::new("English/aespa/Armageddon/01 - Supernova.flac");
         assert_eq!(
             retarget(rel, "Korean", "에스파"),
-            Some(PathBuf::from("Korean/에스파/Armageddon/01 - Supernova.flac"))
+            Some(PathBuf::from(
+                "Korean/에스파/Armageddon/01 - Supernova.flac"
+            ))
         );
         // Fewer than three components → nothing to retarget.
-        assert_eq!(retarget(Path::new("English/aespa"), "Korean", "에스파"), None);
+        assert_eq!(
+            retarget(Path::new("English/aespa"), "Korean", "에스파"),
+            None
+        );
     }
-
 
     fn cand(name: &str, lang: Option<&str>) -> (String, Option<String>) {
         (name.to_string(), lang.map(str::to_string))
@@ -2384,10 +2635,7 @@ mod tests {
 
     #[test]
     fn first_match_wins() {
-        let candidates = vec![
-            cand("YUQI", Some("English")),
-            cand("Yuqi", Some("English")),
-        ];
+        let candidates = vec![cand("YUQI", Some("English")), cand("Yuqi", Some("English"))];
         assert_eq!(pick_primary_index(&candidates, "English"), Some(0));
     }
 

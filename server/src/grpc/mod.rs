@@ -6,6 +6,7 @@
 pub mod auth_svc;
 pub mod discography_svc;
 pub mod discover_svc;
+pub mod equalizer_svc;
 pub mod favorite_svc;
 pub mod interceptor;
 pub mod library_svc;
@@ -25,17 +26,18 @@ use tracing::info;
 use crate::auth::service::AuthService;
 use crate::config::TlsConfig;
 use crate::error::{AppError, Result};
-use crate::shutdown::{wait_for_shutdown, ShutdownRx};
 use crate::services::{
-    ArtworkService, DiscographyService, FavoritesService, FingerprintService, IngestService,
-    LibraryService, LyricsService, MetadataService, NotificationService, PlayHistoryService,
-    PlaylistService, PodcastService, RecommendationService, ScanService, StorageService, UploadHub,
-    UploadsService,
+    ArtworkService, DiscographyService, EqualizerService, FavoritesService, FingerprintService,
+    IngestService, LibraryService, LyricsService, MetadataService, NotificationService,
+    PlayHistoryService, PlaylistService, PodcastService, RecommendationService, ScanService,
+    StorageService, UploadHub, UploadsService,
 };
+use crate::shutdown::{ShutdownRx, wait_for_shutdown};
 
 pub use auth_svc::AuthServer;
 pub use discography_svc::DiscographyServer;
 pub use discover_svc::DiscoverServer;
+pub use equalizer_svc::EqualizerServer;
 pub use favorite_svc::FavoriteServer;
 pub use interceptor::AuthInterceptor;
 pub use library_svc::LibraryServer;
@@ -61,6 +63,7 @@ pub async fn serve(
     notifications: NotificationService,
     play_history: PlayHistoryService,
     favorites: FavoritesService,
+    equalizer: EqualizerService,
     discover: RecommendationService,
     fingerprint: Option<FingerprintService>,
     discography: Option<DiscographyService>,
@@ -86,16 +89,22 @@ pub async fn serve(
         .set_serving::<proto::upload::upload_service_server::UploadServiceServer<UploadServer>>()
         .await;
     health_reporter
-        .set_serving::<proto::notification::notification_service_server::NotificationServiceServer<NotificationServer>>()
+        .set_serving::<proto::notification::notification_service_server::NotificationServiceServer<
+            NotificationServer,
+        >>()
         .await;
     health_reporter
-        .set_serving::<proto::podcast::podcast_service_server::PodcastServiceServer<PodcastServer>>()
+        .set_serving::<proto::podcast::podcast_service_server::PodcastServiceServer<PodcastServer>>(
+        )
         .await;
     health_reporter
         .set_serving::<proto::playhistory::play_history_service_server::PlayHistoryServiceServer<PlayHistoryServer>>()
         .await;
     health_reporter
         .set_serving::<proto::favorite::favorite_service_server::FavoriteServiceServer<FavoriteServer>>()
+        .await;
+    health_reporter
+        .set_serving::<proto::equalizer::equalizer_service_server::EqualizerServiceServer<EqualizerServer>>()
         .await;
     health_reporter
         .set_serving::<proto::discover::discover_service_server::DiscoverServiceServer<DiscoverServer>>()
@@ -144,6 +153,11 @@ pub async fn serve(
     .into_service();
     let favorite_server = FavoriteServer {
         favorites,
+        interceptor: interceptor.clone(),
+    }
+    .into_service();
+    let equalizer_server = EqualizerServer {
+        equalizer,
         interceptor: interceptor.clone(),
     }
     .into_service();
@@ -196,6 +210,7 @@ pub async fn serve(
         .add_service(podcast_server)
         .add_service(play_history_server)
         .add_service(favorite_server)
+        .add_service(equalizer_server)
         .add_service(discover_server)
         .add_service(discography_server)
         .add_service(lyrics_server)
@@ -216,7 +231,10 @@ pub async fn serve(
 /// (TLS + HTTP/2, `h2` ALPN, `application/grpc` content-type).
 fn server_tls_config(tls: &TlsConfig) -> Result<ServerTlsConfig> {
     let cert = std::fs::read(&tls.cert_path).map_err(|e| {
-        AppError::Config(format!("read GRPC_TLS_CERT {}: {e}", tls.cert_path.display()))
+        AppError::Config(format!(
+            "read GRPC_TLS_CERT {}: {e}",
+            tls.cert_path.display()
+        ))
     })?;
     let key = std::fs::read(&tls.key_path).map_err(|e| {
         AppError::Config(format!("read GRPC_TLS_KEY {}: {e}", tls.key_path.display()))
@@ -230,9 +248,9 @@ mod tls_tests {
     use std::path::PathBuf;
     use std::time::Duration;
     use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
+    use tonic_health::pb::HealthCheckRequest;
     use tonic_health::pb::health_check_response::ServingStatus;
     use tonic_health::pb::health_client::HealthClient;
-    use tonic_health::pb::HealthCheckRequest;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

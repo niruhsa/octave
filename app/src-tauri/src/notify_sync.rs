@@ -48,19 +48,20 @@ struct StartArgs<'a> {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("notify-sync")
         .setup(|app, _api| {
-            let handle: Option<PluginHandle<R>> = {
-                #[cfg(target_os = "android")]
+            let handle: Option<PluginHandle<R>> =
                 {
-                    Some(_api.register_android_plugin(
-                        "dev.niruhsa.octave",
-                        "NotificationSyncPlugin",
-                    )?)
-                }
-                #[cfg(not(target_os = "android"))]
-                {
-                    None
-                }
-            };
+                    #[cfg(target_os = "android")]
+                    {
+                        Some(_api.register_android_plugin(
+                            "dev.niruhsa.octave",
+                            "NotificationSyncPlugin",
+                        )?)
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        None
+                    }
+                };
             app.manage(NotifySyncHandle(std::sync::Mutex::new(handle)));
             Ok(())
         })
@@ -112,7 +113,10 @@ pub async fn notif_background_sync_enable<R: Runtime>(
                 run(
                     &app,
                     "start",
-                    StartArgs { base_url: base.as_str(), token: token.as_str() },
+                    StartArgs {
+                        base_url: base.as_str(),
+                        token: token.as_str(),
+                    },
                 );
             }
             // SECRET_KEY (no per-user notifications) or no credential — disable.

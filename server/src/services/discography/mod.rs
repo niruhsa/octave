@@ -49,7 +49,9 @@ pub fn build_provider(cfg: &DiscographyConfig) -> Arc<dyn DiscographyProvider> {
                 cfg.contact.clone(),
             ))
         }
-        _ => Arc::new(musicbrainz::MusicBrainzDiscography::new(cfg.contact.clone())),
+        _ => Arc::new(musicbrainz::MusicBrainzDiscography::new(
+            cfg.contact.clone(),
+        )),
     }
 }
 

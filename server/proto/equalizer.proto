@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package music.equalizer.v1;
+
+service EqualizerService {
+  rpc GetEqualizerState(GetEqualizerStateRequest) returns (GetEqualizerStateResponse);
+  rpc CreateEqualizerProfile(CreateEqualizerProfileRequest) returns (EqualizerMutationResponse);
+  rpc UpdateEqualizerProfile(UpdateEqualizerProfileRequest) returns (EqualizerMutationResponse);
+  rpc DeleteEqualizerProfile(DeleteEqualizerProfileRequest) returns (EqualizerMutationResponse);
+  rpc UpdateEqualizerSettings(UpdateEqualizerSettingsRequest) returns (EqualizerMutationResponse);
+  rpc CreateEqualizerDeviceRule(CreateEqualizerDeviceRuleRequest) returns (EqualizerMutationResponse);
+  rpc UpdateEqualizerDeviceRule(UpdateEqualizerDeviceRuleRequest) returns (EqualizerMutationResponse);
+  rpc DeleteEqualizerDeviceRule(DeleteEqualizerDeviceRuleRequest) returns (EqualizerMutationResponse);
+  rpc ReorderEqualizerDeviceRules(ReorderEqualizerDeviceRulesRequest) returns (EqualizerMutationResponse);
+  rpc ListEqualizerChanges(ListEqualizerChangesRequest) returns (ListEqualizerChangesResponse);
+  rpc GetEqualizerChange(GetEqualizerChangeRequest) returns (EqualizerChangeDetail);
+  rpc RollbackEqualizerChange(RollbackEqualizerChangeRequest) returns (EqualizerRollbackResponse);
+}
+
+message EqualizerBand {
+  uint32 position = 1;
+  bool enabled = 2;
+  string filter_type = 3;
+  double frequency_hz = 4;
+  double gain_db = 5;
+  double q = 6;
+}
+
+message EqualizerProfile {
+  string id = 1;
+  string name = 2;
+  uint32 format_version = 3;
+  double preamp_db = 4;
+  bool auto_headroom_enabled = 5;
+  repeated EqualizerBand bands = 6;
+  int64 revision = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message EqualizerProfileInput {
+  string id = 1;
+  string name = 2;
+  uint32 format_version = 3;
+  double preamp_db = 4;
+  bool auto_headroom_enabled = 5;
+  repeated EqualizerBand bands = 6;
+}
+
+message PortableDeviceSelector {
+  uint32 normalization_version = 1;
+  string route_kind = 2;
+  string normalized_name = 3;
+  optional string vendor_id = 4;
+  optional string product_id = 5;
+  optional string platform_scope = 6;
+  string trigger = 7;
+}
+
+message EqualizerRuleAction {
+  oneof action {
+    string profile_id = 1;
+    bool bypass = 2;
+  }
+}
+
+message EqualizerDeviceRule {
+  string id = 1;
+  string label = 2;
+  EqualizerRuleAction action = 3;
+  repeated PortableDeviceSelector selectors = 4;
+  int32 priority = 5;
+  bool enabled = 6;
+  int64 revision = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message EqualizerDeviceRuleInput {
+  string id = 1;
+  string label = 2;
+  EqualizerRuleAction action = 3;
+  repeated PortableDeviceSelector selectors = 4;
+  bool enabled = 5;
+}
+
+message EqualizerState {
+  uint32 state_format_version = 1;
+  int64 state_revision = 2;
+  int64 settings_revision = 3;
+  optional string default_profile_id = 4;
+  repeated EqualizerProfile profiles = 5;
+  repeated EqualizerDeviceRule device_rules = 6;
+}
+
+message GetEqualizerStateRequest {
+  optional int64 known_state_revision = 1;
+}
+
+message GetEqualizerStateResponse {
+  bool not_modified = 1;
+  optional EqualizerState state = 2;
+}
+
+message EqualizerMutationResponse {
+  bool changed = 1;
+  optional string audit_id = 2;
+  EqualizerState state = 3;
+}
+
+message CreateEqualizerProfileRequest {
+  EqualizerProfileInput profile = 1;
+}
+
+message UpdateEqualizerProfileRequest {
+  string profile_id = 1;
+  int64 expected_revision = 2;
+  EqualizerProfileInput profile = 3;
+}
+
+message EntityRevision {
+  string id = 1;
+  int64 expected_revision = 2;
+}
+
+message DeleteEqualizerProfileRequest {
+  string profile_id = 1;
+  int64 expected_revision = 2;
+  int64 expected_settings_revision = 3;
+  repeated EntityRevision referencing_rules = 4;
+  oneof disposition {
+    bool reject_if_referenced = 5;
+    string replace_with_profile_id = 6;
+    bool replace_with_flat = 7;
+  }
+}
+
+message UpdateEqualizerSettingsRequest {
+  int64 expected_settings_revision = 1;
+  oneof default_assignment {
+    string default_profile_id = 2;
+    bool flat = 3;
+  }
+}
+
+message CreateEqualizerDeviceRuleRequest {
+  EqualizerDeviceRuleInput rule = 1;
+}
+
+message UpdateEqualizerDeviceRuleRequest {
+  string rule_id = 1;
+  int64 expected_revision = 2;
+  EqualizerDeviceRuleInput rule = 3;
+}
+
+message DeleteEqualizerDeviceRuleRequest {
+  string rule_id = 1;
+  int64 expected_revision = 2;
+}
+
+message ReorderEqualizerDeviceRulesRequest {
+  repeated EntityRevision rules = 1;
+}
+
+message EqualizerChangeSummary {
+  string audit_id = 1;
+  string action = 2;
+  optional string actor_id = 3;
+  string owner_id = 4;
+  string resource_type = 5;
+  optional string resource_id = 6;
+  string created_at = 7;
+  int64 before_state_revision = 8;
+  int64 after_state_revision = 9;
+}
+
+message ListEqualizerChangesRequest {
+  optional string subject_user_id = 1;
+  optional string cursor = 2;
+  uint32 limit = 3;
+}
+
+message ListEqualizerChangesResponse {
+  repeated EqualizerChangeSummary changes = 1;
+  optional string next_cursor = 2;
+}
+
+message GetEqualizerChangeRequest {
+  string audit_id = 1;
+}
+
+message EqualizerChangeDetail {
+  EqualizerChangeSummary change = 1;
+  optional string before_json = 2;
+  optional string after_json = 3;
+  optional int64 current_state_revision = 4;
+  bool rollback_eligible = 5;
+}
+
+message RollbackEqualizerChangeRequest {
+  string audit_id = 1;
+  int64 expected_state_revision = 2;
+}
+
+message EqualizerChangedResource {
+  string resource_type = 1;
+  optional string resource_id = 2;
+  string change = 3;
+}
+
+message EqualizerRollbackResponse {
+  string target_owner_id = 1;
+  int64 state_revision = 2;
+  string audit_id = 3;
+  repeated EqualizerChangedResource changed_resources = 4;
+}

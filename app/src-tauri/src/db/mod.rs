@@ -61,3 +61,18 @@ pub async fn open(db_path: &Path) -> AppResult<SqlitePool> {
 pub fn default_db_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(DB_FILENAME)
 }
+
+#[cfg(test)]
+pub async fn open_in_memory() -> AppResult<SqlitePool> {
+    // A single connection is required for SQLite's per-connection `:memory:`
+    // database. This helper keeps focused repository tests fast and isolated.
+    let opts = SqliteConnectOptions::new()
+        .filename(":memory:")
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await?;
+    MIGRATIONS.run(&pool).await?;
+    Ok(pool)
+}

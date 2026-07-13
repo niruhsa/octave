@@ -29,6 +29,9 @@ mod tests {
         // minute-precision offset every engine accepts.
         assert!(s.contains('T'), "want a T separator, got {s:?}");
         assert!(!s.contains(' '), "want no spaces, got {s:?}");
-        assert!(!s.contains("+00:00:00"), "want a minute-precision offset, got {s:?}");
+        assert!(
+            !s.contains("+00:00:00"),
+            "want a minute-precision offset, got {s:?}"
+        );
     }
 }

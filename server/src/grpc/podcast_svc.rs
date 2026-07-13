@@ -8,8 +8,8 @@ use crate::db::models as m;
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::podcast as pb;
-use crate::services::podcast_dir::PodcastCandidate;
 use crate::services::PodcastService;
+use crate::services::podcast_dir::PodcastCandidate;
 use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
@@ -30,9 +30,9 @@ impl PodcastServer {
     }
 
     fn service(&self) -> Result<&PodcastService, Status> {
-        self.podcasts
-            .as_ref()
-            .ok_or_else(|| Status::failed_precondition("podcasts are not enabled (set PODCAST_PATH)"))
+        self.podcasts.as_ref().ok_or_else(|| {
+            Status::failed_precondition("podcasts are not enabled (set PODCAST_PATH)")
+        })
     }
 }
 

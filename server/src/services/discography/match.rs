@@ -43,9 +43,11 @@ pub fn normalize_title(input: &str) -> String {
         let tail = stripped[idx + 3..].trim();
         let is_qualifier = tail == "single"
             || tail == "ep"
-            || ["remaster", "deluxe", "edition", "version", "mono", "stereo", "remix", "mix"]
-                .iter()
-                .any(|k| tail.contains(k));
+            || [
+                "remaster", "deluxe", "edition", "version", "mono", "stereo", "remix", "mix",
+            ]
+            .iter()
+            .any(|k| tail.contains(k));
         if is_qualifier {
             stripped.truncate(idx);
         }

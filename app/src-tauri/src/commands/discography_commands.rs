@@ -46,7 +46,10 @@ pub async fn discography_candidates(
     state: State<'_, AppStateHandle>,
     artist_id: String,
 ) -> AppResult<Vec<DiscographyCandidate>> {
-    manager(&state).await?.discography_candidates(&artist_id).await
+    manager(&state)
+        .await?
+        .discography_candidates(&artist_id)
+        .await
 }
 
 /// Pin the artist ↔ provider match (or ignore the artist when `mbid` is null).
@@ -111,9 +114,7 @@ pub async fn discography_remove_ignore(
 
 /// Library-wide coverage for the admin dashboard.
 #[tauri::command]
-pub async fn discography_status(
-    state: State<'_, AppStateHandle>,
-) -> AppResult<DiscographyStatus> {
+pub async fn discography_status(state: State<'_, AppStateHandle>) -> AppResult<DiscographyStatus> {
     manager(&state).await?.discography_status().await
 }
 

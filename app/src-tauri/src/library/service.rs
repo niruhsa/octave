@@ -36,13 +36,25 @@ pub struct LibraryView<T> {
 
 impl<T> LibraryView<T> {
     pub(crate) fn server_with_total(items: Vec<T>, total: i64) -> Self {
-        Self { source: LibrarySource::Server, items, total: Some(total) }
+        Self {
+            source: LibrarySource::Server,
+            items,
+            total: Some(total),
+        }
     }
     pub(crate) fn server(items: Vec<T>) -> Self {
-        Self { source: LibrarySource::Server, items, total: None }
+        Self {
+            source: LibrarySource::Server,
+            items,
+            total: None,
+        }
     }
     pub(crate) fn cache(items: Vec<T>) -> Self {
-        Self { source: LibrarySource::Cache, items, total: None }
+        Self {
+            source: LibrarySource::Cache,
+            items,
+            total: None,
+        }
     }
 }
 
@@ -58,7 +70,11 @@ impl<'a> LibraryService<'a> {
 
     // ----- artists -------------------------------------------------------
 
-    pub async fn list_artists(&self, limit: i64, offset: i64) -> AppResult<LibraryView<MergedArtist>> {
+    pub async fn list_artists(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<LibraryView<MergedArtist>> {
         match self.try_server_list_artists(limit, offset).await {
             Ok(v) => Ok(v),
             Err(e) if is_offline_signal(&e) => {
@@ -75,8 +91,14 @@ impl<'a> LibraryService<'a> {
         offset: i64,
     ) -> AppResult<LibraryView<MergedArtist>> {
         let cred = self.auth.credential().await?;
-        let (artists, total) = self.auth.server().list_artists(&cred, limit, offset).await?;
-        let downloaded = self.downloaded_artist_ids(&artists.iter().map(|a| a.id.as_str()).collect::<Vec<_>>()).await?;
+        let (artists, total) = self
+            .auth
+            .server()
+            .list_artists(&cred, limit, offset)
+            .await?;
+        let downloaded = self
+            .downloaded_artist_ids(&artists.iter().map(|a| a.id.as_str()).collect::<Vec<_>>())
+            .await?;
         let items = artists
             .into_iter()
             .map(|a| {
@@ -89,7 +111,9 @@ impl<'a> LibraryService<'a> {
 
     async fn list_artists_from_cache(&self) -> AppResult<LibraryView<MergedArtist>> {
         let rows = repo::list_artists(self.pool).await?;
-        Ok(LibraryView::cache(rows.into_iter().map(MergedArtist::from_cache).collect()))
+        Ok(LibraryView::cache(
+            rows.into_iter().map(MergedArtist::from_cache).collect(),
+        ))
     }
 
     pub async fn search_artists(
@@ -120,7 +144,9 @@ impl<'a> LibraryService<'a> {
             .server()
             .search_artists(&cred, query, limit, offset)
             .await?;
-        let downloaded = self.downloaded_artist_ids(&artists.iter().map(|a| a.id.as_str()).collect::<Vec<_>>()).await?;
+        let downloaded = self
+            .downloaded_artist_ids(&artists.iter().map(|a| a.id.as_str()).collect::<Vec<_>>())
+            .await?;
         Ok(LibraryView::server(
             artists
                 .into_iter()
@@ -367,7 +393,9 @@ impl<'a> LibraryService<'a> {
         album_id: &str,
     ) -> AppResult<LibraryView<MergedTrack>> {
         let rows = repo::list_tracks_by_album(self.pool, album_id).await?;
-        Ok(LibraryView::cache(rows.into_iter().map(MergedTrack::from_cache).collect()))
+        Ok(LibraryView::cache(
+            rows.into_iter().map(MergedTrack::from_cache).collect(),
+        ))
     }
 
     pub async fn search_tracks(
@@ -546,7 +574,10 @@ impl<'a> LibraryService<'a> {
         album_id: &str,
         single_release: bool,
     ) -> AppResult<MergedTrack> {
-        let t = self.auth.move_track(track_id, album_id, single_release).await?;
+        let t = self
+            .auth
+            .move_track(track_id, album_id, single_release)
+            .await?;
         self.to_merged_track(t).await
     }
 
@@ -555,7 +586,10 @@ impl<'a> LibraryService<'a> {
         track_id: &str,
         single_release: bool,
     ) -> AppResult<MergedTrack> {
-        let t = self.auth.set_track_single_release(track_id, single_release).await?;
+        let t = self
+            .auth
+            .set_track_single_release(track_id, single_release)
+            .await?;
         self.to_merged_track(t).await
     }
 
@@ -574,7 +608,10 @@ impl<'a> LibraryService<'a> {
         album_type: &str,
         single_track_id: Option<&str>,
     ) -> AppResult<MergedAlbum> {
-        let a = self.auth.set_album_type(album_id, album_type, single_track_id).await?;
+        let a = self
+            .auth
+            .set_album_type(album_id, album_type, single_track_id)
+            .await?;
         self.to_merged_album(a).await
     }
 
@@ -585,7 +622,10 @@ impl<'a> LibraryService<'a> {
         sort_name: Option<&str>,
         language: Option<&str>,
     ) -> AppResult<MergedArtist> {
-        let a = self.auth.add_artist_alias(artist_id, name, sort_name, language).await?;
+        let a = self
+            .auth
+            .add_artist_alias(artist_id, name, sort_name, language)
+            .await?;
         self.to_merged_artist(a).await
     }
 
@@ -603,7 +643,10 @@ impl<'a> LibraryService<'a> {
         artist_id: &str,
         alias_id: &str,
     ) -> AppResult<MergedArtist> {
-        let a = self.auth.set_primary_artist_alias(artist_id, alias_id).await?;
+        let a = self
+            .auth
+            .set_primary_artist_alias(artist_id, alias_id)
+            .await?;
         self.to_merged_artist(a).await
     }
 
@@ -631,7 +674,10 @@ impl<'a> LibraryService<'a> {
         album_id: &str,
         alias_id: &str,
     ) -> AppResult<MergedAlbum> {
-        let a = self.auth.set_primary_album_alias(album_id, alias_id).await?;
+        let a = self
+            .auth
+            .set_primary_album_alias(album_id, alias_id)
+            .await?;
         self.to_merged_album(a).await
     }
 
@@ -666,7 +712,10 @@ impl<'a> LibraryService<'a> {
         track_id: &str,
         alias_id: &str,
     ) -> AppResult<MergedTrack> {
-        let t = self.auth.set_primary_track_alias(track_id, alias_id).await?;
+        let t = self
+            .auth
+            .set_primary_track_alias(track_id, alias_id)
+            .await?;
         self.to_merged_track(t).await
     }
 
@@ -684,14 +733,22 @@ impl<'a> LibraryService<'a> {
 
     /// Build a `MergedAlbum` from a server row, filling local-cover/downloaded.
     async fn to_merged_album(&self, a: crate::transport::Album) -> AppResult<MergedAlbum> {
-        let local = self.local_covers(&[a.id.as_str()]).await?.get(&a.id).cloned();
+        let local = self
+            .local_covers(&[a.id.as_str()])
+            .await?
+            .get(&a.id)
+            .cloned();
         let downloaded = local.is_some();
         Ok(MergedAlbum::from_server(a, local, downloaded))
     }
 
     /// Build a `MergedTrack` from a server row, filling the local file path.
     async fn to_merged_track(&self, t: crate::transport::Track) -> AppResult<MergedTrack> {
-        let lp = self.local_track_paths(&[t.id.as_str()]).await?.get(&t.id).cloned();
+        let lp = self
+            .local_track_paths(&[t.id.as_str()])
+            .await?
+            .get(&t.id)
+            .cloned();
         Ok(MergedTrack::from_server(t, lp))
     }
 
@@ -703,10 +760,12 @@ impl<'a> LibraryService<'a> {
         }
         // SQLite IN-list — bind each id explicitly. The set is bounded by
         // the server's pagination cap (200), so dynamic SQL is fine here.
-        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT DISTINCT artist_id FROM tracks WHERE artist_id IN ({placeholders})"
-        );
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql =
+            format!("SELECT DISTINCT artist_id FROM tracks WHERE artist_id IN ({placeholders})");
         let mut q = sqlx::query_scalar::<_, String>(&sql);
         for id in ids {
             q = q.bind(*id);
@@ -720,7 +779,10 @@ impl<'a> LibraryService<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT album_id, local_cover_path FROM album_art WHERE album_id IN ({placeholders})"
         );
@@ -738,10 +800,11 @@ impl<'a> LibraryService<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT id, local_file_path FROM tracks WHERE id IN ({placeholders})"
-        );
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT id, local_file_path FROM tracks WHERE id IN ({placeholders})");
         let mut q = sqlx::query_as::<_, (String, String)>(&sql);
         for id in ids {
             q = q.bind(*id);

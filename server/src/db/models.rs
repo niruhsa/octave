@@ -411,6 +411,187 @@ pub struct DeviceToken {
     pub last_seen_at: OffsetDateTime,
 }
 
+// ---------------------------------------------------------------------------
+// Cross-device synced equalizer configuration (Phase 17).
+// ---------------------------------------------------------------------------
+
+/// One ordered parametric-EQ filter. Version 1 supports peaking filters only,
+/// but the kind stays a string on the wire/storage boundary so future values
+/// fail closed instead of being mis-decoded as a known enum variant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+pub struct EqualizerBand {
+    pub position: i32,
+    pub enabled: bool,
+    pub filter_type: String,
+    pub frequency_hz: f64,
+    pub gain_db: f64,
+    pub q: f64,
+}
+
+/// A complete saved profile aggregate, including its ordered filters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EqualizerProfile {
+    pub id: Uuid,
+    pub name: String,
+    pub format_version: i32,
+    pub preamp_db: f64,
+    pub auto_headroom_enabled: bool,
+    pub bands: Vec<EqualizerBand>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+/// Typed, portable output matcher. It intentionally has no native endpoint
+/// id, Bluetooth address, serial, or unconfirmed raw OS label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortableDeviceSelector {
+    pub normalization_version: i32,
+    pub route_kind: String,
+    pub normalized_name: String,
+    pub vendor_id: Option<String>,
+    pub product_id: Option<String>,
+    pub platform_scope: Option<String>,
+    pub trigger: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EqualizerRuleAction {
+    Profile { profile_id: Uuid },
+    Bypass,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EqualizerDeviceRule {
+    pub id: Uuid,
+    pub label: String,
+    pub action: EqualizerRuleAction,
+    pub selectors: Vec<PortableDeviceSelector>,
+    pub priority: i32,
+    pub enabled: bool,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+/// The bounded, user-owned server aggregate mirrored atomically by clients.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EqualizerState {
+    pub state_format_version: i32,
+    pub state_revision: i64,
+    pub settings_revision: i64,
+    pub default_profile_id: Option<Uuid>,
+    pub profiles: Vec<EqualizerProfile>,
+    pub device_rules: Vec<EqualizerDeviceRule>,
+}
+
+/// Canonical profile write shape. `name_key` is server-computed and never
+/// accepted directly from a transport payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EqualizerProfileDraft {
+    pub id: Uuid,
+    pub name: String,
+    pub name_key: String,
+    pub format_version: i32,
+    pub preamp_db: f64,
+    pub auto_headroom_enabled: bool,
+    pub bands: Vec<EqualizerBand>,
+}
+
+/// Canonical rule write shape. Selector JSON/hash are derived from the typed
+/// selectors after validation and canonical sorting.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EqualizerDeviceRuleDraft {
+    pub id: Uuid,
+    pub label: String,
+    pub action: EqualizerRuleAction,
+    pub selectors: Vec<PortableDeviceSelector>,
+    pub selector_json: String,
+    pub selector_hash: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityRevision {
+    pub id: Uuid,
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProfileDeleteDisposition {
+    RejectIfReferenced,
+    ReplaceWithProfile { profile_id: Uuid },
+    ReplaceWithFlat,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteEqualizerProfile {
+    pub profile_id: Uuid,
+    pub expected_revision: i64,
+    pub expected_settings_revision: i64,
+    pub referencing_rules: Vec<EntityRevision>,
+    pub disposition: ProfileDeleteDisposition,
+}
+
+#[derive(Debug, Clone)]
+pub struct EqualizerMutationOutcome {
+    pub changed: bool,
+    pub audit_id: Option<Uuid>,
+    pub state: EqualizerState,
+}
+
+/// Versioned audit envelope. Both sides contain a full canonical aggregate;
+/// resource metadata identifies the affected subset while the full state makes
+/// rollback validation/restoration deterministic and self-contained.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EqualizerAuditSnapshot {
+    pub snapshot_format_version: i32,
+    pub resource_type: String,
+    pub resource_id: Option<Uuid>,
+    pub disposition: Option<ProfileDeleteDisposition>,
+    pub original_audit_id: Option<Uuid>,
+    pub state: EqualizerState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EqualizerChangedResource {
+    pub resource_type: String,
+    pub resource_id: Option<Uuid>,
+    pub change: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EqualizerRollbackOutcome {
+    pub target_owner_id: Uuid,
+    pub state_revision: i64,
+    pub audit_id: Uuid,
+    pub changed_resources: Vec<EqualizerChangedResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EqualizerChangeSummary {
+    pub audit_id: Uuid,
+    pub action: String,
+    pub actor_id: Option<Uuid>,
+    pub owner_id: Uuid,
+    pub resource_type: String,
+    pub resource_id: Option<Uuid>,
+    pub created_at: OffsetDateTime,
+    pub before_state_revision: i64,
+    pub after_state_revision: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct EqualizerChangeDetail {
+    pub change: EqualizerChangeSummary,
+    pub before_json: Option<String>,
+    pub after_json: Option<String>,
+    pub current_state_revision: Option<i64>,
+    pub rollback_eligible: bool,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub id: Uuid,

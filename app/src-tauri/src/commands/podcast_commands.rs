@@ -30,7 +30,11 @@ async fn service<'a>(state: &'a State<'a, AppStateHandle>) -> AppResult<PodcastS
 
 fn normalise_limit(limit: Option<i64>) -> i64 {
     let l = limit.unwrap_or(DEFAULT_LIMIT);
-    if l <= 0 { DEFAULT_LIMIT } else { l.min(200) }
+    if l <= 0 {
+        DEFAULT_LIMIT
+    } else {
+        l.min(200)
+    }
 }
 
 #[tauri::command]
@@ -52,10 +56,7 @@ pub async fn podcast_list(
 }
 
 #[tauri::command]
-pub async fn podcast_get(
-    state: State<'_, AppStateHandle>,
-    id: String,
-) -> AppResult<MergedPodcast> {
+pub async fn podcast_get(state: State<'_, AppStateHandle>, id: String) -> AppResult<MergedPodcast> {
     let svc = service(&state).await?;
     svc.get_podcast(&id).await
 }
@@ -77,7 +78,8 @@ pub async fn podcast_record_progress(
     completed: bool,
 ) -> AppResult<()> {
     let svc = service(&state).await?;
-    svc.record_progress(&episode_id, position_ms, completed).await
+    svc.record_progress(&episode_id, position_ms, completed)
+        .await
 }
 
 #[tauri::command]

@@ -28,10 +28,7 @@ async fn manager(state: &State<'_, AppStateHandle>) -> AppResult<Arc<AuthManager
 
 /// Follow an artist. Returns the resulting follow state (`true`).
 #[tauri::command]
-pub async fn follow_artist(
-    state: State<'_, AppStateHandle>,
-    artist_id: String,
-) -> AppResult<bool> {
+pub async fn follow_artist(state: State<'_, AppStateHandle>, artist_id: String) -> AppResult<bool> {
     manager(&state).await?.follow_artist(&artist_id).await
 }
 
@@ -46,10 +43,7 @@ pub async fn unfollow_artist(
 
 /// Whether the caller currently follows `artist_id`.
 #[tauri::command]
-pub async fn is_following(
-    state: State<'_, AppStateHandle>,
-    artist_id: String,
-) -> AppResult<bool> {
+pub async fn is_following(state: State<'_, AppStateHandle>, artist_id: String) -> AppResult<bool> {
     manager(&state).await?.is_following(&artist_id).await
 }
 

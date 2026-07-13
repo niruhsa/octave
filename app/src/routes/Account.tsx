@@ -20,6 +20,7 @@ import { PowerIcon } from "../components/icons";
 import { Skeleton } from "../components/Skeleton";
 import { TransportStatus } from "../components/TransportStatus";
 import { DiscographyCoverage } from "../components/DiscographyCoverage";
+import { useEqualizerStore } from "../equalizer/store";
 
 /**
  * /account — change your own password, or (admin/secret-key) manage any user:
@@ -294,6 +295,10 @@ function ServerSession() {
     setBusy(true);
     setErr(null);
     setDone(null);
+    const equalizer = useEqualizerStore.getState();
+    // Remove the previous server's audible correction before native changes
+    // account namespaces. This also makes an unreachable destination Flat.
+    equalizer.resetForScopeChange();
     try {
       // Send the gRPC URL whenever one is set (it's prefilled from the saved
       // override), so collapsing the panel doesn't silently drop it. An empty
@@ -311,8 +316,11 @@ function ServerSession() {
         setSession(null);
         navigate("/login");
       }
+      await equalizer.load();
     } catch (caught) {
       setErr(formatError(caught));
+      // Re-read whichever native scope ultimately remained configured.
+      void equalizer.load();
     } finally {
       setBusy(false);
     }

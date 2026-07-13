@@ -31,7 +31,7 @@ mod chromaprint;
 pub mod onnx;
 
 pub use extractor::{DspExtractor, FeatureExtractor};
-pub use index::{cosine_similarity, BruteForceIndex, PgVectorIndex, SimilarityIndex};
+pub use index::{BruteForceIndex, PgVectorIndex, SimilarityIndex, cosine_similarity};
 pub use loudness::Loudness;
 pub use service::{FingerprintReport, FingerprintService, FingerprintStatus};
 

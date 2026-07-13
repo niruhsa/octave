@@ -142,7 +142,11 @@ fn extract_tar(source: &Path, kind: ArchiveKind, dest_dir: &Path) -> Result<Vec<
         ArchiveKind::TarGz => Box::new(flate2::read::GzDecoder::new(file)),
         ArchiveKind::TarBz2 => Box::new(bzip2::read::BzDecoder::new(file)),
         ArchiveKind::TarXz => Box::new(xz2::read::XzDecoder::new(file)),
-        _ => return Err(AppError::Internal("extract_tar called with non-tar kind".into())),
+        _ => {
+            return Err(AppError::Internal(
+                "extract_tar called with non-tar kind".into(),
+            ));
+        }
     };
 
     let mut archive = tar::Archive::new(reader);
@@ -225,13 +229,22 @@ mod tests {
 
     #[test]
     fn detect_zip_and_tarballs() {
-        assert_eq!(ArchiveKind::detect(Path::new("a.zip")), Some(ArchiveKind::Zip));
-        assert_eq!(ArchiveKind::detect(Path::new("a.tar")), Some(ArchiveKind::Tar));
+        assert_eq!(
+            ArchiveKind::detect(Path::new("a.zip")),
+            Some(ArchiveKind::Zip)
+        );
+        assert_eq!(
+            ArchiveKind::detect(Path::new("a.tar")),
+            Some(ArchiveKind::Tar)
+        );
         assert_eq!(
             ArchiveKind::detect(Path::new("a.tar.gz")),
             Some(ArchiveKind::TarGz)
         );
-        assert_eq!(ArchiveKind::detect(Path::new("a.tgz")), Some(ArchiveKind::TarGz));
+        assert_eq!(
+            ArchiveKind::detect(Path::new("a.tgz")),
+            Some(ArchiveKind::TarGz)
+        );
         assert_eq!(
             ArchiveKind::detect(Path::new("a.tar.bz2")),
             Some(ArchiveKind::TarBz2)
@@ -240,7 +253,10 @@ mod tests {
             ArchiveKind::detect(Path::new("a.tar.xz")),
             Some(ArchiveKind::TarXz)
         );
-        assert_eq!(ArchiveKind::detect(Path::new("Album.TXZ")), Some(ArchiveKind::TarXz));
+        assert_eq!(
+            ArchiveKind::detect(Path::new("Album.TXZ")),
+            Some(ArchiveKind::TarXz)
+        );
     }
 
     #[test]
@@ -329,7 +345,8 @@ mod tests {
             let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
             zw.start_file("Album/01 - Song.flac", opts).unwrap();
             zw.write_all(b"FAKEFLAC").unwrap();
-            zw.start_file("__MACOSX/Album/._01 - Song.flac", opts).unwrap();
+            zw.start_file("__MACOSX/Album/._01 - Song.flac", opts)
+                .unwrap();
             zw.write_all(b"\x00\x05\x16\x07applemeta").unwrap();
             zw.start_file("Album/._01 - Song.flac", opts).unwrap();
             zw.write_all(b"\x00\x05\x16\x07applemeta").unwrap();
@@ -337,7 +354,11 @@ mod tests {
         }
         let out = dir.path().join("out");
         let written = extract(&zip_path, ArchiveKind::Zip, &out).unwrap();
-        assert_eq!(written.len(), 1, "only the real audio member should be written");
+        assert_eq!(
+            written.len(),
+            1,
+            "only the real audio member should be written"
+        );
         assert!(out.join("Album/01 - Song.flac").is_file());
         assert!(!out.join("__MACOSX").exists());
         assert!(!out.join("Album/._01 - Song.flac").exists());
@@ -360,7 +381,10 @@ mod tests {
         );
         assert_eq!(safe_join(base, Path::new("../etc/passwd")), None);
         assert_eq!(safe_join(base, Path::new("/abs/path")), None);
-        assert_eq!(safe_join(base, Path::new("./a.flac")), Some(PathBuf::from("/dest/a.flac")));
+        assert_eq!(
+            safe_join(base, Path::new("./a.flac")),
+            Some(PathBuf::from("/dest/a.flac"))
+        );
         assert_eq!(safe_join(base, Path::new("")), None);
     }
 }

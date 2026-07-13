@@ -60,7 +60,9 @@ mod imp {
         pub fn load(model_path: &Path) -> Result<Self> {
             let session = Session::builder()
                 .and_then(|mut b| b.commit_from_file(model_path))
-                .map_err(|e| AppError::Config(format!("ONNX load {}: {e}", model_path.display())))?;
+                .map_err(|e| {
+                    AppError::Config(format!("ONNX load {}: {e}", model_path.display()))
+                })?;
             // The model_version embeds the file stem so different models don't
             // collide; the analysis pass re-analyzes on a change.
             let stem = model_path

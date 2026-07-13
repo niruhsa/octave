@@ -141,7 +141,10 @@ fn itunes_result_to_candidate(r: &Value) -> Option<PodcastCandidate> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        author: r.get("artistName").and_then(|v| v.as_str()).map(String::from),
+        author: r
+            .get("artistName")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         description: None,
         image_url: r
             .get("artworkUrl600")
@@ -152,7 +155,11 @@ fn itunes_result_to_candidate(r: &Value) -> Option<PodcastCandidate> {
         categories: r
             .get("genres")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|g| g.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|g| g.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         itunes_id: r
             .get("collectionId")
@@ -199,7 +206,10 @@ impl PodcastIndexDirectory {
         let token = pi_auth_token(&self.api_key, &self.api_secret, date);
         let mut h = HeaderMap::new();
         let bad = |e| AppError::Internal(format!("podcastindex header: {e}"));
-        h.insert("X-Auth-Key", HeaderValue::from_str(&self.api_key).map_err(bad)?);
+        h.insert(
+            "X-Auth-Key",
+            HeaderValue::from_str(&self.api_key).map_err(bad)?,
+        );
         h.insert(
             "X-Auth-Date",
             HeaderValue::from_str(&date.to_string()).map_err(bad)?,
@@ -267,9 +277,16 @@ fn pi_feed_to_candidate(f: &Value) -> Option<PodcastCandidate> {
     }
     Some(PodcastCandidate {
         feed_url,
-        title: f.get("title").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        title: f
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         author: f.get("author").and_then(|v| v.as_str()).map(String::from),
-        description: f.get("description").and_then(|v| v.as_str()).map(String::from),
+        description: f
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         image_url: f
             .get("artwork")
             .or_else(|| f.get("image"))
@@ -278,7 +295,11 @@ fn pi_feed_to_candidate(f: &Value) -> Option<PodcastCandidate> {
         categories: f
             .get("categories")
             .and_then(|v| v.as_object())
-            .map(|m| m.values().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|m| {
+                m.values()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         itunes_id: f.get("itunesId").and_then(|v| v.as_i64()),
         podcastindex_id: f.get("id").and_then(|v| v.as_i64()),
@@ -330,7 +351,10 @@ mod tests {
         assert_eq!(c.author.as_deref(), Some("Tech Media"));
         assert_eq!(c.itunes_id, Some(12345));
         assert_eq!(c.categories, vec!["Technology", "News"]);
-        assert_eq!(c.image_url.as_deref(), Some("https://art.example.com/dt600.jpg"));
+        assert_eq!(
+            c.image_url.as_deref(),
+            Some("https://art.example.com/dt600.jpg")
+        );
     }
 
     #[test]
@@ -367,7 +391,10 @@ mod tests {
         let b = pi_auth_token("key", "secret", 1_700_000_000);
         assert_eq!(a, b, "same inputs → same token");
         assert_eq!(a.len(), 40, "sha1 hex is 40 chars");
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
         // Changing the date changes the signature.
         assert_ne!(a, pi_auth_token("key", "secret", 1_700_000_001));
     }

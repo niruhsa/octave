@@ -229,7 +229,9 @@ impl LyricsService {
             .await?
         {
             LyricsOutcome::Resolved { .. } => self.get(caller, track_id).await,
-            _ => Err(AppError::InvalidArgument("no renderable lyrics in upload".into())),
+            _ => Err(AppError::InvalidArgument(
+                "no renderable lyrics in upload".into(),
+            )),
         }
     }
 
@@ -303,8 +305,7 @@ impl LyricsService {
         }
         let this = self.clone();
         tokio::spawn(async move {
-            let mut tick =
-                tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             tick.tick().await; // consume the immediate first tick (startup pass ran)
             loop {
                 tick.tick().await;
@@ -593,7 +594,13 @@ mod tests {
         std::fs::write(&audio, b"x").unwrap();
         std::fs::write(dir.path().join("lyrics.lrc"), "plain words").unwrap();
         let res = resolve_source(None, &audio, &q()).await.unwrap();
-        assert!(matches!(res, Resolution::Hit { source: "sidecar", .. }));
+        assert!(matches!(
+            res,
+            Resolution::Hit {
+                source: "sidecar",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -606,7 +613,13 @@ mod tests {
             synced: true,
         })));
         let res = resolve_source(Some(&src), &audio, &q()).await.unwrap();
-        assert!(matches!(res, Resolution::Hit { source: "lrclib", .. }));
+        assert!(matches!(
+            res,
+            Resolution::Hit {
+                source: "lrclib",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

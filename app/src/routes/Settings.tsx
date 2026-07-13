@@ -26,6 +26,7 @@ import {
   PlayIcon,
   PodcastIcon,
   SearchIcon,
+  SlidersIcon,
 } from "../components/icons";
 import { useQuickSearchStore } from "../quicksearch/store";
 import { usePodcastPrefsStore } from "../podcasts/prefs";
@@ -45,11 +46,13 @@ import {
   type LoudnessMode,
 } from "../settings/playback";
 import { usePlayerStore } from "../player/store";
+import { EqualizerSettings } from "../equalizer/EqualizerSettings";
 
-type SectionId = "player" | "keybinds" | "quicksearch" | "podcasts" | "networking";
+type SectionId = "player" | "equalizer" | "keybinds" | "quicksearch" | "podcasts" | "networking";
 
 const SECTIONS: { id: SectionId; label: string; Icon: typeof KeyIcon }[] = [
   { id: "player", label: "Player", Icon: PlayIcon },
+  { id: "equalizer", label: "Equalizer", Icon: SlidersIcon },
   { id: "keybinds", label: "Keybinds & Hotkeys", Icon: KeyIcon },
   { id: "quicksearch", label: "Quick Search", Icon: SearchIcon },
   { id: "podcasts", label: "Podcasts", Icon: PodcastIcon },
@@ -60,7 +63,7 @@ export default function Settings() {
   const [section, setSection] = useState<SectionId>("keybinds");
 
   return (
-    <section className="mx-auto flex max-w-4xl flex-col gap-6 p-6 md:p-8">
+    <section className="mx-auto flex max-w-6xl flex-col gap-6 p-6 md:p-8">
       <h1 className="text-[27px] font-semibold tracking-tight">Settings</h1>
 
       <div className="flex flex-col gap-6 md:flex-row md:gap-8">
@@ -85,6 +88,7 @@ export default function Settings() {
         {/* content */}
         <div className="min-w-0 flex-1">
           {section === "player" && <PlayerSection />}
+          {section === "equalizer" && <EqualizerSettings />}
           {section === "keybinds" && <KeybindsSection />}
           {section === "quicksearch" && <QuickSearchSection />}
           {section === "podcasts" && <PodcastsSection />}

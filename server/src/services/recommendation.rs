@@ -192,7 +192,8 @@ impl RecommendationService {
             .compute_playlist_recs(seed_track_ids, &exclude, PLAYLIST_REC_DEFAULT)
             .await?;
         let key = self.cache_key(seed_track_ids);
-        self.store_pool(cache, &key, out.iter().map(|t| t.id).collect()).await;
+        self.store_pool(cache, &key, out.iter().map(|t| t.id).collect())
+            .await;
         Ok(())
     }
 
@@ -323,7 +324,8 @@ impl RecommendationService {
             return Ok(neighbors);
         }
         // Behavioral fallback: other tracks by the same artist.
-        self.artist_tracks_excluding(seed.artist_id, track_id, limit).await
+        self.artist_tracks_excluding(seed.artist_id, track_id, limit)
+            .await
     }
 
     /// Spotify-style **playlist recommendations**: aggregate the acoustic
@@ -380,12 +382,16 @@ impl RecommendationService {
                 }
             }
             let pool = limit.max(PLAYLIST_REC_DEFAULT);
-            let out = self.compute_playlist_recs(seed_track_ids, &exclude, pool).await?;
-            self.store_pool(cache, &key, out.iter().map(|t| t.id).collect()).await;
+            let out = self
+                .compute_playlist_recs(seed_track_ids, &exclude, pool)
+                .await?;
+            self.store_pool(cache, &key, out.iter().map(|t| t.id).collect())
+                .await;
             return Ok(out.into_iter().take(limit).collect());
         }
 
-        self.compute_playlist_recs(seed_track_ids, &exclude, limit).await
+        self.compute_playlist_recs(seed_track_ids, &exclude, limit)
+            .await
     }
 
     /// Serve a cache hit: hydrate the top `limit` ids in one batched query when
@@ -422,7 +428,10 @@ impl RecommendationService {
         // the summed-per-seed aggregation below (bruteforce / in-memory).
         if let Some(index) = &self.index {
             let seeds: Vec<Uuid> = seed_track_ids.iter().take(REC_MAX_SEEDS).copied().collect();
-            if let Some(ranked) = index.centroid_nearest(&seeds, REC_NEIGHBORS_PER_SEED).await? {
+            if let Some(ranked) = index
+                .centroid_nearest(&seeds, REC_NEIGHBORS_PER_SEED)
+                .await?
+            {
                 if !ranked.is_empty() {
                     // Rank → truncate → hydrate: only fetch the diversification
                     // window, in one batched query (never thousands of rows).
@@ -456,9 +465,7 @@ impl RecommendationService {
             }
             if !scores.is_empty() {
                 let mut ranked: Vec<(Uuid, f32)> = scores.into_iter().collect();
-                ranked.sort_by(|a, b| {
-                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 // Rank → truncate → hydrate: batch-fetch only the window.
                 let ids: Vec<Uuid> = ranked.into_iter().map(|(id, _)| id).collect();
                 let candidates = self.hydrate_window(ids, limit).await?;
@@ -469,7 +476,8 @@ impl RecommendationService {
         }
 
         // Behavioral fallback: the playlist's artists, weighted by frequency.
-        self.recommend_behavioral(seed_track_ids, exclude, limit).await
+        self.recommend_behavioral(seed_track_ids, exclude, limit)
+            .await
     }
 
     /// Behavioral playlist recommendations: pull tracks from the playlist's
@@ -532,7 +540,8 @@ impl RecommendationService {
 
         // Fallback: behavioral artist radio (the seed's artist catalog), seed first.
         let mut out = vec![seed.clone()];
-        self.append_artist_radio(&mut out, seed.artist_id, seed.id).await?;
+        self.append_artist_radio(&mut out, seed.artist_id, seed.id)
+            .await?;
         out.truncate(RADIO_LIMIT);
         Ok(out)
     }
@@ -540,11 +549,7 @@ impl RecommendationService {
     /// The seed's nearest acoustic neighbors hydrated to `Track`s (nearest
     /// first, seed excluded), or `None` when there's no usable embedding (index
     /// disabled, or seed not yet analyzed) — signaling the caller to fall back.
-    async fn acoustic_neighbors(
-        &self,
-        seed: Uuid,
-        k: usize,
-    ) -> Result<Option<Vec<Track>>> {
+    async fn acoustic_neighbors(&self, seed: Uuid, k: usize) -> Result<Option<Vec<Track>>> {
         let Some(index) = &self.index else {
             return Ok(None);
         };
@@ -624,7 +629,11 @@ impl RecommendationService {
             .filter_map(|s| s.artist_id)
             .collect();
         let mut seen_artists: HashSet<Uuid> = artist_ids.iter().copied().collect();
-        for id in self.favorites.list_ids(user_id, FavoriteKind::Artist).await? {
+        for id in self
+            .favorites
+            .list_ids(user_id, FavoriteKind::Artist)
+            .await?
+        {
             if seen_artists.insert(id) {
                 artist_ids.push(id);
             }
@@ -646,7 +655,10 @@ impl RecommendationService {
     }
 
     async fn albums_from_recent_plays(&self, user_id: Uuid) -> Result<Vec<Album>> {
-        let plays = self.play_history.recent(user_id, RECENT_PLAYS_SCAN, 0).await?;
+        let plays = self
+            .play_history
+            .recent(user_id, RECENT_PLAYS_SCAN, 0)
+            .await?;
         let mut albums = Vec::new();
         let mut seen = HashSet::new();
         for p in plays {
@@ -665,7 +677,10 @@ impl RecommendationService {
     }
 
     async fn favorite_albums(&self, user_id: Uuid) -> Result<Vec<Album>> {
-        let ids = self.favorites.list_ids(user_id, FavoriteKind::Album).await?;
+        let ids = self
+            .favorites
+            .list_ids(user_id, FavoriteKind::Album)
+            .await?;
         let mut albums = Vec::new();
         for id in ids.into_iter().take(SECTION_LIMIT) {
             if let Some(a) = self.albums.get(id).await? {
@@ -784,7 +799,12 @@ mod tests {
         async fn recent(&self, _: Uuid, _: i64, _: i64) -> Result<Vec<PlayEvent>> {
             Ok(self.recent.lock().unwrap().clone())
         }
-        async fn top_tracks(&self, _: Uuid, _: OffsetDateTime, _: i64) -> Result<Vec<TrackPlayStat>> {
+        async fn top_tracks(
+            &self,
+            _: Uuid,
+            _: OffsetDateTime,
+            _: i64,
+        ) -> Result<Vec<TrackPlayStat>> {
             Ok(vec![])
         }
         async fn top_artists(
@@ -862,7 +882,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Album>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list_by_artist(&self, artist_id: Uuid) -> Result<Vec<Album>> {
             Ok(self
@@ -883,7 +909,13 @@ mod tests {
         async fn search(&self, _: &str, _: i64, _: i64) -> Result<Vec<Album>> {
             Ok(vec![])
         }
-        async fn update(&self, _: Uuid, _: &str, _: Option<i32>, _: Option<&str>) -> Result<Option<Album>> {
+        async fn update(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Option<i32>,
+            _: Option<&str>,
+        ) -> Result<Option<Album>> {
             Ok(None)
         }
         async fn set_album_type(&self, _: Uuid, _: &str) -> Result<Option<Album>> {
@@ -955,7 +987,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Track>> {
-            Ok(self.rows.lock().unwrap().iter().find(|t| t.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == id)
+                .cloned())
         }
         async fn list_by_album(&self, album_id: Uuid) -> Result<Vec<Track>> {
             Ok(self
@@ -970,7 +1008,14 @@ mod tests {
         async fn search(&self, _: &str, _: i64, _: i64) -> Result<Vec<Track>> {
             Ok(vec![])
         }
-        async fn update(&self, _: Uuid, _: &str, _: Option<i32>, _: Option<i32>, _: &str) -> Result<Option<Track>> {
+        async fn update(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Option<i32>,
+            _: Option<i32>,
+            _: &str,
+        ) -> Result<Option<Track>> {
             Ok(None)
         }
         async fn find_by_file_path(&self, _: &str) -> Result<Option<Track>> {
@@ -1040,7 +1085,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Artist>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list(&self, _: i64, _: i64) -> Result<Vec<Artist>> {
             Ok(vec![])
@@ -1090,7 +1141,14 @@ mod tests {
             albums.clone(),
             artists.clone(),
         );
-        Fakes { svc, plays, favs, tracks, albums, artists }
+        Fakes {
+            svc,
+            plays,
+            favs,
+            tracks,
+            albums,
+            artists,
+        }
     }
 
     fn user() -> Identity {
@@ -1161,7 +1219,11 @@ mod tests {
         f.tracks.insert(artist.id, al1.id, "t1");
         f.tracks.insert(artist.id, al2.id, "t2");
 
-        let tracks = f.svc.get_radio(&user(), Some(artist.id), None, None).await.unwrap();
+        let tracks = f
+            .svc
+            .get_radio(&user(), Some(artist.id), None, None)
+            .await
+            .unwrap();
         assert_eq!(tracks.len(), 2);
     }
 
@@ -1174,15 +1236,26 @@ mod tests {
         let seed_track = f.tracks.insert(artist.id, seed.id, "seedtrack");
         f.tracks.insert(artist.id, other.id, "othertrack");
 
-        let tracks = f.svc.get_radio(&user(), None, Some(seed.id), None).await.unwrap();
+        let tracks = f
+            .svc
+            .get_radio(&user(), None, Some(seed.id), None)
+            .await
+            .unwrap();
         assert_eq!(tracks.len(), 2);
-        assert_eq!(tracks[0].id, seed_track.id, "seed album's track comes first");
+        assert_eq!(
+            tracks[0].id, seed_track.id,
+            "seed album's track comes first"
+        );
     }
 
     #[tokio::test]
     async fn radio_requires_a_seed() {
         let f = make();
-        let err = f.svc.get_radio(&user(), None, None, None).await.unwrap_err();
+        let err = f
+            .svc
+            .get_radio(&user(), None, None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
     }
 
@@ -1243,7 +1316,10 @@ mod tests {
         }
         idx.ranks.lock().unwrap().insert(seed.id, ranks);
 
-        let out = svc.get_radio(&user(), None, None, Some(seed.id)).await.unwrap();
+        let out = svc
+            .get_radio(&user(), None, None, Some(seed.id))
+            .await
+            .unwrap();
         // Seed first.
         assert_eq!(out[0].id, seed.id);
         // All 6 neighbors share one album → album cap (2) bounds the *capped*
@@ -1262,7 +1338,10 @@ mod tests {
         let seed = f.tracks.insert(artist.id, alb.id, "seed");
         let sibling = f.tracks.insert(artist.id, alb.id, "sibling");
 
-        let out = svc.get_radio(&user(), None, None, Some(seed.id)).await.unwrap();
+        let out = svc
+            .get_radio(&user(), None, None, Some(seed.id))
+            .await
+            .unwrap();
         // Behavioral fallback: seed first, then the artist's other tracks.
         assert_eq!(out[0].id, seed.id);
         assert!(out.iter().any(|t| t.id == sibling.id));
@@ -1271,7 +1350,10 @@ mod tests {
     #[tokio::test]
     async fn radio_from_unknown_track_is_404() {
         let f = make();
-        let svc = f.svc.clone().with_similarity(Arc::new(FakeIndex::default()));
+        let svc = f
+            .svc
+            .clone()
+            .with_similarity(Arc::new(FakeIndex::default()));
         let err = svc
             .get_radio(&user(), None, None, Some(Uuid::new_v4()))
             .await
@@ -1288,8 +1370,15 @@ mod tests {
         let artist = f.artists.insert("A");
         let alb = f.albums.insert(artist.id, "Alb");
         let seed = f.tracks.insert(artist.id, alb.id, "seed");
-        let n1 = f.tracks.insert(f.artists.insert("B").id, f.albums.insert(Uuid::new_v4(), "x").id, "n1");
-        idx.ranks.lock().unwrap().insert(seed.id, vec![(n1.id, 0.9)]);
+        let n1 = f.tracks.insert(
+            f.artists.insert("B").id,
+            f.albums.insert(Uuid::new_v4(), "x").id,
+            "n1",
+        );
+        idx.ranks
+            .lock()
+            .unwrap()
+            .insert(seed.id, vec![(n1.id, 0.9)]);
 
         let out = svc.similar_tracks(&user(), seed.id, 5).await.unwrap();
         assert_eq!(out.len(), 1);
@@ -1320,11 +1409,21 @@ mod tests {
         // the per-artist diversity cap doesn't drop them.
         let arc = f.artists.insert("Cand");
         let alc = f.albums.insert(arc.id, "C");
-        let shared = f.tracks.insert(f.artists.insert("Shared").id, f.albums.insert(Uuid::new_v4(), "sh").id, "shared");
+        let shared = f.tracks.insert(
+            f.artists.insert("Shared").id,
+            f.albums.insert(Uuid::new_v4(), "sh").id,
+            "shared",
+        );
         let single = f.tracks.insert(arc.id, alc.id, "single");
 
-        idx.ranks.lock().unwrap().insert(seed1.id, vec![(shared.id, 0.6), (single.id, 0.5)]);
-        idx.ranks.lock().unwrap().insert(seed2.id, vec![(shared.id, 0.6)]);
+        idx.ranks
+            .lock()
+            .unwrap()
+            .insert(seed1.id, vec![(shared.id, 0.6), (single.id, 0.5)]);
+        idx.ranks
+            .lock()
+            .unwrap()
+            .insert(seed2.id, vec![(shared.id, 0.6)]);
 
         let recs = svc
             .recommend_for_playlist(&user(), &[seed1.id, seed2.id], 10)
@@ -1360,8 +1459,16 @@ mod tests {
     #[tokio::test]
     async fn playlist_recs_empty_for_no_seeds() {
         let f = make();
-        let svc = f.svc.clone().with_similarity(Arc::new(FakeIndex::default()));
-        assert!(svc.recommend_for_playlist(&user(), &[], 10).await.unwrap().is_empty());
+        let svc = f
+            .svc
+            .clone()
+            .with_similarity(Arc::new(FakeIndex::default()));
+        assert!(
+            svc.recommend_for_playlist(&user(), &[], 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     // --- Rec cache + warm-on-change (Phase 3) ---
@@ -1409,7 +1516,10 @@ mod tests {
             f.albums.insert(Uuid::new_v4(), "x").id,
             "n1",
         );
-        idx.ranks.lock().unwrap().insert(seed.id, vec![(n1.id, 0.9)]);
+        idx.ranks
+            .lock()
+            .unwrap()
+            .insert(seed.id, vec![(n1.id, 0.9)]);
 
         // Warm the pool, then swap the index to a *different* neighbor.
         svc.warm_playlist(&[seed.id]).await.unwrap();
@@ -1418,7 +1528,10 @@ mod tests {
             f.albums.insert(Uuid::new_v4(), "y").id,
             "n2",
         );
-        idx.ranks.lock().unwrap().insert(seed.id, vec![(n2.id, 0.9)]);
+        idx.ranks
+            .lock()
+            .unwrap()
+            .insert(seed.id, vec![(n2.id, 0.9)]);
 
         // The read is served from the warm cache (n1), NOT recomputed (n2).
         let recs = svc
@@ -1449,13 +1562,21 @@ mod tests {
     #[async_trait]
     impl PlaylistRecCacheRepo for FakePersist {
         async fn get(&self, signature: &str) -> Result<Option<PlaylistRecRow>> {
-            Ok(self.rows.lock().unwrap().get(signature).map(|(ids, at)| PlaylistRecRow {
-                rec_track_ids: ids.clone(),
-                computed_at: *at,
-            }))
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .get(signature)
+                .map(|(ids, at)| PlaylistRecRow {
+                    rec_track_ids: ids.clone(),
+                    computed_at: *at,
+                }))
         }
         async fn upsert(&self, signature: &str, _model: &str, ids: &[Uuid]) -> Result<()> {
-            self.rows.lock().unwrap().insert(signature.into(), (ids.to_vec(), now()));
+            self.rows
+                .lock()
+                .unwrap()
+                .insert(signature.into(), (ids.to_vec(), now()));
             Ok(())
         }
         async fn prune_older_than(&self, _cutoff: OffsetDateTime) -> Result<u64> {
@@ -1516,7 +1637,10 @@ mod tests {
         f.tracks.insert(ar.id, al.id, "sibling"); // behavioral candidate
 
         // First call computes + persists.
-        let _ = svc.recommend_for_playlist(&user(), &[seed.id], 10).await.unwrap();
+        let _ = svc
+            .recommend_for_playlist(&user(), &[seed.id], 10)
+            .await
+            .unwrap();
         let key = svc.cache_key(&[seed.id]);
         assert!(
             persist.rows.lock().unwrap().contains_key(&key),
@@ -1541,6 +1665,10 @@ mod tests {
             .await
             .unwrap();
         let ids: Vec<Uuid> = got.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec![t3.id, t1.id, t2.id], "request order, missing dropped");
+        assert_eq!(
+            ids,
+            vec![t3.id, t1.id, t2.id],
+            "request order, missing dropped"
+        );
     }
 }

@@ -7,16 +7,11 @@
 
 use tauri::{AppHandle, State};
 
-use crate::downloads::{
-    BatchDownloadResult, DownloadManager, StorageUsage, TrackDownloadResult,
-};
+use crate::downloads::{BatchDownloadResult, DownloadManager, StorageUsage, TrackDownloadResult};
 use crate::error::{AppError, AppResult};
 use crate::AppStateHandle;
 
-async fn manager(
-    app: AppHandle,
-    state: &State<'_, AppStateHandle>,
-) -> AppResult<DownloadManager> {
+async fn manager(app: AppHandle, state: &State<'_, AppStateHandle>) -> AppResult<DownloadManager> {
     let auth = {
         let guard = state.auth.read().await;
         guard
@@ -67,7 +62,10 @@ pub async fn download_playlist(
     // Foreground service for the duration of the batch (see `download_track`).
     crate::download_session::start(&app, "Downloading playlist", "Preparing…", -1);
     let _fg = crate::download_session::ForegroundGuard::new(app.clone());
-    manager(app, &state).await?.download_playlist(&playlist_id).await
+    manager(app, &state)
+        .await?
+        .download_playlist(&playlist_id)
+        .await
 }
 
 /// Remove a downloaded track (file + cache row; cover pruned if the album
@@ -93,7 +91,10 @@ pub async fn podcast_download_episode(
 ) -> AppResult<TrackDownloadResult> {
     crate::download_session::start(&app, "Downloading podcast", "1 episode", -1);
     let _fg = crate::download_session::ForegroundGuard::new(app.clone());
-    manager(app, &state).await?.download_episode(&episode_id).await
+    manager(app, &state)
+        .await?
+        .download_episode(&episode_id)
+        .await
 }
 
 /// Download the newest N not-yet-downloaded episodes of a show (default 10).
@@ -119,7 +120,10 @@ pub async fn podcast_delete_episode(
     state: State<'_, AppStateHandle>,
     episode_id: String,
 ) -> AppResult<()> {
-    manager(app, &state).await?.delete_episode(&episode_id).await
+    manager(app, &state)
+        .await?
+        .delete_episode(&episode_id)
+        .await
 }
 
 /// Total bytes + row counts used by offline content.
@@ -133,11 +137,12 @@ pub async fn downloads_storage_usage(
 
 /// Current downloads root (resolved absolute path).
 #[tauri::command]
-pub async fn downloads_dir(
-    app: AppHandle,
-    state: State<'_, AppStateHandle>,
-) -> AppResult<String> {
-    Ok(manager(app, &state).await?.root().to_string_lossy().into_owned())
+pub async fn downloads_dir(app: AppHandle, state: State<'_, AppStateHandle>) -> AppResult<String> {
+    Ok(manager(app, &state)
+        .await?
+        .root()
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Override the downloads root (desktop: user-chosen location). Persisted

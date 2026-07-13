@@ -77,8 +77,6 @@ pub async fn discover_playlist_recommendations(
 /// Fingerprint analysis coverage (Phase 12) — drives the discovery settings
 /// readout + whether to surface "sounds like" affordances.
 #[tauri::command]
-pub async fn fingerprint_status(
-    state: State<'_, AppStateHandle>,
-) -> AppResult<FingerprintStatus> {
+pub async fn fingerprint_status(state: State<'_, AppStateHandle>) -> AppResult<FingerprintStatus> {
     manager(&state).await?.fingerprint_status().await
 }

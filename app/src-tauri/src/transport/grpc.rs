@@ -25,48 +25,57 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 
 use super::proto::auth::auth_service_client::AuthServiceClient;
+use super::proto::auth::{
+    ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse,
+};
 use super::proto::auth::{LoginRequest, LogoutRequest, WhoAmIRequest};
-use super::proto::auth::{ChangePasswordRequest, DeleteUserRequest, ListUsersRequest, RegisterRequest, RegisterResponse};
+use super::proto::discover as dpb;
+use super::proto::discover::discover_service_client::DiscoverServiceClient;
+use super::proto::equalizer as eqpb;
+use super::proto::equalizer::equalizer_service_client::EqualizerServiceClient;
+use super::proto::favorite as fpb;
+use super::proto::favorite::favorite_service_client::FavoriteServiceClient;
 use super::proto::library::library_service_client::LibraryServiceClient;
 use super::proto::library::{
     AddAlbumAliasRequest, AddArtistAliasRequest, AddTrackAliasRequest, DeleteAlbumRequest,
-    DeleteArtistRequest,
-    DeleteTrackRequest, EditTrackMetadataRequest, GetAlbumRequest, GetArtistRequest,
-    GetLibraryStorageRequest, GetTrackRequest, ListAlbumsByArtistRequest, ListArtistsRequest,
-    ListTracksByAlbumRequest,
-    MergeRequest, MoveTrackRequest, Pagination, RemoveAliasRequest, SearchRequest,
-    SetAlbumTypeRequest, SetExplicitRequest, SetPrimaryAliasRequest, SetSingleReleaseRequest,
+    DeleteArtistRequest, DeleteTrackRequest, EditTrackMetadataRequest, GetAlbumRequest,
+    GetArtistRequest, GetLibraryStorageRequest, GetTrackRequest, ListAlbumsByArtistRequest,
+    ListArtistsRequest, ListTracksByAlbumRequest, MergeRequest, MoveTrackRequest, Pagination,
+    RemoveAliasRequest, SearchRequest, SetAlbumTypeRequest, SetExplicitRequest,
+    SetPrimaryAliasRequest, SetSingleReleaseRequest,
 };
+use super::proto::lyrics as lpb;
+use super::proto::lyrics::lyrics_service_client::LyricsServiceClient;
+use super::proto::notification as npb;
+use super::proto::notification::notification_service_client::NotificationServiceClient;
+use super::proto::playhistory as phpb;
+use super::proto::playhistory::play_history_service_client::PlayHistoryServiceClient;
 use super::proto::playlist::playlist_service_client::PlaylistServiceClient;
 use super::proto::playlist::{
     AddPlaylistTrackRequest, CreatePlaylistRequest, DeletePlaylistRequest, GetPlaylistRequest,
     ListMyPlaylistsRequest, RemovePlaylistTrackRequest, RenamePlaylistRequest,
     ReorderPlaylistTrackRequest,
 };
+use super::proto::podcast as ppb;
+use super::proto::podcast::podcast_service_client::PodcastServiceClient;
+use super::proto::upload as pb;
 use super::proto::upload::upload_service_client::UploadServiceClient;
 use super::proto::upload::{UploadInfo, UploadRequest, UploadResponse as PbUploadResponse};
-use super::proto::upload as pb;
-use super::proto::notification::notification_service_client::NotificationServiceClient;
-use super::proto::notification as npb;
-use super::proto::podcast::podcast_service_client::PodcastServiceClient;
-use super::proto::podcast as ppb;
-use super::proto::playhistory::play_history_service_client::PlayHistoryServiceClient;
-use super::proto::playhistory as phpb;
-use super::proto::favorite::favorite_service_client::FavoriteServiceClient;
-use super::proto::favorite as fpb;
-use super::proto::discover::discover_service_client::DiscoverServiceClient;
-use super::proto::discover as dpb;
-use super::proto::lyrics::lyrics_service_client::LyricsServiceClient;
-use super::proto::lyrics as lpb;
 use super::{
-    AliasInfo, Album, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential, DiscoverSection,
-    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, Lyrics, LyricLine,
-    MetadataEdit, Notification,
-    NotificationPage,
-    PermissionTier, PlayEvent, PlayHistoryPage, PlayInput, Playlist, PlaylistTrack,
-    PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport,
-    ServerConfig, SingleUploadResult, Track, TrackStat, UploadEvent, UploadFileInit,
-    UploadFileView, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+    Album, AliasInfo, ArchiveUploadResult, Artist, ArtistStat, ChunkAck, Credential,
+    DiscoverSection, EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, LyricLine,
+    Lyrics, MetadataEdit, Notification, NotificationPage, PermissionTier, PlayEvent,
+    PlayHistoryPage, PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
+    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig,
+    SingleUploadResult, Track, TrackStat, UploadEvent, UploadFileInit, UploadFileView,
+    UploadInitRequest, UploadListFilter, UploadResult, UploadSummary, UploadView,
+};
+use crate::equalizer::model::{
+    ChangePage, DeleteProfileDisposition, DeleteProfileRequest, EntityRevision, EqualizerBand,
+    EqualizerChangeDetail, EqualizerChangeSummary, EqualizerChangedResource, EqualizerDeviceRule,
+    EqualizerDeviceRuleInput, EqualizerMutationResponse, EqualizerProfile, EqualizerProfileInput,
+    EqualizerRollbackResponse, EqualizerState, EqualizerStateFetch, Platform,
+    PortableDeviceSelector, Revision, RouteKind, RuleAction, TriggerKind,
 };
 use crate::error::{AppError, AppResult};
 
@@ -105,6 +114,10 @@ impl GrpcClient {
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .tcp_nodelay(true))
+    }
+
+    fn equalizer(&self) -> EqualizerServiceClient<Channel> {
+        EqualizerServiceClient::new(self.channel.clone())
     }
 
     /// Build a tonic [`Endpoint`] for the gRPC URL, attaching a TLS config
@@ -170,7 +183,9 @@ impl GrpcClient {
                 Err(_) => return false,
             };
             // `""` = overall server health per the gRPC health spec.
-            let req = HealthCheckRequest { service: String::new() };
+            let req = HealthCheckRequest {
+                service: String::new(),
+            };
             match HealthClient::new(channel).check(req).await {
                 Ok(resp) => resp.into_inner().status == ServingStatus::Serving as i32,
                 Err(_) => false,
@@ -375,7 +390,10 @@ impl GrpcClient {
             .await
             .map_err(|s| AppError::Transport(format!("list_artists: {s}")))?
             .into_inner();
-        Ok((resp.artists.into_iter().map(artist_from_proto).collect(), resp.total))
+        Ok((
+            resp.artists.into_iter().map(artist_from_proto).collect(),
+            resp.total,
+        ))
     }
 
     pub async fn search_artists(
@@ -902,7 +920,9 @@ impl GrpcClient {
         cred: &Credential,
         track_id: &str,
     ) -> AppResult<Vec<AliasInfo>> {
-        let mut req = Request::new(GetTrackRequest { id: track_id.to_string() });
+        let mut req = Request::new(GetTrackRequest {
+            id: track_id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .library()
@@ -981,7 +1001,9 @@ impl GrpcClient {
     /// `SECRET_KEY` identity is rejected server-side (no user to own the
     /// follow) → a permanent error, no REST fallback.
     pub async fn follow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
-        let mut req = Request::new(npb::FollowRequest { artist_id: artist_id.to_string() });
+        let mut req = Request::new(npb::FollowRequest {
+            artist_id: artist_id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .notifications()
@@ -994,7 +1016,9 @@ impl GrpcClient {
 
     /// Unfollow an artist. Returns the resulting follow state (`false`).
     pub async fn unfollow_artist(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
-        let mut req = Request::new(npb::FollowRequest { artist_id: artist_id.to_string() });
+        let mut req = Request::new(npb::FollowRequest {
+            artist_id: artist_id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .notifications()
@@ -1006,7 +1030,9 @@ impl GrpcClient {
     }
 
     pub async fn is_following(&self, cred: &Credential, artist_id: &str) -> AppResult<bool> {
-        let mut req = Request::new(npb::FollowRequest { artist_id: artist_id.to_string() });
+        let mut req = Request::new(npb::FollowRequest {
+            artist_id: artist_id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .notifications()
@@ -1028,7 +1054,11 @@ impl GrpcClient {
             .await
             .map_err(|s| AppError::Transport(format!("list_following: {s}")))?
             .into_inner();
-        Ok(resp.artists.into_iter().map(followed_artist_from_proto).collect())
+        Ok(resp
+            .artists
+            .into_iter()
+            .map(followed_artist_from_proto)
+            .collect())
     }
 
     pub async fn list_notifications(
@@ -1038,7 +1068,11 @@ impl GrpcClient {
         limit: i32,
         offset: i32,
     ) -> AppResult<NotificationPage> {
-        let mut req = Request::new(npb::ListNotificationsRequest { unread_only, limit, offset });
+        let mut req = Request::new(npb::ListNotificationsRequest {
+            unread_only,
+            limit,
+            offset,
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .notifications()
@@ -1047,7 +1081,11 @@ impl GrpcClient {
             .map_err(|s| AppError::Transport(format!("list_notifications: {s}")))?
             .into_inner();
         Ok(NotificationPage {
-            notifications: resp.notifications.into_iter().map(notification_from_proto).collect(),
+            notifications: resp
+                .notifications
+                .into_iter()
+                .map(notification_from_proto)
+                .collect(),
             total: resp.total,
             unread_count: resp.unread_count,
         })
@@ -1165,8 +1203,16 @@ impl GrpcClient {
             .map_err(|s| AppError::Transport(format!("play_stats: {s}")))?
             .into_inner();
         Ok(ListeningStats {
-            top_tracks: resp.top_tracks.into_iter().map(track_stat_from_proto).collect(),
-            top_artists: resp.top_artists.into_iter().map(artist_stat_from_proto).collect(),
+            top_tracks: resp
+                .top_tracks
+                .into_iter()
+                .map(track_stat_from_proto)
+                .collect(),
+            top_artists: resp
+                .top_artists
+                .into_iter()
+                .map(artist_stat_from_proto)
+                .collect(),
             total_plays: resp.total_plays,
             total_ms: resp.total_ms,
         })
@@ -1176,7 +1222,12 @@ impl GrpcClient {
 
     /// Favorite an entity (`kind` = track|album|artist). `SECRET_KEY` is
     /// rejected server-side (no user) → a permanent error, no REST fallback.
-    pub async fn favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn favorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         let mut req = Request::new(fpb::FavoriteRequest {
             kind: kind.to_string(),
             entity_id: entity_id.to_string(),
@@ -1191,7 +1242,12 @@ impl GrpcClient {
         Ok(resp.favorited)
     }
 
-    pub async fn unfavorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn unfavorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         let mut req = Request::new(fpb::FavoriteRequest {
             kind: kind.to_string(),
             entity_id: entity_id.to_string(),
@@ -1206,7 +1262,12 @@ impl GrpcClient {
         Ok(resp.favorited)
     }
 
-    pub async fn is_favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn is_favorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         let mut req = Request::new(fpb::FavoriteRequest {
             kind: kind.to_string(),
             entity_id: entity_id.to_string(),
@@ -1394,7 +1455,10 @@ impl GrpcClient {
         term: &str,
         limit: i32,
     ) -> AppResult<Vec<PodcastCandidate>> {
-        let mut req = Request::new(ppb::SearchPodcastsRequest { term: term.to_string(), limit });
+        let mut req = Request::new(ppb::SearchPodcastsRequest {
+            term: term.to_string(),
+            limit,
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1402,7 +1466,11 @@ impl GrpcClient {
             .await
             .map_err(|s| AppError::Transport(format!("search_podcasts: {s}")))?
             .into_inner();
-        Ok(resp.candidates.into_iter().map(candidate_from_proto).collect())
+        Ok(resp
+            .candidates
+            .into_iter()
+            .map(candidate_from_proto)
+            .collect())
     }
 
     pub async fn subscribe_feed(
@@ -1439,11 +1507,16 @@ impl GrpcClient {
             .await
             .map_err(|s| AppError::Transport(format!("list_podcasts: {s}")))?
             .into_inner();
-        Ok((resp.podcasts.into_iter().map(podcast_from_proto).collect(), resp.total))
+        Ok((
+            resp.podcasts.into_iter().map(podcast_from_proto).collect(),
+            resp.total,
+        ))
     }
 
     pub async fn get_podcast(&self, cred: &Credential, id: &str) -> AppResult<Podcast> {
-        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        let mut req = Request::new(ppb::PodcastIdRequest {
+            podcast_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1455,7 +1528,9 @@ impl GrpcClient {
     }
 
     pub async fn delete_podcast(&self, cred: &Credential, id: &str) -> AppResult<()> {
-        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        let mut req = Request::new(ppb::PodcastIdRequest {
+            podcast_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         self.podcasts()
             .delete_podcast(req)
@@ -1465,7 +1540,9 @@ impl GrpcClient {
     }
 
     pub async fn refresh_podcast(&self, cred: &Credential, id: &str) -> AppResult<RefreshReport> {
-        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        let mut req = Request::new(ppb::PodcastIdRequest {
+            podcast_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1523,7 +1600,9 @@ impl GrpcClient {
     }
 
     pub async fn get_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
-        let mut req = Request::new(ppb::EpisodeIdRequest { episode_id: id.to_string() });
+        let mut req = Request::new(ppb::EpisodeIdRequest {
+            episode_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1536,7 +1615,9 @@ impl GrpcClient {
 
     /// Trigger the server to download an episode's audio to its disk.
     pub async fn download_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
-        let mut req = Request::new(ppb::EpisodeIdRequest { episode_id: id.to_string() });
+        let mut req = Request::new(ppb::EpisodeIdRequest {
+            episode_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1548,7 +1629,9 @@ impl GrpcClient {
     }
 
     pub async fn subscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
-        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        let mut req = Request::new(ppb::PodcastIdRequest {
+            podcast_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1560,7 +1643,9 @@ impl GrpcClient {
     }
 
     pub async fn unsubscribe_podcast(&self, cred: &Credential, id: &str) -> AppResult<bool> {
-        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        let mut req = Request::new(ppb::PodcastIdRequest {
+            podcast_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1572,7 +1657,9 @@ impl GrpcClient {
     }
 
     pub async fn is_subscribed(&self, cred: &Credential, id: &str) -> AppResult<bool> {
-        let mut req = Request::new(ppb::PodcastIdRequest { podcast_id: id.to_string() });
+        let mut req = Request::new(ppb::PodcastIdRequest {
+            podcast_id: id.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .podcasts()
@@ -1646,7 +1733,11 @@ impl GrpcClient {
             .await
             .map_err(|s| AppError::Transport(format!("list_my_playlists: {s}")))?
             .into_inner();
-        Ok(resp.playlists.into_iter().map(playlist_from_proto).collect())
+        Ok(resp
+            .playlists
+            .into_iter()
+            .map(playlist_from_proto)
+            .collect())
     }
 
     pub async fn get_playlist(
@@ -1659,12 +1750,17 @@ impl GrpcClient {
         match self.playlists().get_playlist(req).await {
             Ok(r) => {
                 let v = r.into_inner();
-                let playlist = v.playlist.map(playlist_from_proto).ok_or_else(|| {
-                    AppError::Transport("get_playlist: missing playlist".into())
-                })?;
+                let playlist = v
+                    .playlist
+                    .map(playlist_from_proto)
+                    .ok_or_else(|| AppError::Transport("get_playlist: missing playlist".into()))?;
                 Ok(Some(PlaylistWithTracks {
                     playlist,
-                    tracks: v.tracks.into_iter().map(playlist_track_from_proto).collect(),
+                    tracks: v
+                        .tracks
+                        .into_iter()
+                        .map(playlist_track_from_proto)
+                        .collect(),
                 }))
             }
             Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
@@ -1673,7 +1769,9 @@ impl GrpcClient {
     }
 
     pub async fn create_playlist(&self, cred: &Credential, name: &str) -> AppResult<Playlist> {
-        let mut req = Request::new(CreatePlaylistRequest { name: name.to_string() });
+        let mut req = Request::new(CreatePlaylistRequest {
+            name: name.to_string(),
+        });
         attach_credential(&mut req, cred)?;
         let resp = self
             .playlists()
@@ -1993,6 +2091,575 @@ impl GrpcClient {
             errors: resp.errors as u64,
         })
     }
+
+    // ---- Equalizer ----------------------------------------------------
+
+    pub async fn get_equalizer_state(
+        &self,
+        cred: &Credential,
+        known_state_revision: Option<Revision>,
+    ) -> AppResult<EqualizerStateFetch> {
+        let mut request = Request::new(eqpb::GetEqualizerStateRequest {
+            known_state_revision: known_state_revision.map(|revision| revision.0),
+        });
+        attach_credential(&mut request, cred)?;
+        let response = self
+            .equalizer()
+            .get_equalizer_state(request)
+            .await
+            .map_err(map_equalizer_err("get_equalizer_state"))?
+            .into_inner();
+        Ok(EqualizerStateFetch {
+            not_modified: response.not_modified,
+            state: response.state.map(state_from_eqpb).transpose()?,
+            etag: None,
+        })
+    }
+
+    pub async fn create_equalizer_profile(
+        &self,
+        cred: &Credential,
+        profile: &EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let mut request = Request::new(eqpb::CreateEqualizerProfileRequest {
+            profile: Some(profile_input_to_eqpb(profile)),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .create_equalizer_profile(request)
+                .await
+                .map_err(map_equalizer_err("create_equalizer_profile"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn update_equalizer_profile(
+        &self,
+        cred: &Credential,
+        profile_id: &str,
+        expected_revision: Revision,
+        profile: &EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let mut request = Request::new(eqpb::UpdateEqualizerProfileRequest {
+            profile_id: profile_id.to_string(),
+            expected_revision: expected_revision.0,
+            profile: Some(profile_input_to_eqpb(profile)),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .update_equalizer_profile(request)
+                .await
+                .map_err(map_equalizer_err("update_equalizer_profile"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn delete_equalizer_profile(
+        &self,
+        cred: &Credential,
+        input: &DeleteProfileRequest,
+    ) -> AppResult<EqualizerMutationResponse> {
+        use eqpb::delete_equalizer_profile_request::Disposition;
+        let disposition = match &input.disposition {
+            DeleteProfileDisposition::RejectIfReferenced => Disposition::RejectIfReferenced(true),
+            DeleteProfileDisposition::ReplaceWithProfile { profile_id } => {
+                Disposition::ReplaceWithProfileId(profile_id.clone())
+            }
+            DeleteProfileDisposition::ReplaceWithFlat => Disposition::ReplaceWithFlat(true),
+        };
+        let mut request = Request::new(eqpb::DeleteEqualizerProfileRequest {
+            profile_id: input.profile_id.clone(),
+            expected_revision: input.expected_revision.0,
+            expected_settings_revision: input.expected_settings_revision.0,
+            referencing_rules: input
+                .referencing_rules
+                .iter()
+                .map(entity_revision_to_eqpb)
+                .collect(),
+            disposition: Some(disposition),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .delete_equalizer_profile(request)
+                .await
+                .map_err(map_equalizer_err("delete_equalizer_profile"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn update_equalizer_settings(
+        &self,
+        cred: &Credential,
+        expected_revision: Revision,
+        default_profile_id: Option<&str>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        use eqpb::update_equalizer_settings_request::DefaultAssignment;
+        let assignment = default_profile_id.map_or(DefaultAssignment::Flat(true), |id| {
+            DefaultAssignment::DefaultProfileId(id.to_string())
+        });
+        let mut request = Request::new(eqpb::UpdateEqualizerSettingsRequest {
+            expected_settings_revision: expected_revision.0,
+            default_assignment: Some(assignment),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .update_equalizer_settings(request)
+                .await
+                .map_err(map_equalizer_err("update_equalizer_settings"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn create_equalizer_rule(
+        &self,
+        cred: &Credential,
+        rule: &EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let mut request = Request::new(eqpb::CreateEqualizerDeviceRuleRequest {
+            rule: Some(rule_input_to_eqpb(rule)),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .create_equalizer_device_rule(request)
+                .await
+                .map_err(map_equalizer_err("create_equalizer_rule"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn update_equalizer_rule(
+        &self,
+        cred: &Credential,
+        rule_id: &str,
+        expected_revision: Revision,
+        rule: &EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let mut request = Request::new(eqpb::UpdateEqualizerDeviceRuleRequest {
+            rule_id: rule_id.to_string(),
+            expected_revision: expected_revision.0,
+            rule: Some(rule_input_to_eqpb(rule)),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .update_equalizer_device_rule(request)
+                .await
+                .map_err(map_equalizer_err("update_equalizer_rule"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn delete_equalizer_rule(
+        &self,
+        cred: &Credential,
+        rule_id: &str,
+        expected_revision: Revision,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let mut request = Request::new(eqpb::DeleteEqualizerDeviceRuleRequest {
+            rule_id: rule_id.to_string(),
+            expected_revision: expected_revision.0,
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .delete_equalizer_device_rule(request)
+                .await
+                .map_err(map_equalizer_err("delete_equalizer_rule"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn reorder_equalizer_rules(
+        &self,
+        cred: &Credential,
+        rules: &[EntityRevision],
+    ) -> AppResult<EqualizerMutationResponse> {
+        let mut request = Request::new(eqpb::ReorderEqualizerDeviceRulesRequest {
+            rules: rules.iter().map(entity_revision_to_eqpb).collect(),
+        });
+        attach_credential(&mut request, cred)?;
+        mutation_from_eqpb(
+            self.equalizer()
+                .reorder_equalizer_device_rules(request)
+                .await
+                .map_err(map_equalizer_err("reorder_equalizer_rules"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn list_equalizer_changes(
+        &self,
+        cred: &Credential,
+        subject_user_id: Option<&str>,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> AppResult<ChangePage> {
+        let mut request = Request::new(eqpb::ListEqualizerChangesRequest {
+            subject_user_id: subject_user_id.map(str::to_string),
+            cursor: cursor.map(str::to_string),
+            limit,
+        });
+        attach_credential(&mut request, cred)?;
+        let response = self
+            .equalizer()
+            .list_equalizer_changes(request)
+            .await
+            .map_err(map_equalizer_err("list_equalizer_changes"))?
+            .into_inner();
+        Ok(ChangePage {
+            changes: response.changes.into_iter().map(change_from_eqpb).collect(),
+            next_cursor: response.next_cursor,
+        })
+    }
+
+    pub async fn get_equalizer_change(
+        &self,
+        cred: &Credential,
+        audit_id: &str,
+    ) -> AppResult<EqualizerChangeDetail> {
+        let mut request = Request::new(eqpb::GetEqualizerChangeRequest {
+            audit_id: audit_id.into(),
+        });
+        attach_credential(&mut request, cred)?;
+        change_detail_from_eqpb(
+            self.equalizer()
+                .get_equalizer_change(request)
+                .await
+                .map_err(map_equalizer_err("get_equalizer_change"))?
+                .into_inner(),
+        )
+    }
+
+    pub async fn rollback_equalizer_change(
+        &self,
+        cred: &Credential,
+        audit_id: &str,
+        expected_state_revision: Revision,
+    ) -> AppResult<EqualizerRollbackResponse> {
+        let mut request = Request::new(eqpb::RollbackEqualizerChangeRequest {
+            audit_id: audit_id.into(),
+            expected_state_revision: expected_state_revision.0,
+        });
+        attach_credential(&mut request, cred)?;
+        let response = self
+            .equalizer()
+            .rollback_equalizer_change(request)
+            .await
+            .map_err(map_equalizer_err("rollback_equalizer_change"))?
+            .into_inner();
+        Ok(EqualizerRollbackResponse {
+            target_owner_id: response.target_owner_id,
+            state_revision: Revision(response.state_revision),
+            audit_id: response.audit_id,
+            changed_resources: response
+                .changed_resources
+                .into_iter()
+                .map(|row| EqualizerChangedResource {
+                    resource_type: row.resource_type,
+                    resource_id: row.resource_id,
+                    change: row.change,
+                })
+                .collect(),
+        })
+    }
+}
+
+fn state_from_eqpb(value: eqpb::EqualizerState) -> AppResult<EqualizerState> {
+    Ok(EqualizerState {
+        state_format_version: value.state_format_version,
+        state_revision: Revision(value.state_revision),
+        settings_revision: Revision(value.settings_revision),
+        default_profile_id: value.default_profile_id,
+        profiles: value
+            .profiles
+            .into_iter()
+            .map(profile_from_eqpb)
+            .collect::<AppResult<_>>()?,
+        device_rules: value
+            .device_rules
+            .into_iter()
+            .map(rule_from_eqpb)
+            .collect::<AppResult<_>>()?,
+    })
+}
+
+fn mutation_from_eqpb(
+    value: eqpb::EqualizerMutationResponse,
+) -> AppResult<EqualizerMutationResponse> {
+    Ok(EqualizerMutationResponse {
+        changed: value.changed,
+        audit_id: value.audit_id,
+        state: state_from_eqpb(
+            value
+                .state
+                .ok_or_else(|| AppError::Transport("EQ mutation omitted state".into()))?,
+        )?,
+    })
+}
+
+fn profile_from_eqpb(value: eqpb::EqualizerProfile) -> AppResult<EqualizerProfile> {
+    Ok(EqualizerProfile {
+        id: value.id,
+        name: value.name,
+        format_version: value.format_version,
+        preamp_db: value.preamp_db,
+        auto_headroom_enabled: value.auto_headroom_enabled,
+        bands: value
+            .bands
+            .into_iter()
+            .map(band_from_eqpb)
+            .collect::<AppResult<_>>()?,
+        revision: Revision(value.revision),
+        created_at: value.created_at,
+        updated_at: value.updated_at,
+    })
+}
+
+fn band_from_eqpb(value: eqpb::EqualizerBand) -> AppResult<EqualizerBand> {
+    Ok(EqualizerBand {
+        position: value.position,
+        enabled: value.enabled,
+        filter_kind: value.filter_type.parse().map_err(
+            |error: crate::equalizer::model::EqualizerValidationError| {
+                AppError::Unsupported(error.message)
+            },
+        )?,
+        frequency_hz: value.frequency_hz,
+        gain_db: value.gain_db,
+        q: value.q,
+    })
+}
+
+fn profile_input_to_eqpb(value: &EqualizerProfileInput) -> eqpb::EqualizerProfileInput {
+    eqpb::EqualizerProfileInput {
+        id: value.id.clone(),
+        name: value.name.clone(),
+        format_version: value.format_version,
+        preamp_db: value.preamp_db,
+        auto_headroom_enabled: value.auto_headroom_enabled,
+        bands: value.bands.iter().map(band_to_eqpb).collect(),
+    }
+}
+
+fn band_to_eqpb(value: &EqualizerBand) -> eqpb::EqualizerBand {
+    eqpb::EqualizerBand {
+        position: value.position,
+        enabled: value.enabled,
+        filter_type: value.filter_kind.as_str().to_string(),
+        frequency_hz: value.frequency_hz,
+        gain_db: value.gain_db,
+        q: value.q,
+    }
+}
+
+fn rule_from_eqpb(value: eqpb::EqualizerDeviceRule) -> AppResult<EqualizerDeviceRule> {
+    Ok(EqualizerDeviceRule {
+        id: value.id,
+        label: value.label,
+        action: action_from_eqpb(value.action)?,
+        selectors: value
+            .selectors
+            .into_iter()
+            .map(selector_from_eqpb)
+            .collect::<AppResult<_>>()?,
+        priority: value.priority,
+        enabled: value.enabled,
+        revision: Revision(value.revision),
+    })
+}
+
+fn rule_input_to_eqpb(value: &EqualizerDeviceRuleInput) -> eqpb::EqualizerDeviceRuleInput {
+    eqpb::EqualizerDeviceRuleInput {
+        id: value.id.clone(),
+        label: value.label.clone(),
+        action: Some(action_to_eqpb(&value.action)),
+        selectors: value.selectors.iter().map(selector_to_eqpb).collect(),
+        enabled: value.enabled,
+    }
+}
+
+fn action_from_eqpb(value: Option<eqpb::EqualizerRuleAction>) -> AppResult<RuleAction> {
+    use eqpb::equalizer_rule_action::Action;
+    match value.and_then(|value| value.action) {
+        Some(Action::ProfileId(profile_id)) => Ok(RuleAction::Profile { profile_id }),
+        Some(Action::Bypass(true)) => Ok(RuleAction::Bypass),
+        _ => Err(AppError::Transport("invalid EQ rule action".into())),
+    }
+}
+
+fn action_to_eqpb(value: &RuleAction) -> eqpb::EqualizerRuleAction {
+    use eqpb::equalizer_rule_action::Action;
+    let action = match value {
+        RuleAction::Profile { profile_id } => Action::ProfileId(profile_id.clone()),
+        RuleAction::Bypass => Action::Bypass(true),
+    };
+    eqpb::EqualizerRuleAction {
+        action: Some(action),
+    }
+}
+
+fn selector_from_eqpb(value: eqpb::PortableDeviceSelector) -> AppResult<PortableDeviceSelector> {
+    Ok(PortableDeviceSelector {
+        normalization_version: value.normalization_version,
+        route_kind: parse_route_kind(&value.route_kind)?,
+        normalized_name: value.normalized_name,
+        vendor_id: value.vendor_id,
+        product_id: value.product_id,
+        platform_scope: value
+            .platform_scope
+            .as_deref()
+            .map(parse_platform)
+            .transpose()?,
+        trigger: parse_trigger(&value.trigger)?,
+    })
+}
+
+fn selector_to_eqpb(value: &PortableDeviceSelector) -> eqpb::PortableDeviceSelector {
+    eqpb::PortableDeviceSelector {
+        normalization_version: value.normalization_version,
+        route_kind: route_kind_string(value.route_kind).to_string(),
+        normalized_name: value.normalized_name.clone(),
+        vendor_id: value.vendor_id.clone(),
+        product_id: value.product_id.clone(),
+        platform_scope: value
+            .platform_scope
+            .map(platform_string)
+            .map(str::to_string),
+        trigger: trigger_string(value.trigger).to_string(),
+    }
+}
+
+fn entity_revision_to_eqpb(value: &EntityRevision) -> eqpb::EntityRevision {
+    eqpb::EntityRevision {
+        id: value.id.clone(),
+        expected_revision: value.expected_revision.0,
+    }
+}
+
+fn change_from_eqpb(value: eqpb::EqualizerChangeSummary) -> EqualizerChangeSummary {
+    EqualizerChangeSummary {
+        audit_id: value.audit_id,
+        action: value.action,
+        actor_id: value.actor_id,
+        owner_id: value.owner_id,
+        resource_type: value.resource_type,
+        resource_id: value.resource_id,
+        created_at: value.created_at,
+        before_state_revision: Revision(value.before_state_revision),
+        after_state_revision: Revision(value.after_state_revision),
+    }
+}
+
+fn change_detail_from_eqpb(value: eqpb::EqualizerChangeDetail) -> AppResult<EqualizerChangeDetail> {
+    Ok(EqualizerChangeDetail {
+        change: change_from_eqpb(
+            value
+                .change
+                .ok_or_else(|| AppError::Transport("EQ change detail omitted summary".into()))?,
+        ),
+        before_json: value.before_json,
+        after_json: value.after_json,
+        current_state_revision: value.current_state_revision.map(Revision),
+        rollback_eligible: value.rollback_eligible,
+    })
+}
+
+fn route_kind_string(value: RouteKind) -> &'static str {
+    match value {
+        RouteKind::Bluetooth => "bluetooth",
+        RouteKind::Wired => "wired",
+        RouteKind::Usb => "usb",
+        RouteKind::Hdmi => "hdmi",
+        RouteKind::Airplay => "airplay",
+        RouteKind::Builtin => "builtin",
+        RouteKind::Unknown => "unknown",
+    }
+}
+
+fn parse_route_kind(value: &str) -> AppResult<RouteKind> {
+    match value {
+        "bluetooth" => Ok(RouteKind::Bluetooth),
+        "wired" => Ok(RouteKind::Wired),
+        "usb" => Ok(RouteKind::Usb),
+        "hdmi" => Ok(RouteKind::Hdmi),
+        "airplay" => Ok(RouteKind::Airplay),
+        "builtin" => Ok(RouteKind::Builtin),
+        "unknown" => Ok(RouteKind::Unknown),
+        other => Err(AppError::Unsupported(format!(
+            "unknown EQ route kind {other}"
+        ))),
+    }
+}
+
+fn platform_string(value: Platform) -> &'static str {
+    match value {
+        Platform::Windows => "windows",
+        Platform::Android => "android",
+        Platform::Macos => "macos",
+        Platform::Linux => "linux",
+        Platform::Ios => "ios",
+        Platform::Web => "web",
+    }
+}
+
+fn parse_platform(value: &str) -> AppResult<Platform> {
+    match value {
+        "windows" => Ok(Platform::Windows),
+        "android" => Ok(Platform::Android),
+        "macos" => Ok(Platform::Macos),
+        "linux" => Ok(Platform::Linux),
+        "ios" => Ok(Platform::Ios),
+        "web" => Ok(Platform::Web),
+        other => Err(AppError::Unsupported(format!(
+            "unknown EQ platform {other}"
+        ))),
+    }
+}
+
+fn trigger_string(value: TriggerKind) -> &'static str {
+    match value {
+        TriggerKind::ActiveOutput => "active_output",
+        TriggerKind::Connected => "connected",
+    }
+}
+
+fn parse_trigger(value: &str) -> AppResult<TriggerKind> {
+    match value {
+        "active_output" => Ok(TriggerKind::ActiveOutput),
+        "connected" => Ok(TriggerKind::Connected),
+        other => Err(AppError::Unsupported(format!("unknown EQ trigger {other}"))),
+    }
+}
+
+fn map_equalizer_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
+    move |status| match status.code() {
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("{op}: {status}")),
+        tonic::Code::PermissionDenied => AppError::Forbidden(format!("{op}: {status}")),
+        tonic::Code::Unimplemented => {
+            AppError::Unsupported(format!("endpoint_unimplemented:{op}: {status}"))
+        }
+        tonic::Code::Aborted | tonic::Code::AlreadyExists => {
+            let code = status
+                .metadata()
+                .get("x-octave-error-code")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("revision_mismatch")
+                .to_string();
+            AppError::Conflict {
+                code,
+                message: status.message().to_string(),
+            }
+        }
+        tonic::Code::InvalidArgument | tonic::Code::NotFound | tonic::Code::FailedPrecondition => {
+            AppError::Internal(format!("{op} rejected: {status}"))
+        }
+        _ => AppError::Transport(format!("{op}: {status}")),
+    }
 }
 
 /// Map a tonic status to the right `AppError` variant for playlist
@@ -2187,9 +2854,7 @@ fn map_mutation_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
     move |s| match s.code() {
         tonic::Code::PermissionDenied => AppError::Forbidden(format!("{op}: {s}")),
         tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("{op}: {s}")),
-        tonic::Code::NotFound
-        | tonic::Code::InvalidArgument
-        | tonic::Code::FailedPrecondition => {
+        tonic::Code::NotFound | tonic::Code::InvalidArgument | tonic::Code::FailedPrecondition => {
             AppError::Internal(format!("{op} rejected: {s}"))
         }
         _ => AppError::Transport(format!("{op}: {s}")),
@@ -2200,9 +2865,7 @@ fn map_mutation_err(op: &'static str) -> impl Fn(tonic::Status) -> AppError {
 fn map_password_err(s: tonic::Status) -> AppError {
     match s.code() {
         tonic::Code::PermissionDenied => AppError::Forbidden(format!("change_password: {s}")),
-        tonic::Code::Unauthenticated => {
-            AppError::Unauthenticated(format!("change_password: {s}"))
-        }
+        tonic::Code::Unauthenticated => AppError::Unauthenticated(format!("change_password: {s}")),
         tonic::Code::InvalidArgument | tonic::Code::NotFound => {
             // Bad new-password / wrong old-password / missing user — surface
             // the server's message. Internal (not Transport) so we don't
@@ -2227,15 +2890,27 @@ fn tier_to_proto_level(tier: super::PermissionTier) -> i32 {
 // --- proto -> public model conversions ------------------------------------
 
 fn opt_str(s: String) -> Option<String> {
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn opt_i32(v: i32) -> Option<i64> {
-    if v == 0 { None } else { Some(v as i64) }
+    if v == 0 {
+        None
+    } else {
+        Some(v as i64)
+    }
 }
 
 fn opt_i64(v: i64) -> Option<i64> {
-    if v == 0 { None } else { Some(v) }
+    if v == 0 {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 fn alias_from_proto(a: super::proto::library::AliasInfo) -> super::AliasInfo {

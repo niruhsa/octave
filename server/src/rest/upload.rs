@@ -14,8 +14,8 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit, Extension, Path as AxPath, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::HeaderMap,
     response::Response,
@@ -26,12 +26,12 @@ use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
-use crate::auth::service::Credential;
 use crate::auth::Identity;
+use crate::auth::service::Credential;
 use crate::db::models::UploadState;
 use crate::error::AppError;
-use crate::rest::{extract_credential, ApiError, RestState};
-use crate::services::{can_see, ChunkAck, FileInit, UploadHub, UploadView, UploadsService};
+use crate::rest::{ApiError, RestState, extract_credential};
+use crate::services::{ChunkAck, FileInit, UploadHub, UploadView, UploadsService, can_see};
 use crate::shutdown::ShutdownRx;
 
 /// Per-chunk body ceiling (64 MiB) — also covers the largest plausible init
@@ -133,7 +133,13 @@ async fn list(
         None => None,
     };
     let rows = svc(&state)?
-        .list(&caller, user, st, q.limit.unwrap_or(50), q.offset.unwrap_or(0))
+        .list(
+            &caller,
+            user,
+            st,
+            q.limit.unwrap_or(50),
+            q.offset.unwrap_or(0),
+        )
         .await?;
     Ok(Json(json!({ "uploads": rows })))
 }

@@ -114,7 +114,9 @@ pub fn read_tags(path: &Path) -> crate::error::Result<TagInfo> {
         None => (0, None, "Unknown".to_string(), None, None, None),
     };
 
-    let tag = probe.as_ref().and_then(|p| p.primary_tag().or_else(|| p.first_tag()));
+    let tag = probe
+        .as_ref()
+        .and_then(|p| p.primary_tag().or_else(|| p.first_tag()));
 
     let title = tag
         .and_then(|t| t.title().map(|s| s.to_string()))
@@ -142,9 +144,15 @@ pub fn read_tags(path: &Path) -> crate::error::Result<TagInfo> {
         .and_then(|t| t.get_string(&ItemKey::Language).map(str::to_string))
         .map(|s| normalize_language(&s))
         .unwrap_or_else(|| infer_language(&artist));
-    let track_no = tag.and_then(|t| t.track()).and_then(|n| i32::try_from(n).ok());
-    let disc_no = tag.and_then(|t| t.disk()).and_then(|n| i32::try_from(n).ok());
-    let year = tag.and_then(|t| t.year()).and_then(|n| i32::try_from(n).ok());
+    let track_no = tag
+        .and_then(|t| t.track())
+        .and_then(|n| i32::try_from(n).ok());
+    let disc_no = tag
+        .and_then(|t| t.disk())
+        .and_then(|n| i32::try_from(n).ok());
+    let year = tag
+        .and_then(|t| t.year())
+        .and_then(|n| i32::try_from(n).ok());
 
     Ok(TagInfo {
         title,
@@ -182,8 +190,16 @@ pub fn primary_artist(raw: &str) -> String {
     //    Match case-insensitively on whole-word boundaries.
     let lower = raw.to_lowercase();
     let collab_markers = [
-        " feat.", " feat ", " featuring ", " ft.", " ft ", " with ", " vs.",
-        " vs ", " w/ ", " w/",
+        " feat.",
+        " feat ",
+        " featuring ",
+        " ft.",
+        " ft ",
+        " with ",
+        " vs.",
+        " vs ",
+        " w/ ",
+        " w/",
     ];
     let mut cut = raw.len();
     for marker in collab_markers.iter() {
@@ -461,12 +477,7 @@ pub fn write_cover(path: &Path, data: &[u8], mime_type_str: &str) -> crate::erro
     tag.remove_picture_type(PictureType::CoverFront);
 
     let mime = MimeType::from_str(mime_type_str);
-    let picture = Picture::new_unchecked(
-        PictureType::CoverFront,
-        Some(mime),
-        None,
-        data.to_vec(),
-    );
+    let picture = Picture::new_unchecked(PictureType::CoverFront, Some(mime), None, data.to_vec());
     tag.push_picture(picture);
 
     tagged
@@ -603,7 +614,9 @@ mod tests {
     fn apple_double_sidecars_are_not_audio() {
         // macOS zip/tar cruft: AppleDouble files shadow real audio but hold
         // only resource-fork metadata, so they must never reach ingest.
-        assert!(is_apple_double(Path::new("__MACOSX/Album/._01 - Song.flac")));
+        assert!(is_apple_double(Path::new(
+            "__MACOSX/Album/._01 - Song.flac"
+        )));
         assert!(is_apple_double(Path::new("._track.mp3")));
         assert!(!is_apple_double(Path::new("track.mp3")));
         // The audio gate rejects them despite the audio extension...
@@ -621,10 +634,7 @@ mod tests {
         );
         assert_eq!(primary_artist("Eminem ft. Rihanna"), "Eminem");
         assert_eq!(primary_artist("Eminem ft Rihanna"), "Eminem");
-        assert_eq!(
-            primary_artist("Drake featuring Future"),
-            "Drake"
-        );
+        assert_eq!(primary_artist("Drake featuring Future"), "Drake");
         assert_eq!(primary_artist("Run-D.M.C. vs. Jason Nevins"), "Run-D.M.C.");
     }
 

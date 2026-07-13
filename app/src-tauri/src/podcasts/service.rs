@@ -37,7 +37,9 @@ impl<'a> PodcastService<'a> {
 
     /// Directory search — online only (the directory lives on the server).
     pub async fn search(&self, term: &str, limit: i64) -> AppResult<Vec<PodcastCandidate>> {
-        self.auth.search_podcasts(term, limit.clamp(1, 200) as i32).await
+        self.auth
+            .search_podcasts(term, limit.clamp(1, 200) as i32)
+            .await
     }
 
     // ----- subscriptions list --------------------------------------------
@@ -108,10 +110,7 @@ impl<'a> PodcastService<'a> {
 
     // ----- episodes -------------------------------------------------------
 
-    pub async fn list_episodes(
-        &self,
-        podcast_id: &str,
-    ) -> AppResult<LibraryView<MergedEpisode>> {
+    pub async fn list_episodes(&self, podcast_id: &str) -> AppResult<LibraryView<MergedEpisode>> {
         match self.try_server_list_episodes(podcast_id).await {
             Ok(v) => Ok(v),
             Err(e) if is_offline_signal(&e) => {
@@ -274,7 +273,11 @@ impl<'a> PodcastService<'a> {
     /// Build the cache row that mirrors one server episode's metadata, leaving
     /// every client-owned download column NULL (see [`repo::upsert_episode_meta`],
     /// which preserves those on an already-downloaded row).
-    fn episode_meta_row(&self, podcast_id: &str, e: &PodcastEpisode) -> cache_model::PodcastEpisode {
+    fn episode_meta_row(
+        &self,
+        podcast_id: &str,
+        e: &PodcastEpisode,
+    ) -> cache_model::PodcastEpisode {
         cache_model::PodcastEpisode {
             id: e.id.clone(),
             podcast_id: podcast_id.to_string(),

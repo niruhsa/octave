@@ -24,8 +24,7 @@ pub fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// URL-safe base64 without padding. Inlined to avoid pulling another crate.
 fn base64_url(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
     let mut out = String::with_capacity((bytes.len() * 4).div_ceil(3));
     let mut i = 0;

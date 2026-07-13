@@ -5,6 +5,7 @@
 
 pub mod discography;
 pub mod discover;
+pub mod equalizer;
 pub mod favorites;
 pub mod ingest;
 pub mod library;
@@ -31,23 +32,24 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use axum_server::tls_rustls::RustlsConfig;
-use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use uuid::Uuid;
 
 use crate::auth::Identity;
 use crate::auth::service::{AuthService, Credential};
 use crate::config::TlsConfig;
 use crate::db::models::PermissionLevel;
 use crate::error::{AppError, Result};
-use crate::shutdown::{wait_for_shutdown, ShutdownRx};
-use crate::time_fmt::rfc3339;
 use crate::services::{
-    ArtworkService, DiscographyService, FavoritesService, FingerprintService, ImageOptimizer,
-    IngestService, LibraryService, LyricsService, MetadataService, NotificationService,
-    PlayHistoryService, PlaylistService, PodcastService, RecommendationService, ScanService,
-    StorageService, StreamingService, UploadHub, UploadsService,
+    ArtworkService, DiscographyService, EqualizerService, FavoritesService, FingerprintService,
+    ImageOptimizer, IngestService, LibraryService, LyricsService, MetadataService,
+    NotificationService, PlayHistoryService, PlaylistService, PodcastService,
+    RecommendationService, ScanService, StorageService, StreamingService, UploadHub,
+    UploadsService,
 };
+use crate::shutdown::{ShutdownRx, wait_for_shutdown};
+use crate::time_fmt::rfc3339;
 
 /// Shared state injected into every handler.
 #[derive(Clone)]
@@ -61,6 +63,7 @@ pub struct RestState {
     pub notifications: NotificationService,
     pub play_history: PlayHistoryService,
     pub favorites: FavoritesService,
+    pub equalizer: EqualizerService,
     pub discover: RecommendationService,
     /// Acoustic fingerprinting (Phase 12). `None` when `FINGERPRINT_ENABLED` is
     /// off — `/fingerprint/status` then reports `enabled = false`.
@@ -112,6 +115,7 @@ pub async fn serve(addr: SocketAddr, tls: Option<TlsConfig>, state: RestState) -
         .merge(playhistory::router())
         .merge(favorites::router())
         .merge(discover::router())
+        .merge(equalizer::router())
         .merge(discography::router())
         .merge(lyrics::router())
         .merge(podcast::router())
@@ -439,11 +443,19 @@ impl From<AppError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let AppError::Conflict { code, message } = self.0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "code": code, "message": message })),
+            )
+                .into_response();
+        }
         let status = match &self.0 {
             AppError::Unauthenticated(_) => StatusCode::UNAUTHORIZED,
             AppError::PermissionDenied(_) => StatusCode::FORBIDDEN,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::InvalidArgument(_) => StatusCode::BAD_REQUEST,
+            AppError::Conflict { .. } => unreachable!("handled above"),
             AppError::Config(_) | AppError::Internal(_) | AppError::Io(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -458,7 +470,7 @@ mod tls_tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use axum_server::tls_rustls::RustlsConfig;
 
     fn fixture(name: &str) -> PathBuf {
@@ -517,4 +529,3 @@ mod tls_tests {
         panic!("HTTPS request never succeeded: {last_err}");
     }
 }
-

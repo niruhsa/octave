@@ -37,11 +37,7 @@ pub trait SimilarityIndex: Send + Sync {
     /// path — the caller then falls back to per-seed aggregation. Default:
     /// `None`. The `pgvector` backend overrides it to collapse a whole playlist
     /// into one ANN query (O(1) queries regardless of playlist size).
-    async fn centroid_nearest(
-        &self,
-        seeds: &[Uuid],
-        k: usize,
-    ) -> Result<Option<Vec<(Uuid, f32)>>> {
+    async fn centroid_nearest(&self, seeds: &[Uuid], k: usize) -> Result<Option<Vec<(Uuid, f32)>>> {
         let _ = (seeds, k);
         Ok(None)
     }
@@ -122,8 +118,10 @@ impl SimilarityIndex for BruteForceIndex {
 
     async fn reload(&self) -> Result<()> {
         let loaded = self.features.all_for_model(&self.model_version).await?;
-        let rows: Vec<(Uuid, Vec<f32>)> =
-            loaded.into_iter().map(|f| (f.track_id, f.embedding)).collect();
+        let rows: Vec<(Uuid, Vec<f32>)> = loaded
+            .into_iter()
+            .map(|f| (f.track_id, f.embedding))
+            .collect();
         *self.rows.write().await = rows;
         Ok(())
     }
@@ -223,11 +221,7 @@ impl SimilarityIndex for PgVectorIndex {
             .unwrap_or(0) as usize
     }
 
-    async fn centroid_nearest(
-        &self,
-        seeds: &[Uuid],
-        k: usize,
-    ) -> Result<Option<Vec<(Uuid, f32)>>> {
+    async fn centroid_nearest(&self, seeds: &[Uuid], k: usize) -> Result<Option<Vec<(Uuid, f32)>>> {
         let Some(centroid) = self.centroid(seeds).await? else {
             return Ok(None);
         };
@@ -276,7 +270,13 @@ mod tests {
             Ok(())
         }
         async fn get(&self, id: Uuid) -> Result<Option<TrackFeature>> {
-            Ok(self.rows.lock().unwrap().iter().find(|f| f.track_id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|f| f.track_id == id)
+                .cloned())
         }
         async fn all_for_model(&self, _: &str) -> Result<Vec<TrackFeature>> {
             Ok(self.rows.lock().unwrap().clone())
@@ -386,10 +386,11 @@ mod tests {
         feats.insert(Uuid::new_v4(), vec![1.0, 0.0]);
         let idx = PgVectorIndex::new(feats, "dsp-v1", 2);
         // Unknown seeds → no centroid → None (caller falls back).
-        assert!(idx
-            .centroid_nearest(&[Uuid::new_v4()], 5)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            idx.centroid_nearest(&[Uuid::new_v4()], 5)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

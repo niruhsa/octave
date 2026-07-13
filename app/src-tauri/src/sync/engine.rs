@@ -61,7 +61,8 @@ impl SyncEngine {
         self.pull_tracks(server, &cred, &mut report).await?;
         self.pull_playlists(server, &cred, &mut report).await?;
         self.pull_podcasts(server, &cred, &mut report).await?;
-        self.pull_podcast_episodes(server, &cred, &mut report).await?;
+        self.pull_podcast_episodes(server, &cred, &mut report)
+            .await?;
 
         // 3. Prune downloads whose files disappeared.
         self.prune_missing_files(&mut report).await?;
@@ -371,14 +372,18 @@ impl SyncEngine {
                         &srv.disc_no.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.duration_ms.to_string(),
                         &srv.codec,
-                        &srv.sample_rate_hz.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.sample_rate_hz
+                            .map(|n| n.to_string())
+                            .unwrap_or_default(),
                         &srv.bit_depth.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.channels.map(|n| n.to_string()).unwrap_or_default(),
                         // Loudness (Phase 16) — so a track measured *after* it was
                         // downloaded re-syncs and normalizes offline.
                         &srv.loudness_lufs.map(|n| n.to_string()).unwrap_or_default(),
                         &srv.loudness_peak.map(|n| n.to_string()).unwrap_or_default(),
-                        &srv.album_loudness_lufs.map(|n| n.to_string()).unwrap_or_default(),
+                        &srv.album_loudness_lufs
+                            .map(|n| n.to_string())
+                            .unwrap_or_default(),
                         &srv.metadata_json,
                     ]);
                     if self.changed("track", &row.id, &hash).await? {

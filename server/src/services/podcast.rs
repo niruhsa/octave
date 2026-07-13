@@ -35,7 +35,7 @@ use crate::db::repo::{AuditRepo, PodcastEpisodeRepo, PodcastRepo, PodcastSubscri
 use crate::error::{AppError, Result};
 use crate::services::organizer::sanitize;
 use crate::services::podcast_dir::{PodcastCandidate, PodcastDirectory};
-use crate::services::{duration, feed, tag, NotificationService};
+use crate::services::{NotificationService, duration, feed, tag};
 
 const MAX_PAGE_LIMIT: i64 = 200;
 const DEFAULT_PAGE_LIMIT: i64 = 50;
@@ -108,7 +108,11 @@ impl PodcastService {
         podcast_root: PathBuf,
     ) -> Self {
         let http = reqwest::Client::builder()
-            .user_agent(concat!("music-server/", env!("CARGO_PKG_VERSION"), " ( podcasts )"))
+            .user_agent(concat!(
+                "music-server/",
+                env!("CARGO_PKG_VERSION"),
+                " ( podcasts )"
+            ))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .expect("reqwest client build");
@@ -191,17 +195,24 @@ impl PodcastService {
             }
         };
 
-        let FetchOutcome::Fetched { parsed, etag, last_modified } =
-            self.fetch_and_parse(&feed_url, None).await?
+        let FetchOutcome::Fetched {
+            parsed,
+            etag,
+            last_modified,
+        } = self.fetch_and_parse(&feed_url, None).await?
         else {
             // `None` conditional never yields NotModified.
-            return Err(AppError::Internal("feed fetch returned not-modified".into()));
+            return Err(AppError::Internal(
+                "feed fetch returned not-modified".into(),
+            ));
         };
 
         let categories = if !parsed.categories.is_empty() {
             parsed.categories.clone()
         } else {
-            cand.as_ref().map(|c| c.categories.clone()).unwrap_or_default()
+            cand.as_ref()
+                .map(|c| c.categories.clone())
+                .unwrap_or_default()
         };
         let categories_json = serde_json::to_string(&categories).unwrap_or_else(|_| "[]".into());
 
@@ -236,7 +247,10 @@ impl PodcastService {
             let podcast = podcast.clone();
             tokio::spawn(async move {
                 this.cache_show_art(&podcast).await;
-                if let Err(e) = this.walk_feed(&podcast, *parsed, &HashSet::new(), false).await {
+                if let Err(e) = this
+                    .walk_feed(&podcast, *parsed, &HashSet::new(), false)
+                    .await
+                {
                     warn!(podcast = %podcast.id, error = %e, "podcast subscribe: back-catalog seed failed");
                     return;
                 }
@@ -464,12 +478,20 @@ impl PodcastService {
                     not_modified: true,
                 })
             }
-            FetchOutcome::Fetched { parsed, etag, last_modified } => {
+            FetchOutcome::Fetched {
+                parsed,
+                etag,
+                last_modified,
+            } => {
                 // Snapshot the cache, then walk the feed newest→oldest, stopping
                 // as soon as a page reaches episodes we already have — everything
                 // older is, by construction, already cached.
-                let cached: HashSet<String> =
-                    self.episodes.all_guids(podcast_id).await?.into_iter().collect();
+                let cached: HashSet<String> = self
+                    .episodes
+                    .all_guids(podcast_id)
+                    .await?
+                    .into_iter()
+                    .collect();
                 let walk = self.walk_feed(&podcast, *parsed, &cached, true).await?;
 
                 // Zero overlap after walking the whole feed → the feed's identity
@@ -484,7 +506,10 @@ impl PodcastService {
 
                 if full_replace {
                     let keep: Vec<String> = walk.fetched.iter().cloned().collect();
-                    let removed = self.episodes.delete_stale_metadata(podcast_id, &keep).await?;
+                    let removed = self
+                        .episodes
+                        .delete_stale_metadata(podcast_id, &keep)
+                        .await?;
                     warn!(
                         podcast = %podcast_id, removed,
                         "podcast refresh: feed shares nothing with cache; replaced cached episodes"
@@ -906,10 +931,11 @@ impl PodcastService {
     ) -> Result<()> {
         let to_json = |v: Option<serde_json::Value>| -> Result<Option<String>> {
             match v {
-                Some(v) => Ok(Some(
-                    serde_json::to_string(&v)
-                        .map_err(|e| AppError::Internal(format!("audit json: {e}")))?,
-                )),
+                Some(v) => {
+                    Ok(Some(serde_json::to_string(&v).map_err(|e| {
+                        AppError::Internal(format!("audit json: {e}"))
+                    })?))
+                }
                 None => Ok(None),
             }
         };
@@ -960,7 +986,11 @@ fn probe_audio(path: &Path) -> (Option<String>, Option<i32>, Option<i64>) {
 /// Audio file extension from the enclosure URL path, falling back to the
 /// content-type, then `mp3`.
 fn ext_from_enclosure(url: &str, content_type: Option<&str>) -> String {
-    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
     for ext in ["mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "mp4"] {
         if path.ends_with(&format!(".{ext}")) {
             return ext.to_string();
@@ -1046,10 +1076,22 @@ mod tests {
             unimplemented!("network path; not unit-tested")
         }
         async fn get(&self, id: Uuid) -> Result<Option<Podcast>> {
-            Ok(self.rows.lock().unwrap().iter().find(|p| p.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|p| p.id == id)
+                .cloned())
         }
         async fn get_by_feed_url(&self, url: &str) -> Result<Option<Podcast>> {
-            Ok(self.rows.lock().unwrap().iter().find(|p| p.feed_url == url).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|p| p.feed_url == url)
+                .cloned())
         }
         async fn list(&self, _: i64, _: i64) -> Result<Vec<Podcast>> {
             Ok(self.rows.lock().unwrap().clone())
@@ -1123,7 +1165,13 @@ mod tests {
             Ok((ep, true))
         }
         async fn get(&self, id: Uuid) -> Result<Option<PodcastEpisode>> {
-            Ok(self.rows.lock().unwrap().iter().find(|e| e.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|e| e.id == id)
+                .cloned())
         }
         async fn list_for_podcast(&self, pid: Uuid, _: i64, _: i64) -> Result<Vec<PodcastEpisode>> {
             Ok(self
@@ -1273,7 +1321,12 @@ mod tests {
         }
     }
 
-    fn make_service() -> (PodcastService, Arc<FakePodcasts>, Arc<FakeEpisodes>, Arc<FakeAudit>) {
+    fn make_service() -> (
+        PodcastService,
+        Arc<FakePodcasts>,
+        Arc<FakeEpisodes>,
+        Arc<FakeAudit>,
+    ) {
         let podcasts = Arc::new(FakePodcasts::default());
         let episodes = Arc::new(FakeEpisodes::default());
         let subs = Arc::new(FakeSubs::default());
@@ -1318,10 +1371,7 @@ mod tests {
     async fn secret_key_cannot_subscribe() {
         let (svc, podcasts, ..) = make_service();
         let p = podcasts.insert("Daily");
-        let err = svc
-            .subscribe(&Identity::SecretKey, p.id)
-            .await
-            .unwrap_err();
+        let err = svc.subscribe(&Identity::SecretKey, p.id).await.unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
     }
 
@@ -1352,7 +1402,11 @@ mod tests {
         let actions = audit.actions.lock().unwrap().clone();
         assert_eq!(
             actions,
-            vec!["podcast.subscribe", "podcast.subscribe", "podcast.unsubscribe"]
+            vec![
+                "podcast.subscribe",
+                "podcast.subscribe",
+                "podcast.unsubscribe"
+            ]
         );
     }
 
@@ -1372,7 +1426,12 @@ mod tests {
     /// Snapshot the fake's cached guids — what the incremental walk compares
     /// each page against.
     fn snapshot(eps: &Arc<FakeEpisodes>) -> HashSet<String> {
-        eps.rows.lock().unwrap().iter().map(|e| e.guid.clone()).collect()
+        eps.rows
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.guid.clone())
+            .collect()
     }
 
     #[tokio::test]
@@ -1437,7 +1496,10 @@ mod tests {
         let keep: Vec<String> = r.fetched.iter().cloned().collect();
         let removed = episodes.delete_stale_metadata(p.id, &keep).await.unwrap();
         assert_eq!(removed, 2); // a, b
-        assert_eq!(snapshot(&episodes), ["x", "y"].iter().map(|s| s.to_string()).collect());
+        assert_eq!(
+            snapshot(&episodes),
+            ["x", "y"].iter().map(|s| s.to_string()).collect()
+        );
     }
 
     #[tokio::test]
@@ -1462,16 +1524,11 @@ mod tests {
             })
             .await
             .unwrap();
-        episodes
-            .rows
-            .lock()
-            .unwrap()
-            .iter_mut()
-            .for_each(|e| {
-                if e.guid == "kept" {
-                    e.file_path = Some("/tmp/kept.mp3".into());
-                }
-            });
+        episodes.rows.lock().unwrap().iter_mut().for_each(|e| {
+            if e.guid == "kept" {
+                e.file_path = Some("/tmp/kept.mp3".into());
+            }
+        });
         episodes
             .upsert_by_guid(NewPodcastEpisode {
                 podcast_id: p.id,
@@ -1491,22 +1548,34 @@ mod tests {
 
         // Replace against a brand-new feed that keeps neither guid: the
         // downloaded one survives (its audio is on disk), the metadata one goes.
-        let removed = episodes.delete_stale_metadata(p.id, &["fresh".to_string()]).await.unwrap();
+        let removed = episodes
+            .delete_stale_metadata(p.id, &["fresh".to_string()])
+            .await
+            .unwrap();
         assert_eq!(removed, 1);
-        assert_eq!(snapshot(&episodes), ["kept"].iter().map(|s| s.to_string()).collect());
+        assert_eq!(
+            snapshot(&episodes),
+            ["kept"].iter().map(|s| s.to_string()).collect()
+        );
     }
 
     #[test]
     fn enclosure_ext_from_url_then_content_type() {
         assert_eq!(ext_from_enclosure("https://x/ep.mp3", None), "mp3");
         assert_eq!(ext_from_enclosure("https://x/ep.m4a?token=1", None), "m4a");
-        assert_eq!(ext_from_enclosure("https://x/audio", Some("audio/mpeg")), "mp3");
+        assert_eq!(
+            ext_from_enclosure("https://x/audio", Some("audio/mpeg")),
+            "mp3"
+        );
         assert_eq!(
             ext_from_enclosure("https://x/stream", Some("audio/mp4; rate=44100")),
             "m4a"
         );
         // Unknown → mp3 default.
-        assert_eq!(ext_from_enclosure("https://x/blob", Some("application/x")), "mp3");
+        assert_eq!(
+            ext_from_enclosure("https://x/blob", Some("application/x")),
+            "mp3"
+        );
     }
 
     #[test]

@@ -19,7 +19,9 @@ pub fn router() -> Router<RestState> {
         .route("/playlists", post(create_playlist).get(list_my_playlists))
         .route(
             "/playlists/:id",
-            get(get_playlist).put(rename_playlist).delete(delete_playlist),
+            get(get_playlist)
+                .put(rename_playlist)
+                .delete(delete_playlist),
         )
         .route("/playlists/:id/tracks", get(list_tracks).post(add_track))
         .route(

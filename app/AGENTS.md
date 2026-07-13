@@ -92,6 +92,60 @@ This file owns the **client's** status and detail. When client work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Parametric equalizer (client).** The app now has an opt-in, boost-capable
+parametric EQ with account-synced profiles/defaults/portable output rules and a
+separate device-only layer for anonymous, `SECRET_KEY`, unsupported-server, and
+exact-output settings. The native core under
+[`src-tauri/src/equalizer/`](./src-tauri/src/equalizer/) owns strict validation
+(1–32 peaking bands), NFKC/full-casefold selector normalization, deterministic
+resolution precedence, Equalizer APO text import/export, and SQLite migration
+[`0010_equalizer.sql`](./src-tauri/migrations/0010_equalizer.sql) for clean
+server mirrors, local profiles/rules/preferences, per-account FIFO outbox, and
+dependency-group conflicts. Revisions serialize as decimal strings end to end.
+- Server access is gRPC-primary/REST-fallback at parity through
+  `equalizer.proto`, `GrpcClient`, `RestClient`, `ServerClient`, and
+  `AuthManager`; old servers downgrade explicitly to the local-only layer and
+  collision-safely preserve the last complete synced snapshot and exact-binding
+  references there. Newer unsupported formats are quarantined read-only and
+  play Flat rather than being installed, mutated, or replayed.
+  Replay is FIFO (replay before pull), compare-and-swap conflicts are isolated
+  with dependent operations, and mirror replacement + acknowledgement + tail
+  rebase commit atomically.
+- Native Windows Core Audio, macOS CoreAudio, and Android `AudioManager`
+  adapters feed automatic switching. Raw endpoint IDs never cross IPC or enter
+  persistence/logging: Rust HMAC-SHA256s them with a generated device-local
+  secret and exposes only redacted output summaries. Resolution order is
+  master-off → manual session override → local exact binding → reliable active
+  portable rule → connected fallback → default → flat; real route changes clear
+  manual overrides while duplicate notifications are coalesced.
+- The Tauri command surface covers snapshots, preferences/manual override,
+  profile/default/device-rule mutations, redacted output attach/list/current,
+  conflict resolution, native/SAF file import/export, and audit history/rollback.
+  The Settings → Equalizer frontend uses the same typed models and applies the
+  resolved profile in the existing Web Audio graph without changing playback
+  rate or the media transport path.
+- The playback graph mixes both gapless/crossfade decks before one dual-bank
+  peaking-filter cascade. Complete banks switch with a 40 ms complementary
+  ramp, rapid requests coalesce latest-wins, actual Web Audio response data and
+  sample rate drive optional steady-state auto headroom, and invalid/future or
+  above-Nyquist profiles fail closed to Flat. Settings provides 1–32-band
+  editing, live A/B preview, response curve, local master/automation gates,
+  output-rule ordering, conflict state, native import/export, and audit UI.
+- Platform support: Windows uses Core Audio endpoint/default callbacks with a
+  slow polling fallback and persistent exact HMAC bindings; macOS uses CoreAudio
+  default-output callbacks and persistent UID-derived HMAC bindings; Android
+  uses `AudioDeviceCallback` plus API 33+ media-route prediction, reports older
+  ambiguous routes as connected-only, and keeps route IDs session-only. No new
+  Android permission is required.
+- Verification: frontend Vitest **14 passed**, production `npm run build`
+  passed, the full native Rust suite **111 passed**, and all-target Rust check
+  and clippy completed (repository baseline warnings remain). Android's arm64
+  Rust target check and `:app:compileArmDebugKotlin --offline` passed with the
+  installed NDK/JBR. The macOS adapter could not be compiled on this Windows
+  host because the Apple target/SDK is unavailable. Remaining manual coverage
+  is live bearer sync/conflict/rollback against Postgres and physical Windows,
+  macOS, and Android route/audio-transition testing.
+
 **Album folder rename (client).** The Album route gains a Manager+ "Folder on disk"
 control ([`components/AlbumFolderLocation.tsx`](./src/components/AlbumFolderLocation.tsx),
 rendered near the album aliases): it shows the album's current

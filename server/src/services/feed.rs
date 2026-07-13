@@ -61,10 +61,7 @@ pub fn parse_feed(bytes: &[u8]) -> Result<ParsedFeed> {
         .unwrap_or_else(|| "Untitled Podcast".to_string());
     let author = feed.authors.into_iter().next().map(|p| p.name);
     let description = feed.description.map(|t| t.content);
-    let image_url = feed
-        .logo
-        .or(feed.icon)
-        .map(|img| img.uri);
+    let image_url = feed.logo.or(feed.icon).map(|img| img.uri);
     // RFC 5005 paged feeds carry a `rel="next"` link to the next (older) page.
     // Pull it out before we consume `links` for the homepage so the two never
     // collide (and so the next-page URL isn't mistaken for the show homepage).
@@ -77,7 +74,12 @@ pub fn parse_feed(bytes: &[u8]) -> Result<ParsedFeed> {
     let link = feed
         .links
         .into_iter()
-        .find(|l| !matches!(l.rel.as_deref(), Some("next" | "prev" | "previous" | "self")))
+        .find(|l| {
+            !matches!(
+                l.rel.as_deref(),
+                Some("next" | "prev" | "previous" | "self")
+            )
+        })
         .map(|l| l.href);
     let language = feed.language;
     let categories: Vec<String> = feed
@@ -184,10 +186,16 @@ fn parse_entry(entry: feed_rs::model::Entry) -> Option<ParsedEpisode> {
 /// Heuristic: does a URL path look like an audio file? Used when the enclosure
 /// omits a usable content-type.
 fn looks_like_audio(url: &str) -> bool {
-    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
-    [".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".mp4"]
-        .iter()
-        .any(|ext| path.ends_with(ext))
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
+    [
+        ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".mp4",
+    ]
+    .iter()
+    .any(|ext| path.ends_with(ext))
 }
 
 #[cfg(test)]
@@ -209,10 +217,7 @@ mod tests {
         let first = &feed.episodes[0];
         assert_eq!(first.guid, "episode-001");
         assert_eq!(first.title, "Episode One");
-        assert_eq!(
-            first.enclosure_url,
-            "https://cdn.example.com/ep1.mp3"
-        );
+        assert_eq!(first.enclosure_url, "https://cdn.example.com/ep1.mp3");
         assert_eq!(first.enclosure_type.as_deref(), Some("audio/mpeg"));
         assert!(first.published_at.is_some());
     }

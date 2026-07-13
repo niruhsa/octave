@@ -39,16 +39,27 @@ pub mod op_type {
 pub enum PendingOpKind {
     /// Create a playlist. `local_id` is the placeholder the UI used; the
     /// server returns the real id on replay.
-    PlaylistCreate { local_id: String, name: String },
-    PlaylistRename { playlist_id: String, name: String },
-    PlaylistDelete { playlist_id: String },
+    PlaylistCreate {
+        local_id: String,
+        name: String,
+    },
+    PlaylistRename {
+        playlist_id: String,
+        name: String,
+    },
+    PlaylistDelete {
+        playlist_id: String,
+    },
     PlaylistAddTrack {
         playlist_id: String,
         track_id: String,
         /// 0 = append; otherwise 1-based insert position.
         position: i32,
     },
-    PlaylistRemoveTrack { playlist_id: String, position: i32 },
+    PlaylistRemoveTrack {
+        playlist_id: String,
+        position: i32,
+    },
     PlaylistReorderTrack {
         playlist_id: String,
         from_position: i32,
@@ -70,8 +81,7 @@ impl PendingOpKind {
     }
 
     pub fn to_payload_json(&self) -> AppResult<String> {
-        serde_json::to_string(self)
-            .map_err(|e| AppError::Internal(format!("encode op: {e}")))
+        serde_json::to_string(self).map_err(|e| AppError::Internal(format!("encode op: {e}")))
     }
 
     pub fn from_payload_json(s: &str) -> AppResult<Self> {

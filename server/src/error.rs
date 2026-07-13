@@ -30,6 +30,11 @@ pub enum AppError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// Compare-and-swap or uniqueness conflict. `code` is stable and intended
+    /// for transport clients; `message` is explanatory text only.
+    #[error("conflict ({code}): {message}")]
+    Conflict { code: String, message: String },
+
     /// I/O failure.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

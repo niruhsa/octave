@@ -152,7 +152,9 @@ impl FcmSender {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(AppError::Internal(format!("fcm token http {status}: {body}")));
+            return Err(AppError::Internal(format!(
+                "fcm token http {status}: {body}"
+            )));
         }
         let tok: TokenResponse = resp
             .json()
@@ -217,6 +219,8 @@ impl PushSender for FcmSender {
         {
             return Ok(PushOutcome::Unregistered);
         }
-        Err(AppError::Internal(format!("fcm send http {status}: {text}")))
+        Err(AppError::Internal(format!(
+            "fcm send http {status}: {text}"
+        )))
     }
 }

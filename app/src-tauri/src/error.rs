@@ -30,6 +30,15 @@ pub enum AppError {
     #[error("forbidden: {0}")]
     Forbidden(String),
 
+    /// Optimistic compare-and-swap or uniqueness conflict. `code` is the
+    /// stable server error code; UI must not branch on localized text.
+    #[error("conflict ({code}): {message}")]
+    Conflict { code: String, message: String },
+
+    /// The configured server predates a capability used by this client.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+
     /// Auth state is missing / corrupt locally (no creds saved, secure
     /// store unreadable). UI prompts for login.
     #[error("auth not configured: {0}")]

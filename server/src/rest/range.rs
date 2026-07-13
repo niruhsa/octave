@@ -100,19 +100,40 @@ mod tests {
 
     #[test]
     fn unsatisfiable() {
-        assert_eq!(parse_range("bytes=1000-1100", 1000), Err(RangeParseError::Unsatisfiable));
-        assert_eq!(parse_range("bytes=-0", 1000), Err(RangeParseError::Unsatisfiable));
-        assert_eq!(parse_range("bytes=-1", 0), Err(RangeParseError::Unsatisfiable));
+        assert_eq!(
+            parse_range("bytes=1000-1100", 1000),
+            Err(RangeParseError::Unsatisfiable)
+        );
+        assert_eq!(
+            parse_range("bytes=-0", 1000),
+            Err(RangeParseError::Unsatisfiable)
+        );
+        assert_eq!(
+            parse_range("bytes=-1", 0),
+            Err(RangeParseError::Unsatisfiable)
+        );
     }
 
     #[test]
     fn malformed() {
-        assert_eq!(parse_range("octets=0-1", 1000), Err(RangeParseError::Malformed));
-        assert_eq!(parse_range("bytes=abc-def", 1000), Err(RangeParseError::Malformed));
+        assert_eq!(
+            parse_range("octets=0-1", 1000),
+            Err(RangeParseError::Malformed)
+        );
+        assert_eq!(
+            parse_range("bytes=abc-def", 1000),
+            Err(RangeParseError::Malformed)
+        );
         assert_eq!(parse_range("bytes=", 1000), Err(RangeParseError::Malformed));
-        assert_eq!(parse_range("bytes=-", 1000), Err(RangeParseError::Malformed));
+        assert_eq!(
+            parse_range("bytes=-", 1000),
+            Err(RangeParseError::Malformed)
+        );
         // multi-range rejected
-        assert_eq!(parse_range("bytes=0-9,20-29", 1000), Err(RangeParseError::Malformed));
+        assert_eq!(
+            parse_range("bytes=0-9,20-29", 1000),
+            Err(RangeParseError::Malformed)
+        );
     }
 
     #[test]

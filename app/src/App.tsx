@@ -44,6 +44,7 @@ import { useUploadEvents } from "./uploads/useUploads";
 import { useNotificationsScheduler } from "./notifications/useNotifications";
 import { useFavoritesStore } from "./favorites/useFavorites";
 import { useHotkeys } from "./settings/useHotkeys";
+import { useEqualizerRuntime } from "./equalizer/useEqualizerRuntime";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -184,6 +185,8 @@ function RootLayout() {
 
   // Keyboard shortcuts (play/next/nav/…), user-configurable in Settings.
   useHotkeys();
+  // Native code resolves the account/output; React applies one shared post-mix EQ.
+  useEqualizerRuntime();
 
   // On boot, ask Rust for any cached session so the UI starts with the
   // right tier without a network round-trip. Errors are non-fatal — they

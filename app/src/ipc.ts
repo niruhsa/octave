@@ -3,6 +3,23 @@
 // touch raw strings or `any`.
 
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  EqualizerConflict,
+  EqualizerChangeDetail,
+  EqualizerChangePage,
+  EqualizerDeleteProfileRequest,
+  EqualizerDeviceRuleInput,
+  EqualizerEntityRevision,
+  EqualizerLocalPreferences,
+  EqualizerMutationResponse,
+  EqualizerOutputSummary,
+  EqualizerProfileInput,
+  EqualizerProfileTarget,
+  EqualizerRollbackResponse,
+  EqualizerSnapshot,
+  NativeParsedEqualizerProfile,
+  ResolvedEqualizer,
+} from "./equalizer/types";
 
 // ---------------------------------------------------------------------------
 // app
@@ -1299,6 +1316,147 @@ export async function onMediaSessionAction(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<MediaSessionAction>("media-session-action", (e) => cb(e.payload));
+}
+
+// ---------------------------------------------------------------------------
+// equalizer (account-synced configuration + device-local output resolution)
+// ---------------------------------------------------------------------------
+
+/** Cached account/local state plus the native resolver's effective profile. */
+export const equalizerSnapshot = () =>
+  invoke<EqualizerSnapshot>("equalizer_snapshot");
+
+export const equalizerCreateProfile = (profile: EqualizerProfileInput) =>
+  invoke<EqualizerMutationResponse>("equalizer_create_profile", { profile });
+
+export const equalizerUpdateProfile = (
+  profile: EqualizerProfileInput,
+  expectedRevision: string,
+) =>
+  invoke<EqualizerMutationResponse>("equalizer_update_profile", {
+    profile,
+    expectedRevision,
+  });
+
+export const equalizerDeleteProfile = (request: EqualizerDeleteProfileRequest) =>
+  invoke<EqualizerMutationResponse>("equalizer_delete_profile", { request });
+
+export const equalizerSetDefault = (
+  profileId: string | null,
+  expectedSettingsRevision: string,
+) =>
+  invoke<EqualizerMutationResponse>("equalizer_set_default", {
+    profileId,
+    expectedSettingsRevision,
+  });
+
+export const equalizerGetLocalPreferences = () =>
+  invoke<EqualizerLocalPreferences>("equalizer_get_local_preferences");
+
+export const equalizerSetLocalPreferences = (preferences: EqualizerLocalPreferences) =>
+  invoke<EqualizerLocalPreferences>("equalizer_set_local_preferences", { preferences });
+
+export const equalizerSetManualOverride = (target: EqualizerProfileTarget) =>
+  invoke<ResolvedEqualizer>("equalizer_set_manual_override", { target });
+
+export const equalizerClearManualOverride = () =>
+  invoke<ResolvedEqualizer>("equalizer_clear_manual_override");
+
+/** Native resolves the current endpoint key internally; no hardware ID enters React. */
+export const equalizerAttachCurrentOutput = (target: EqualizerProfileTarget) =>
+  invoke<void>("equalizer_attach_current_output", { target });
+
+export const equalizerCreateDeviceRule = (rule: EqualizerDeviceRuleInput) =>
+  invoke<EqualizerMutationResponse>("equalizer_create_device_rule", { rule });
+
+export const equalizerUpdateDeviceRule = (
+  rule: EqualizerDeviceRuleInput,
+  expectedRevision: string,
+) =>
+  invoke<EqualizerMutationResponse>("equalizer_update_device_rule", {
+    rule,
+    expectedRevision,
+  });
+
+export const equalizerDeleteDeviceRule = (id: string, expectedRevision: string) =>
+  invoke<EqualizerMutationResponse>("equalizer_delete_device_rule", {
+    id,
+    expectedRevision,
+  });
+
+export const equalizerReorderDeviceRules = (orderedRules: EqualizerEntityRevision[]) =>
+  invoke<EqualizerMutationResponse>("equalizer_reorder_device_rules", { orderedRules });
+
+export const equalizerPromoteLocalProfile = (
+  localProfileId: string,
+  assignDefault = false,
+  remapExactBindings = false,
+) =>
+  invoke<EqualizerMutationResponse>("equalizer_promote_local_profile", {
+    localProfileId,
+    assignDefault,
+    remapExactBindings,
+  });
+
+/** Detach the current exact output without exposing its native endpoint key. */
+export const equalizerDetachCurrentOutput = () =>
+  invoke<void>("equalizer_detach_current_output");
+
+export const equalizerConflicts = () =>
+  invoke<EqualizerConflict[]>("equalizer_conflicts");
+
+export const equalizerResolveConflict = (
+  conflictId: number,
+  resolution: "keep_server" | "keep_local_copy" | "retry",
+) => invoke<void>("equalizer_resolve_conflict", { conflictId, resolution });
+
+/** Strict native parser used by Tauri/SAF file flows; the TS parser mirrors it for UI feedback. */
+export const equalizerParseText = (text: string, proposedName: string) =>
+  invoke<NativeParsedEqualizerProfile>("equalizer_parse_text", { text, proposedName });
+
+export const equalizerImportFile = (pathOrUri: string, proposedName?: string) =>
+  invoke<NativeParsedEqualizerProfile>("equalizer_import_file", {
+    pathOrUri,
+    proposedName: proposedName ?? null,
+  });
+
+export const equalizerExportFile = (profileId: string, destination: string) =>
+  invoke<void>("equalizer_export_file", { profileId, destination });
+
+export const equalizerAudioOutputs = () =>
+  invoke<EqualizerOutputSummary[]>("equalizer_audio_outputs");
+
+export const equalizerCurrentOutput = () =>
+  invoke<EqualizerOutputSummary | null>("equalizer_current_output");
+
+/** Manager/Admin audit history; Manager detail remains redacted server-side. */
+export const equalizerListChanges = (
+  subjectUserId?: string,
+  cursor?: string,
+  limit = 30,
+) =>
+  invoke<EqualizerChangePage>("equalizer_list_changes", {
+    subjectUserId: subjectUserId?.trim() || null,
+    cursor: cursor ?? null,
+    limit,
+  });
+
+export const equalizerGetChange = (auditId: string) =>
+  invoke<EqualizerChangeDetail>("equalizer_get_change", { auditId });
+
+/** Admin-only compare-and-swap rollback. Result is target-tagged, never a caller snapshot. */
+export const equalizerRollbackChange = (auditId: string, expectedStateRevision: string) =>
+  invoke<EqualizerRollbackResponse>("equalizer_rollback_change", {
+    auditId,
+    expectedStateRevision,
+  });
+
+/** Native resolver event; payload contains only a profile and redacted output summary. */
+export async function onEqualizerEffectiveChanged(
+  cb: (resolved: ResolvedEqualizer) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ResolvedEqualizer>("equalizer-effective-changed", (event) => cb(event.payload));
 }
 
 // ---------------------------------------------------------------------------

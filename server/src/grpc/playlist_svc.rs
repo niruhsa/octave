@@ -104,11 +104,7 @@ impl pb::playlist_service_server::PlaylistService for PlaylistServer {
     ) -> Result<Response<pb::DeleteResponse>, Status> {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "playlist")?;
-        let deleted = self
-            .playlists
-            .delete(&caller, id)
-            .await
-            .map_err(map_err)?;
+        let deleted = self.playlists.delete(&caller, id).await.map_err(map_err)?;
         Ok(Response::new(pb::DeleteResponse { deleted }))
     }
 

@@ -111,10 +111,12 @@ pub async fn upsert_artist(pool: &SqlitePool, artist: &Artist) -> AppResult<()> 
 }
 
 pub async fn get_artist(pool: &SqlitePool, id: &str) -> AppResult<Option<Artist>> {
-    let row = sqlx::query_as::<_, Artist>("SELECT id, name, sort_name, storage_bytes, updated_at FROM artists WHERE id = ?1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query_as::<_, Artist>(
+        "SELECT id, name, sort_name, storage_bytes, updated_at FROM artists WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row)
 }
 
@@ -538,13 +540,11 @@ pub async fn delete_sync_state(
 
 /// Append an op to the outbox. Returns the new row id.
 pub async fn enqueue_op(pool: &SqlitePool, op_type: &str, payload_json: &str) -> AppResult<i64> {
-    let row = sqlx::query(
-        "INSERT INTO pending_ops (op_type, payload_json) VALUES (?1, ?2)",
-    )
-    .bind(op_type)
-    .bind(payload_json)
-    .execute(pool)
-    .await?;
+    let row = sqlx::query("INSERT INTO pending_ops (op_type, payload_json) VALUES (?1, ?2)")
+        .bind(op_type)
+        .bind(payload_json)
+        .execute(pool)
+        .await?;
     Ok(row.last_insert_rowid())
 }
 
@@ -685,10 +685,11 @@ pub async fn delete_setting(pool: &SqlitePool, key: &str) -> AppResult<()> {
 /// Tracks without a recorded `file_size` are skipped — they still count
 /// toward the row count but not the byte total.
 pub async fn downloaded_bytes(pool: &SqlitePool) -> AppResult<i64> {
-    let total: Option<i64> =
-        sqlx::query_scalar("SELECT COALESCE(SUM(file_size), 0) FROM tracks WHERE file_size IS NOT NULL")
-            .fetch_one(pool)
-            .await?;
+    let total: Option<i64> = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(file_size), 0) FROM tracks WHERE file_size IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await?;
     Ok(total.unwrap_or(0))
 }
 
@@ -710,7 +711,10 @@ pub async fn downloaded_cover_count(pool: &SqlitePool) -> AppResult<i64> {
 
 /// Count of downloaded tracks whose album is `album_id`. Used by the
 /// delete flow to decide whether to drop the album's cover row.
-pub async fn count_downloaded_tracks_for_album(pool: &SqlitePool, album_id: &str) -> AppResult<i64> {
+pub async fn count_downloaded_tracks_for_album(
+    pool: &SqlitePool,
+    album_id: &str,
+) -> AppResult<i64> {
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tracks WHERE album_id = ?1")
         .bind(album_id)
         .fetch_one(pool)
@@ -1156,9 +1160,10 @@ pub async fn downloaded_episode_bytes(pool: &SqlitePool) -> AppResult<i64> {
 
 /// Count of downloaded episodes (storage accounting).
 pub async fn count_downloaded_episodes(pool: &SqlitePool) -> AppResult<i64> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM podcast_episodes WHERE local_file_path IS NOT NULL")
-            .fetch_one(pool)
-            .await?;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM podcast_episodes WHERE local_file_path IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await?;
     Ok(n)
 }

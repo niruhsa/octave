@@ -53,3 +53,8 @@ pub mod discover {
 pub mod lyrics {
     tonic::include_proto!("music.lyrics.v1");
 }
+
+#[allow(clippy::all, clippy::pedantic)]
+pub mod equalizer {
+    tonic::include_proto!("music.equalizer.v1");
+}

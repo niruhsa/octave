@@ -244,7 +244,8 @@ impl NotificationService {
                 ("album_id".to_string(), album.id.to_string()),
             ];
             tokio::spawn(async move {
-                this.push_fanout(&recipients, &title, &body_text, &data).await;
+                this.push_fanout(&recipients, &title, &body_text, &data)
+                    .await;
             });
         }
         Ok(created)
@@ -294,7 +295,8 @@ impl NotificationService {
                 ("artist_id".to_string(), artist_id.to_string()),
             ];
             tokio::spawn(async move {
-                this.push_fanout(&recipients, &heading, &body_text, &data).await;
+                this.push_fanout(&recipients, &heading, &body_text, &data)
+                    .await;
             });
         }
         Ok(created)
@@ -341,7 +343,8 @@ impl NotificationService {
                 ("episode_id".to_string(), episode.id.to_string()),
             ];
             tokio::spawn(async move {
-                this.push_fanout(&recipients, &title, &body_text, &data).await;
+                this.push_fanout(&recipients, &title, &body_text, &data)
+                    .await;
             });
         }
         Ok(created)
@@ -1073,13 +1076,19 @@ mod tests {
         let ep = episode(pod.id, "Episode 42");
 
         let recipients = [sub1.user_id().unwrap(), sub2.user_id().unwrap()];
-        let created = svc.notify_new_episode(&recipients, &pod, &ep).await.unwrap();
+        let created = svc
+            .notify_new_episode(&recipients, &pod, &ep)
+            .await
+            .unwrap();
         assert_eq!(created, 2);
 
         assert_eq!(svc.unread_count(&sub1).await.unwrap(), 1);
         assert_eq!(svc.unread_count(&sub2).await.unwrap(), 1);
 
-        let n = &svc.list_notifications(&sub1, true, None, None).await.unwrap()[0];
+        let n = &svc
+            .list_notifications(&sub1, true, None, None)
+            .await
+            .unwrap()[0];
         assert_eq!(n.kind, "new_episode");
         assert_eq!(n.podcast_id, Some(pod.id));
         assert_eq!(n.episode_id, Some(ep.id));

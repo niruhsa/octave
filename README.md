@@ -6,6 +6,7 @@ A private, self-hosted music platform. A remote **server** hosts a lossless/down
 - **Streaming** of lossless/downloaded music from server to client.
 - **Gapless playback & crossfade** — the next track preloads on a standby audio element and starts the instant the current one ends; optional equal-power crossfade (0–12 s) with an album-aware guard, configured under **Settings → Player**. See [`app/GAPLESS_CROSSFADE.md`](./app/GAPLESS_CROSSFADE.md).
 - **Loudness normalization (ReplayGain / EBU R128)** — the server measures each track's integrated loudness (LUFS) + peak (opt-in via `LOUDNESS_ENABLED`, computed in the fingerprint decode pass) and the player levels track-to-track volume through a boost-capable Web Audio graph. **Settings → Player:** Off / Track / Album, with a target-loudness + preamp trim.
+- **Synced parametric equalizer** — create/import 1–32-band peaking-EQ profiles, sync account defaults and portable output rules, and switch automatically on Windows, macOS, and Android while exact output bindings remain private to each device. One post-mix Web Audio cascade preserves gapless/crossfade playback. See [`EQUALIZER.md`](./EQUALIZER.md).
 - **Online/offline authority** — server is source of truth when reachable; client uses its offline cache otherwise.
 - **Recommendations** — behavioral discovery shelves + seeded radio (artist / album / track), plus opt-in **acoustic "sounds like" radio** that analyzes each track into a similarity embedding for true content-based neighbors.
 - **Playlists** — create / update / delete.
@@ -71,6 +72,8 @@ npm run tauri ios dev   # best effort
 ```
 
 ## Status
+**Synced parametric equalizer (full-stack) is implemented.** The server owns bearer-account profiles/defaults/portable rules with compare-and-swap revisions, complete audit history, and Admin rollback over gRPC/REST. The client adds offline/local layers, strict ParametricEQ import/export, privacy-preserving native output resolution for Windows/macOS/Android, Settings profile/rule/history UX, and a dual-bank post-mix Web Audio EQ with optional auto headroom. See [`EQUALIZER.md`](./EQUALIZER.md).
+
 Server through **Phase 7 (Metadata & Artwork)**. Client through **Phase 9 (Metadata Editing)**. Plus **Phase 10 — Metadata merge** (full-stack): collect cross-spelling duplicate artists/albums into one entity while preserving every spelling, displaying the `PRIMARY_LANGUAGE` one (e.g. English `YUQI` over Korean `우기 ((여자)아이들)`), and move a stray "single" track into its parent album tagged as a single release. Plus **album type** (full-stack): classify an album as **Album / EP / Single** (`POST /albums/:id/type`), where a **Single** must have at least one track flagged as its single song (enforced server-side). Plus **track title aliases** (full-stack): alternate spellings of a track title per language (mirroring artist/album aliases), edited from the single-track metadata modal, with the displayed title following `PRIMARY_LANGUAGE`. Plus **explicit flag** (full-stack): mark a song explicit without putting it in the title, and an album is auto-labeled explicit when any of its songs is (recomputed server-side). Plus **Phase 10 — Follows & Notifications** (full-stack): follow/unfollow artists and receive new-release notifications (gRPC + REST) — server fan-out on album creation + a client Follow toggle, Notifications route, unread badge, and polled OS notifications (desktop + Android; FCM/APNs background push deferred).
 
 | Domain | Status | Tracked in |
@@ -87,5 +90,6 @@ This repo keeps documentation layered so each domain owns its own status:
 - **[`app/AGENTS.md`](./app/AGENTS.md)** — client architecture, platforms, build, status.
 - **[`FIREBASE_NOTIFICATIONS.md`](./FIREBASE_NOTIFICATIONS.md)** — step-by-step setup for real-time push notifications (Firebase Cloud Messaging) on Android.
 - **[`PODCASTS.md`](./PODCASTS.md)** — podcast support master plan, linking [`server/PODCASTS.md`](./server/PODCASTS.md) (server-side, complete) and [`app/PODCASTS.md`](./app/PODCASTS.md) (client-side, pending).
+- **[`EQUALIZER.md`](./EQUALIZER.md)** — synced/local EQ contracts, DSP topology, privacy model, and Windows/macOS/Android route-confidence matrix.
 
 **Maintenance rule:** when work changes a domain, update that domain's `AGENTS.md` first, then propagate high-level/status changes up to the root [`AGENTS.md`](./AGENTS.md) and this `README.md`. Keep the **Status** sections here and in each `AGENTS.md` in sync.

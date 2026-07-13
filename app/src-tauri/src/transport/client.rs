@@ -11,20 +11,21 @@ use serde::{Deserialize, Serialize};
 use super::grpc::GrpcClient;
 use super::rest::RestClient;
 use super::{
-    AliasInfo, Album, AlbumFolderInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
-    DiscoverSection, EpisodeProgress,
-    FingerprintStatus,
-    LibraryStorage, ListeningStats, Lyrics, MetadataEdit, NotificationPage, PermissionTier,
-    PlayHistoryPage,
-    PlayInput,
-    Playlist, PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport,
-    RelocateReport, RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest,
-    UploadListFilter,
+    Album, AlbumFolderInfo, AliasInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
+    DiscoverSection, EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, Lyrics,
+    MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage, PlayInput, Playlist,
+    PlaylistWithTracks, Podcast, PodcastCandidate, PodcastEpisode, RefreshReport, RelocateReport,
+    RescanReport, ServerConfig, Track, UploadEvent, UploadInitRequest, UploadListFilter,
     UploadResult, UploadSummary, UploadView,
 };
 use super::{
     DiscographyCandidate, DiscographyIgnore, DiscographyReport, DiscographyStatus,
     DiscographySyncAll, DiscographySyncResult,
+};
+use crate::equalizer::{
+    ChangePage, DeleteProfileRequest, EntityRevision, EqualizerChangeDetail,
+    EqualizerDeviceRuleInput, EqualizerMutationResponse, EqualizerProfileInput,
+    EqualizerRollbackResponse, EqualizerStateFetch, Revision,
 };
 use crate::error::{AppError, AppResult};
 
@@ -503,7 +504,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.merge_artists(cred, survivor_id, duplicate_id).await
+        self.rest
+            .merge_artists(cred, survivor_id, duplicate_id)
+            .await
     }
 
     /// List an artist's on-disk `<Language>/<Artist>` directories. REST-only
@@ -600,10 +603,7 @@ impl ServerClient {
         self.rest.discography_status(cred).await
     }
 
-    pub async fn discography_sync_all(
-        &self,
-        cred: &Credential,
-    ) -> AppResult<DiscographySyncAll> {
+    pub async fn discography_sync_all(&self, cred: &Credential) -> AppResult<DiscographySyncAll> {
         self.rest.discography_sync_all(cred).await
     }
 
@@ -656,7 +656,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.merge_albums(cred, survivor_id, duplicate_id).await
+        self.rest
+            .merge_albums(cred, survivor_id, duplicate_id)
+            .await
     }
 
     pub async fn move_track(
@@ -667,13 +669,18 @@ impl ServerClient {
         single_release: bool,
     ) -> AppResult<Track> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.move_track(cred, track_id, album_id, single_release).await {
+            match grpc
+                .move_track(cred, track_id, album_id, single_release)
+                .await
+            {
                 Ok(t) => return Ok(t),
                 Err(e) if is_transport_error(&e) => fallback_log("move_track", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.move_track(cred, track_id, album_id, single_release).await
+        self.rest
+            .move_track(cred, track_id, album_id, single_release)
+            .await
     }
 
     pub async fn set_track_single_release(
@@ -683,13 +690,18 @@ impl ServerClient {
         single_release: bool,
     ) -> AppResult<Track> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.set_track_single_release(cred, track_id, single_release).await {
+            match grpc
+                .set_track_single_release(cred, track_id, single_release)
+                .await
+            {
                 Ok(t) => return Ok(t),
                 Err(e) if is_transport_error(&e) => fallback_log("set_track_single_release", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.set_track_single_release(cred, track_id, single_release).await
+        self.rest
+            .set_track_single_release(cred, track_id, single_release)
+            .await
     }
 
     pub async fn set_track_explicit(
@@ -716,13 +728,18 @@ impl ServerClient {
         single_track_id: Option<&str>,
     ) -> AppResult<Album> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.set_album_type(cred, album_id, album_type, single_track_id).await {
+            match grpc
+                .set_album_type(cred, album_id, album_type, single_track_id)
+                .await
+            {
                 Ok(a) => return Ok(a),
                 Err(e) if is_transport_error(&e) => fallback_log("set_album_type", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.set_album_type(cred, album_id, album_type, single_track_id).await
+        self.rest
+            .set_album_type(cred, album_id, album_type, single_track_id)
+            .await
     }
 
     pub async fn add_artist_alias(
@@ -734,13 +751,18 @@ impl ServerClient {
         language: Option<&str>,
     ) -> AppResult<Artist> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.add_artist_alias(cred, artist_id, name, sort_name, language).await {
+            match grpc
+                .add_artist_alias(cred, artist_id, name, sort_name, language)
+                .await
+            {
                 Ok(a) => return Ok(a),
                 Err(e) if is_transport_error(&e) => fallback_log("add_artist_alias", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.add_artist_alias(cred, artist_id, name, sort_name, language).await
+        self.rest
+            .add_artist_alias(cred, artist_id, name, sort_name, language)
+            .await
     }
 
     pub async fn remove_artist_alias(
@@ -756,7 +778,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.remove_artist_alias(cred, artist_id, alias_id).await
+        self.rest
+            .remove_artist_alias(cred, artist_id, alias_id)
+            .await
     }
 
     pub async fn set_primary_artist_alias(
@@ -766,13 +790,18 @@ impl ServerClient {
         alias_id: &str,
     ) -> AppResult<Artist> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.set_primary_artist_alias(cred, artist_id, alias_id).await {
+            match grpc
+                .set_primary_artist_alias(cred, artist_id, alias_id)
+                .await
+            {
                 Ok(a) => return Ok(a),
                 Err(e) if is_transport_error(&e) => fallback_log("set_primary_artist_alias", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.set_primary_artist_alias(cred, artist_id, alias_id).await
+        self.rest
+            .set_primary_artist_alias(cred, artist_id, alias_id)
+            .await
     }
 
     pub async fn add_album_alias(
@@ -789,7 +818,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.add_album_alias(cred, album_id, title, language).await
+        self.rest
+            .add_album_alias(cred, album_id, title, language)
+            .await
     }
 
     pub async fn remove_album_alias(
@@ -821,7 +852,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.set_primary_album_alias(cred, album_id, alias_id).await
+        self.rest
+            .set_primary_album_alias(cred, album_id, alias_id)
+            .await
     }
 
     pub async fn list_track_aliases(
@@ -853,7 +886,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.add_track_alias(cred, track_id, title, language).await
+        self.rest
+            .add_track_alias(cred, track_id, title, language)
+            .await
     }
 
     pub async fn remove_track_alias(
@@ -885,7 +920,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.set_primary_track_alias(cred, track_id, alias_id).await
+        self.rest
+            .set_primary_track_alias(cred, track_id, alias_id)
+            .await
     }
 
     // ----- Follows & notifications (Phase 10) ------------------------------
@@ -951,7 +988,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.list_notifications(cred, unread_only, limit, offset).await
+        self.rest
+            .list_notifications(cred, unread_only, limit, offset)
+            .await
     }
 
     pub async fn notifications_unread_count(&self, cred: &Credential) -> AppResult<i64> {
@@ -1065,7 +1104,12 @@ impl ServerClient {
 
     // ----- Favorites (Phase 11) --------------------------------------------
 
-    pub async fn favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn favorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         if let Some(grpc) = self.try_grpc().await {
             match grpc.favorite(cred, kind, entity_id).await {
                 Ok(v) => return Ok(v),
@@ -1076,7 +1120,12 @@ impl ServerClient {
         self.rest.favorite(cred, kind, entity_id).await
     }
 
-    pub async fn unfavorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn unfavorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         if let Some(grpc) = self.try_grpc().await {
             match grpc.unfavorite(cred, kind, entity_id).await {
                 Ok(v) => return Ok(v),
@@ -1087,7 +1136,12 @@ impl ServerClient {
         self.rest.unfavorite(cred, kind, entity_id).await
     }
 
-    pub async fn is_favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn is_favorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         if let Some(grpc) = self.try_grpc().await {
             match grpc.is_favorite(cred, kind, entity_id).await {
                 Ok(v) => return Ok(v),
@@ -1317,13 +1371,18 @@ impl ServerClient {
         auto_download: i32,
     ) -> AppResult<Podcast> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.set_podcast_auto_download(cred, id, auto_download).await {
+            match grpc
+                .set_podcast_auto_download(cred, id, auto_download)
+                .await
+            {
                 Ok(v) => return Ok(v),
                 Err(e) if is_transport_error(&e) => fallback_log("set_auto_download", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.set_podcast_auto_download(cred, id, auto_download).await
+        self.rest
+            .set_podcast_auto_download(cred, id, auto_download)
+            .await
     }
 
     pub async fn list_episodes(
@@ -1340,7 +1399,9 @@ impl ServerClient {
                 Err(e) => return Err(e),
             }
         }
-        self.rest.list_episodes(cred, podcast_id, limit, offset).await
+        self.rest
+            .list_episodes(cred, podcast_id, limit, offset)
+            .await
     }
 
     pub async fn get_episode(&self, cred: &Credential, id: &str) -> AppResult<PodcastEpisode> {
@@ -1458,7 +1519,9 @@ impl ServerClient {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> AppResult<()> {
-        self.rest.upload_album_cover(cred, album_id, bytes, content_type).await
+        self.rest
+            .upload_album_cover(cred, album_id, bytes, content_type)
+            .await
     }
 
     pub async fn upload_artist_image(
@@ -1468,7 +1531,9 @@ impl ServerClient {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> AppResult<()> {
-        self.rest.upload_artist_image(cred, artist_id, bytes, content_type).await
+        self.rest
+            .upload_artist_image(cred, artist_id, bytes, content_type)
+            .await
     }
 
     // ----- Playlists (sync pull + push) ----------------------------------
@@ -1545,13 +1610,18 @@ impl ServerClient {
         position: i32,
     ) -> AppResult<()> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.add_playlist_track(cred, playlist_id, track_id, position).await {
+            match grpc
+                .add_playlist_track(cred, playlist_id, track_id, position)
+                .await
+            {
                 Ok(()) => return Ok(()),
                 Err(e) if is_transport_error(&e) => fallback_log("add_playlist_track", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.add_playlist_track(cred, playlist_id, track_id, position).await
+        self.rest
+            .add_playlist_track(cred, playlist_id, track_id, position)
+            .await
     }
 
     pub async fn remove_playlist_track(
@@ -1561,13 +1631,18 @@ impl ServerClient {
         position: i32,
     ) -> AppResult<()> {
         if let Some(grpc) = self.try_grpc().await {
-            match grpc.remove_playlist_track(cred, playlist_id, position).await {
+            match grpc
+                .remove_playlist_track(cred, playlist_id, position)
+                .await
+            {
                 Ok(()) => return Ok(()),
                 Err(e) if is_transport_error(&e) => fallback_log("remove_playlist_track", &e),
                 Err(e) => return Err(e),
             }
         }
-        self.rest.remove_playlist_track(cred, playlist_id, position).await
+        self.rest
+            .remove_playlist_track(cred, playlist_id, position)
+            .await
     }
 
     pub async fn reorder_playlist_track(
@@ -1761,6 +1836,249 @@ impl ServerClient {
         self.rest.rescan_library(cred).await
     }
 
+    // ----- Equalizer ------------------------------------------------------
+
+    pub async fn equalizer_state(
+        &self,
+        cred: &Credential,
+        known: Option<Revision>,
+    ) -> AppResult<EqualizerStateFetch> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_equalizer_state(cred, known).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_state", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest.equalizer_state(cred, known).await
+    }
+
+    pub async fn equalizer_create_profile(
+        &self,
+        cred: &Credential,
+        profile: EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.create_equalizer_profile(cred, &profile).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_create_profile", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest.equalizer_create_profile(cred, profile).await
+    }
+
+    pub async fn equalizer_update_profile(
+        &self,
+        cred: &Credential,
+        expected_revision: Revision,
+        profile: EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .update_equalizer_profile(cred, &profile.id, expected_revision, &profile)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_update_profile", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest
+            .equalizer_update_profile(cred, expected_revision, profile)
+            .await
+    }
+
+    pub async fn equalizer_delete_profile(
+        &self,
+        cred: &Credential,
+        request: DeleteProfileRequest,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.delete_equalizer_profile(cred, &request).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_delete_profile", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest.equalizer_delete_profile(cred, request).await
+    }
+
+    pub async fn equalizer_update_settings(
+        &self,
+        cred: &Credential,
+        expected_revision: Revision,
+        default_profile_id: Option<String>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .update_equalizer_settings(cred, expected_revision, default_profile_id.as_deref())
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_update_settings", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest
+            .equalizer_update_settings(cred, expected_revision, default_profile_id)
+            .await
+    }
+
+    pub async fn equalizer_create_rule(
+        &self,
+        cred: &Credential,
+        rule: EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.create_equalizer_rule(cred, &rule).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_create_rule", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest.equalizer_create_rule(cred, rule).await
+    }
+
+    pub async fn equalizer_update_rule(
+        &self,
+        cred: &Credential,
+        expected_revision: Revision,
+        rule: EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .update_equalizer_rule(cred, &rule.id, expected_revision, &rule)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_update_rule", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest
+            .equalizer_update_rule(cred, expected_revision, rule)
+            .await
+    }
+
+    pub async fn equalizer_delete_rule(
+        &self,
+        cred: &Credential,
+        id: &str,
+        expected_revision: Revision,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .delete_equalizer_rule(cred, id, expected_revision)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_delete_rule", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest
+            .equalizer_delete_rule(cred, id, expected_revision)
+            .await
+    }
+
+    pub async fn equalizer_reorder_rules(
+        &self,
+        cred: &Credential,
+        rules: Vec<EntityRevision>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.reorder_equalizer_rules(cred, &rules).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_reorder_rules", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest.equalizer_reorder_rules(cred, rules).await
+    }
+
+    pub async fn equalizer_list_changes(
+        &self,
+        cred: &Credential,
+        subject_user_id: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> AppResult<ChangePage> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .list_equalizer_changes(cred, subject_user_id, cursor, limit.unwrap_or(50))
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_list_changes", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest
+            .equalizer_list_changes(cred, subject_user_id, cursor, limit)
+            .await
+    }
+
+    pub async fn equalizer_get_change(
+        &self,
+        cred: &Credential,
+        audit_id: &str,
+    ) -> AppResult<EqualizerChangeDetail> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc.get_equalizer_change(cred, audit_id).await {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_get_change", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest.equalizer_get_change(cred, audit_id).await
+    }
+
+    pub async fn equalizer_rollback_change(
+        &self,
+        cred: &Credential,
+        audit_id: &str,
+        expected_state_revision: Revision,
+    ) -> AppResult<EqualizerRollbackResponse> {
+        if let Some(grpc) = self.try_grpc().await {
+            match grpc
+                .rollback_equalizer_change(cred, audit_id, expected_state_revision)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) if is_equalizer_fallback(&error) => {
+                    fallback_log("equalizer_rollback_change", &error)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.rest
+            .equalizer_rollback_change(cred, audit_id, expected_state_revision)
+            .await
+    }
+
     /// Open a gRPC channel for one logical operation. Returns `None` (not
     /// `Err`) when the channel can't be opened so the call sites can just
     /// fall through to REST without nested matches.
@@ -1778,6 +2096,11 @@ fn fallback_log(op: &str, err: &AppError) {
 
 fn is_transport_error(err: &AppError) -> bool {
     matches!(err, AppError::Transport(_))
+}
+
+fn is_equalizer_fallback(err: &AppError) -> bool {
+    matches!(err, AppError::Transport(_))
+        || matches!(err, AppError::Unsupported(message) if message.starts_with("endpoint_unimplemented:"))
 }
 
 /// Which transport actually serviced a successful call. Surfaced to the UI

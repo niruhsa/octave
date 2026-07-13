@@ -11,6 +11,7 @@
 //! - [`pg`]     Postgres implementations of the repository traits
 //! - [`pool`]   connection-pool construction + migration runner
 
+mod equalizer_pg;
 pub mod models;
 pub mod pg;
 pub mod pool;

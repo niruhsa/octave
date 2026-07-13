@@ -11,21 +11,23 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Album, AlbumFolderInfo, ArchiveUploadResult, Artist, ArtistStat, ArtistStoragePaths, ChunkAck,
-    Credential,
-    DiscoverSection,
-    EpisodeProgress, FingerprintStatus, LibraryStorage, ListeningStats, LyricLine, Lyrics,
-    MetadataEdit, PermissionTier,
-    PlayEvent, RelocateReport,
-    PlayHistoryPage, PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast,
-    PodcastCandidate, PodcastEpisode, RefreshReport, RescanReport, ServerConfig, SingleUploadResult,
-    Track, TrackStat, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult, UploadSummary,
-    UploadView,
+    Credential, DiscoverSection, EpisodeProgress, FingerprintStatus, LibraryStorage,
+    ListeningStats, LyricLine, Lyrics, MetadataEdit, PermissionTier, PlayEvent, PlayHistoryPage,
+    PlayInput, Playlist, PlaylistTrack, PlaylistWithTracks, Podcast, PodcastCandidate,
+    PodcastEpisode, RefreshReport, RelocateReport, RescanReport, ServerConfig, SingleUploadResult,
+    Track, TrackStat, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
+    UploadSummary, UploadView,
 };
-use crate::error::{AppError, AppResult};
 use super::{
     DiscographyCandidate, DiscographyIgnore, DiscographyReport, DiscographyStatus,
     DiscographySyncAll, DiscographySyncResult,
 };
+use crate::equalizer::{
+    ChangePage, DeleteProfileRequest, EntityRevision, EqualizerChangeDetail,
+    EqualizerDeviceRuleInput, EqualizerMutationResponse, EqualizerProfileInput,
+    EqualizerRollbackResponse, EqualizerStateFetch, Revision,
+};
+use crate::error::{AppError, AppResult};
 
 pub struct RestClient {
     http: Client,
@@ -73,7 +75,11 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("login"))?;
-        let parsed: Resp = check_status(resp).await?.json().await.map_err(rest_err("login decode"))?;
+        let parsed: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("login decode"))?;
         Ok(RestLoginOutcome {
             token: parsed.token,
             user_id: parsed.user_id,
@@ -101,7 +107,11 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("whoami"))?;
-        let parsed: Resp = check_status(resp).await?.json().await.map_err(rest_err("whoami decode"))?;
+        let parsed: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("whoami decode"))?;
         Ok(RestWhoAmI {
             kind: parsed.kind,
             user_id: parsed.user_id,
@@ -253,7 +263,12 @@ impl RestClient {
     /// Cheap liveness check used by online/offline detection.
     pub async fn health(&self) -> AppResult<bool> {
         let url = format!("{}/health", self.base);
-        let resp = self.http.get(url).send().await.map_err(rest_err("health"))?;
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(rest_err("health"))?;
         Ok(resp.status().is_success())
     }
 
@@ -279,8 +294,15 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("list_artists"))?;
-        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_artists decode"))?;
-        Ok((body.artists.into_iter().map(Artist::from).collect(), body.total))
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_artists decode"))?;
+        Ok((
+            body.artists.into_iter().map(Artist::from).collect(),
+            body.total,
+        ))
     }
 
     pub async fn search_artists(
@@ -303,7 +325,11 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("search_artists"))?;
-        let body: Vec<ArtistJson> = check_status(resp).await?.json().await.map_err(rest_err("search_artists decode"))?;
+        let body: Vec<ArtistJson> = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("search_artists decode"))?;
         Ok(body.into_iter().map(Artist::from).collect())
     }
 
@@ -327,7 +353,11 @@ impl RestClient {
         struct Resp {
             albums: Vec<AlbumJson>,
         }
-        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_albums_by_artist decode"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_albums_by_artist decode"))?;
         Ok(body.albums.into_iter().map(Album::from).collect())
     }
 
@@ -351,7 +381,11 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("search_albums"))?;
-        let body: Vec<AlbumJson> = check_status(resp).await?.json().await.map_err(rest_err("search_albums decode"))?;
+        let body: Vec<AlbumJson> = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("search_albums decode"))?;
         Ok(body.into_iter().map(Album::from).collect())
     }
 
@@ -374,7 +408,11 @@ impl RestClient {
         struct Resp {
             tracks: Vec<TrackJson>,
         }
-        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_tracks_by_album decode"))?;
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_tracks_by_album decode"))?;
         Ok(body.tracks.into_iter().map(Track::from).collect())
     }
 
@@ -398,7 +436,11 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("search_tracks"))?;
-        let body: Vec<TrackJson> = check_status(resp).await?.json().await.map_err(rest_err("search_tracks decode"))?;
+        let body: Vec<TrackJson> = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("search_tracks decode"))?;
         Ok(body.into_iter().map(Track::from).collect())
     }
 
@@ -409,27 +451,60 @@ impl RestClient {
 
     pub async fn get_artist(&self, cred: &Credential, id: &str) -> AppResult<Option<Artist>> {
         let url = format!("{}/artists/{id}", self.base);
-        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_artist"))?;
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_artist"))?;
         match opt_status(resp).await? {
-            Some(r) => Ok(Some(r.json::<ArtistJson>().await.map_err(rest_err("get_artist decode"))?.into())),
+            Some(r) => Ok(Some(
+                r.json::<ArtistJson>()
+                    .await
+                    .map_err(rest_err("get_artist decode"))?
+                    .into(),
+            )),
             None => Ok(None),
         }
     }
 
     pub async fn get_album(&self, cred: &Credential, id: &str) -> AppResult<Option<Album>> {
         let url = format!("{}/albums/{id}", self.base);
-        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_album"))?;
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_album"))?;
         match opt_status(resp).await? {
-            Some(r) => Ok(Some(r.json::<AlbumJson>().await.map_err(rest_err("get_album decode"))?.into())),
+            Some(r) => Ok(Some(
+                r.json::<AlbumJson>()
+                    .await
+                    .map_err(rest_err("get_album decode"))?
+                    .into(),
+            )),
             None => Ok(None),
         }
     }
 
     pub async fn get_track(&self, cred: &Credential, id: &str) -> AppResult<Option<Track>> {
         let url = format!("{}/tracks/{id}", self.base);
-        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_track"))?;
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_track"))?;
         match opt_status(resp).await? {
-            Some(r) => Ok(Some(r.json::<TrackJson>().await.map_err(rest_err("get_track decode"))?.into())),
+            Some(r) => Ok(Some(
+                r.json::<TrackJson>()
+                    .await
+                    .map_err(rest_err("get_track decode"))?
+                    .into(),
+            )),
             None => Ok(None),
         }
     }
@@ -513,9 +588,18 @@ impl RestClient {
 
     pub async fn get_library_storage(&self, cred: &Credential) -> AppResult<LibraryStorage> {
         let url = format!("{}/library/storage", self.base);
-        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_library_storage"))?;
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_library_storage"))?;
         let r = check_status(resp).await?;
-        Ok(r.json::<LibraryStorageJson>().await.map_err(rest_err("get_library_storage decode"))?.into())
+        Ok(r.json::<LibraryStorageJson>()
+            .await
+            .map_err(rest_err("get_library_storage decode"))?
+            .into())
     }
 
     // ----- Delete (Manager+ gated server-side) ----------------------------
@@ -1323,7 +1407,12 @@ impl RestClient {
 
     // ----- Favorites (Phase 11) ------------------------------------------
 
-    pub async fn favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn favorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         let seg = fav_path_segment(kind)?;
         let url = format!("{}/{seg}/{entity_id}/favorite", self.base);
         let resp = self
@@ -1337,7 +1426,12 @@ impl RestClient {
         Ok(true)
     }
 
-    pub async fn unfavorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn unfavorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         let seg = fav_path_segment(kind)?;
         let url = format!("{}/{seg}/{entity_id}/favorite", self.base);
         let resp = self
@@ -1351,7 +1445,12 @@ impl RestClient {
         Ok(false)
     }
 
-    pub async fn is_favorite(&self, cred: &Credential, kind: &str, entity_id: &str) -> AppResult<bool> {
+    pub async fn is_favorite(
+        &self,
+        cred: &Credential,
+        kind: &str,
+        entity_id: &str,
+    ) -> AppResult<bool> {
         #[derive(Deserialize)]
         struct Resp {
             favorited: bool,
@@ -1580,7 +1679,10 @@ impl RestClient {
             .http
             .post(url)
             .header("authorization", auth_header(cred))
-            .json(&Body { seed_track_ids, limit })
+            .json(&Body {
+                seed_track_ids,
+                limit,
+            })
             .send()
             .await
             .map_err(rest_err("discover_playlist_recommendations"))?;
@@ -1928,7 +2030,10 @@ impl RestClient {
             .json()
             .await
             .map_err(rest_err("list_podcasts decode"))?;
-        Ok((body.podcasts.into_iter().map(Into::into).collect(), body.total))
+        Ok((
+            body.podcasts.into_iter().map(Into::into).collect(),
+            body.total,
+        ))
     }
 
     pub async fn get_podcast(&self, cred: &Credential, id: &str) -> AppResult<Podcast> {
@@ -2243,18 +2348,43 @@ impl RestClient {
 
     pub async fn list_my_playlists(&self, cred: &Credential) -> AppResult<Vec<Playlist>> {
         let url = format!("{}/playlists", self.base);
-        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("list_my_playlists"))?;
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("list_my_playlists"))?;
         #[derive(Deserialize)]
-        struct Resp { playlists: Vec<PlaylistJson> }
-        let body: Resp = check_status(resp).await?.json().await.map_err(rest_err("list_my_playlists decode"))?;
+        struct Resp {
+            playlists: Vec<PlaylistJson>,
+        }
+        let body: Resp = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("list_my_playlists decode"))?;
         Ok(body.playlists.into_iter().map(Playlist::from).collect())
     }
 
-    pub async fn get_playlist(&self, cred: &Credential, id: &str) -> AppResult<Option<PlaylistWithTracks>> {
+    pub async fn get_playlist(
+        &self,
+        cred: &Credential,
+        id: &str,
+    ) -> AppResult<Option<PlaylistWithTracks>> {
         let url = format!("{}/playlists/{id}", self.base);
-        let resp = self.http.get(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("get_playlist"))?;
+        let resp = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("get_playlist"))?;
         #[derive(Deserialize)]
-        struct Resp { playlist: PlaylistJson, tracks: Vec<PlaylistTrackJson> }
+        struct Resp {
+            playlist: PlaylistJson,
+            tracks: Vec<PlaylistTrackJson>,
+        }
         match opt_status(resp).await? {
             Some(r) => {
                 let v: Resp = r.json().await.map_err(rest_err("get_playlist decode"))?;
@@ -2269,44 +2399,117 @@ impl RestClient {
 
     pub async fn create_playlist(&self, cred: &Credential, name: &str) -> AppResult<Playlist> {
         let url = format!("{}/playlists", self.base);
-        let resp = self.http.post(url).header("authorization", auth_header(cred)).json(&serde_json::json!({ "name": name })).send().await.map_err(rest_err("create_playlist"))?;
-        let p: PlaylistJson = check_status(resp).await?.json().await.map_err(rest_err("create_playlist decode"))?;
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .map_err(rest_err("create_playlist"))?;
+        let p: PlaylistJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("create_playlist decode"))?;
         Ok(p.into())
     }
 
-    pub async fn rename_playlist(&self, cred: &Credential, id: &str, name: &str) -> AppResult<Playlist> {
+    pub async fn rename_playlist(
+        &self,
+        cred: &Credential,
+        id: &str,
+        name: &str,
+    ) -> AppResult<Playlist> {
         let url = format!("{}/playlists/{id}", self.base);
-        let resp = self.http.put(url).header("authorization", auth_header(cred)).json(&serde_json::json!({ "name": name })).send().await.map_err(rest_err("rename_playlist"))?;
-        let p: PlaylistJson = check_status(resp).await?.json().await.map_err(rest_err("rename_playlist decode"))?;
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+            .map_err(rest_err("rename_playlist"))?;
+        let p: PlaylistJson = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("rename_playlist decode"))?;
         Ok(p.into())
     }
 
     pub async fn delete_playlist(&self, cred: &Credential, id: &str) -> AppResult<()> {
         let url = format!("{}/playlists/{id}", self.base);
-        let resp = self.http.delete(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("delete_playlist"))?;
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("delete_playlist"))?;
         check_status(resp).await?;
         Ok(())
     }
 
-    pub async fn add_playlist_track(&self, cred: &Credential, playlist_id: &str, track_id: &str, position: i32) -> AppResult<()> {
+    pub async fn add_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        track_id: &str,
+        position: i32,
+    ) -> AppResult<()> {
         let url = format!("{}/playlists/{playlist_id}/tracks", self.base);
         // position 0 = append (server treats None/0 the same).
         let body = serde_json::json!({ "track_id": track_id, "position": position });
-        let resp = self.http.post(url).header("authorization", auth_header(cred)).json(&body).send().await.map_err(rest_err("add_playlist_track"))?;
+        let resp = self
+            .http
+            .post(url)
+            .header("authorization", auth_header(cred))
+            .json(&body)
+            .send()
+            .await
+            .map_err(rest_err("add_playlist_track"))?;
         check_status(resp).await?;
         Ok(())
     }
 
-    pub async fn remove_playlist_track(&self, cred: &Credential, playlist_id: &str, position: i32) -> AppResult<()> {
+    pub async fn remove_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        position: i32,
+    ) -> AppResult<()> {
         let url = format!("{}/playlists/{playlist_id}/tracks/{position}", self.base);
-        let resp = self.http.delete(url).header("authorization", auth_header(cred)).send().await.map_err(rest_err("remove_playlist_track"))?;
+        let resp = self
+            .http
+            .delete(url)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("remove_playlist_track"))?;
         check_status(resp).await?;
         Ok(())
     }
 
-    pub async fn reorder_playlist_track(&self, cred: &Credential, playlist_id: &str, from_position: i32, to_position: i32) -> AppResult<()> {
-        let url = format!("{}/playlists/{playlist_id}/tracks/{from_position}", self.base);
-        let resp = self.http.put(url).header("authorization", auth_header(cred)).json(&serde_json::json!({ "to": to_position })).send().await.map_err(rest_err("reorder_playlist_track"))?;
+    pub async fn reorder_playlist_track(
+        &self,
+        cred: &Credential,
+        playlist_id: &str,
+        from_position: i32,
+        to_position: i32,
+    ) -> AppResult<()> {
+        let url = format!(
+            "{}/playlists/{playlist_id}/tracks/{from_position}",
+            self.base
+        );
+        let resp = self
+            .http
+            .put(url)
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "to": to_position }))
+            .send()
+            .await
+            .map_err(rest_err("reorder_playlist_track"))?;
         check_status(resp).await?;
         Ok(())
     }
@@ -2323,7 +2526,11 @@ impl RestClient {
             .send()
             .await
             .map_err(rest_err("rescan_library"))?;
-        let body: RescanDto = check_status(resp).await?.json().await.map_err(rest_err("rescan_library decode"))?;
+        let body: RescanDto = check_status(resp)
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("rescan_library decode"))?;
         Ok(RescanReport {
             tracks_checked: body.tracks_checked,
             tracks_updated: body.tracks_updated,
@@ -2371,10 +2578,7 @@ impl RestClient {
         let body = check_status(resp).await?;
 
         // The server returns an untagged enum: try archive shape first, then single.
-        let text = body
-            .text()
-            .await
-            .map_err(rest_err("upload body"))?;
+        let text = body.text().await.map_err(rest_err("upload body"))?;
         parse_upload_response(&text)
     }
 
@@ -2532,6 +2736,275 @@ impl RestClient {
             .map_err(rest_err("resume_upload decode"))
     }
 
+    // ----- Equalizer (gRPC primary, REST fallback) ----------------------
+
+    pub async fn equalizer_state(
+        &self,
+        cred: &Credential,
+        known_state_revision: Option<Revision>,
+    ) -> AppResult<EqualizerStateFetch> {
+        let url = format!("{}/equalizer/state", self.base);
+        let mut request = self
+            .http
+            .get(url)
+            .header("authorization", auth_header(cred));
+        if let Some(revision) = known_state_revision {
+            request = request
+                .query(&[("known_state_revision", revision.to_string())])
+                .header("if-none-match", format!("\"eq-{revision}\""));
+        }
+        let response = request.send().await.map_err(rest_err("equalizer_state"))?;
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return Ok(EqualizerStateFetch {
+                not_modified: true,
+                state: None,
+                etag: response
+                    .headers()
+                    .get("etag")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+            });
+        }
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(AppError::Unsupported(
+                "endpoint_unimplemented:equalizer_state: HTTP 404".into(),
+            ));
+        }
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let mut value: serde_json::Value = equalizer_status(response, "equalizer_state")
+            .await?
+            .json()
+            .await
+            .map_err(rest_err("equalizer_state decode"))?;
+        rename_filter_fields(&mut value, false);
+        let mut decoded: EqualizerStateFetch = serde_json::from_value(value).map_err(|error| {
+            AppError::Unsupported(format!("response_format:equalizer_state: {error}"))
+        })?;
+        decoded.etag = etag;
+        Ok(decoded)
+    }
+
+    pub async fn equalizer_create_profile(
+        &self,
+        cred: &Credential,
+        profile: EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let profile = equalizer_json(&profile)?;
+        self.equalizer_mutation(
+            self.http.post(format!("{}/equalizer/profiles", self.base)),
+            cred,
+            serde_json::json!({ "profile": profile }),
+            "equalizer_create_profile",
+        )
+        .await
+    }
+
+    pub async fn equalizer_update_profile(
+        &self,
+        cred: &Credential,
+        expected_revision: Revision,
+        profile: EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let id = profile.id.clone();
+        let profile = equalizer_json(&profile)?;
+        self.equalizer_mutation(
+            self.http
+                .put(format!("{}/equalizer/profiles/{id}", self.base)),
+            cred,
+            serde_json::json!({
+                "expected_revision": expected_revision,
+                "profile": profile,
+            }),
+            "equalizer_update_profile",
+        )
+        .await
+    }
+
+    pub async fn equalizer_delete_profile(
+        &self,
+        cred: &Credential,
+        request: DeleteProfileRequest,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let id = request.profile_id.clone();
+        self.equalizer_mutation(
+            self.http
+                .post(format!("{}/equalizer/profiles/{id}/delete", self.base)),
+            cred,
+            serde_json::to_value(request)
+                .map_err(|error| AppError::Internal(format!("encode EQ delete: {error}")))?,
+            "equalizer_delete_profile",
+        )
+        .await
+    }
+
+    pub async fn equalizer_update_settings(
+        &self,
+        cred: &Credential,
+        expected_settings_revision: Revision,
+        default_profile_id: Option<String>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let default_assignment = default_profile_id.map_or_else(
+            || serde_json::json!({ "kind": "flat" }),
+            |profile_id| serde_json::json!({ "kind": "profile", "profile_id": profile_id }),
+        );
+        self.equalizer_mutation(
+            self.http.put(format!("{}/equalizer/settings", self.base)),
+            cred,
+            serde_json::json!({
+                "expected_settings_revision": expected_settings_revision,
+                "default_assignment": default_assignment,
+            }),
+            "equalizer_update_settings",
+        )
+        .await
+    }
+
+    pub async fn equalizer_create_rule(
+        &self,
+        cred: &Credential,
+        rule: EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.equalizer_mutation(
+            self.http
+                .post(format!("{}/equalizer/device-rules", self.base)),
+            cred,
+            serde_json::json!({ "rule": rule }),
+            "equalizer_create_rule",
+        )
+        .await
+    }
+
+    pub async fn equalizer_update_rule(
+        &self,
+        cred: &Credential,
+        expected_revision: Revision,
+        rule: EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let id = rule.id.clone();
+        self.equalizer_mutation(
+            self.http
+                .put(format!("{}/equalizer/device-rules/{id}", self.base)),
+            cred,
+            serde_json::json!({ "expected_revision": expected_revision, "rule": rule }),
+            "equalizer_update_rule",
+        )
+        .await
+    }
+
+    pub async fn equalizer_delete_rule(
+        &self,
+        cred: &Credential,
+        id: &str,
+        expected_revision: Revision,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.equalizer_mutation(
+            self.http
+                .post(format!("{}/equalizer/device-rules/{id}/delete", self.base)),
+            cred,
+            serde_json::json!({ "expected_revision": expected_revision }),
+            "equalizer_delete_rule",
+        )
+        .await
+    }
+
+    pub async fn equalizer_reorder_rules(
+        &self,
+        cred: &Credential,
+        rules: Vec<EntityRevision>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.equalizer_mutation(
+            self.http
+                .put(format!("{}/equalizer/device-rules/order", self.base)),
+            cred,
+            serde_json::json!({ "rules": rules }),
+            "equalizer_reorder_rules",
+        )
+        .await
+    }
+
+    pub async fn equalizer_list_changes(
+        &self,
+        cred: &Credential,
+        subject_user_id: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> AppResult<ChangePage> {
+        let mut query = Vec::<(&str, String)>::new();
+        if let Some(value) = subject_user_id {
+            query.push(("subject_user_id", value.to_string()));
+        }
+        if let Some(value) = cursor {
+            query.push(("cursor", value.to_string()));
+        }
+        if let Some(value) = limit {
+            query.push(("limit", value.to_string()));
+        }
+        let response = self
+            .http
+            .get(format!("{}/equalizer/changes", self.base))
+            .query(&query)
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("equalizer_list_changes"))?;
+        equalizer_decode(response, "equalizer_list_changes").await
+    }
+
+    pub async fn equalizer_get_change(
+        &self,
+        cred: &Credential,
+        audit_id: &str,
+    ) -> AppResult<EqualizerChangeDetail> {
+        let response = self
+            .http
+            .get(format!("{}/equalizer/changes/{audit_id}", self.base))
+            .header("authorization", auth_header(cred))
+            .send()
+            .await
+            .map_err(rest_err("equalizer_get_change"))?;
+        equalizer_decode(response, "equalizer_get_change").await
+    }
+
+    pub async fn equalizer_rollback_change(
+        &self,
+        cred: &Credential,
+        audit_id: &str,
+        expected_state_revision: Revision,
+    ) -> AppResult<EqualizerRollbackResponse> {
+        let response = self
+            .http
+            .post(format!(
+                "{}/equalizer/changes/{audit_id}/rollback",
+                self.base
+            ))
+            .header("authorization", auth_header(cred))
+            .json(&serde_json::json!({ "expected_state_revision": expected_state_revision }))
+            .send()
+            .await
+            .map_err(rest_err("equalizer_rollback_change"))?;
+        equalizer_decode(response, "equalizer_rollback_change").await
+    }
+
+    async fn equalizer_mutation(
+        &self,
+        request: reqwest::RequestBuilder,
+        cred: &Credential,
+        body: serde_json::Value,
+        operation: &'static str,
+    ) -> AppResult<EqualizerMutationResponse> {
+        let response = request
+            .header("authorization", auth_header(cred))
+            .json(&body)
+            .send()
+            .await
+            .map_err(rest_err(operation))?;
+        equalizer_decode(response, operation).await
+    }
+
     /// Open the live `uploads` WebSocket (REST-side fallback for the gRPC
     /// stream). Spawns a reader that forwards permitted events to `tx` until
     /// the socket closes; the auth credential rides the handshake header.
@@ -2587,6 +3060,97 @@ impl RestClient {
         });
         Ok(())
     }
+}
+
+fn equalizer_json<T: Serialize>(value: &T) -> AppResult<serde_json::Value> {
+    let mut value = serde_json::to_value(value)
+        .map_err(|error| AppError::Internal(format!("encode equalizer request: {error}")))?;
+    rename_filter_fields(&mut value, true);
+    Ok(value)
+}
+
+fn rename_filter_fields(value: &mut serde_json::Value, outbound: bool) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                rename_filter_fields(value, outbound);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            let (from, to) = if outbound {
+                ("filter_kind", "filter_type")
+            } else {
+                ("filter_type", "filter_kind")
+            };
+            if let Some(value) = object.remove(from) {
+                object.insert(to.to_string(), value);
+            }
+            for value in object.values_mut() {
+                rename_filter_fields(value, outbound);
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn equalizer_decode<T: for<'de> Deserialize<'de>>(
+    response: reqwest::Response,
+    operation: &'static str,
+) -> AppResult<T> {
+    let mut value: serde_json::Value = equalizer_status(response, operation)
+        .await?
+        .json()
+        .await
+        .map_err(|error| AppError::Unsupported(format!("response_format:{operation}: {error}")))?;
+    rename_filter_fields(&mut value, false);
+    serde_json::from_value(value)
+        .map_err(|error| AppError::Unsupported(format!("response_format:{operation}: {error}")))
+}
+
+async fn equalizer_status(
+    response: reqwest::Response,
+    operation: &'static str,
+) -> AppResult<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    // A capability probe against a pre-EQ server reaches the router fallback.
+    // Keep this distinguishable from a future-format decode failure and from
+    // a real missing profile/rule returned by a supported endpoint.
+    let router_fallback = body.trim().is_empty() || body.trim().eq_ignore_ascii_case("not found");
+    if status == StatusCode::NOT_FOUND && (operation == "equalizer_state" || router_fallback) {
+        return Err(AppError::Unsupported(format!(
+            "endpoint_unimplemented:{operation}: HTTP {status}"
+        )));
+    }
+    if status == StatusCode::CONFLICT {
+        #[derive(Deserialize)]
+        struct ConflictBody {
+            code: String,
+            message: String,
+        }
+        if let Ok(conflict) = serde_json::from_str::<ConflictBody>(&body) {
+            return Err(AppError::Conflict {
+                code: conflict.code,
+                message: conflict.message,
+            });
+        }
+    }
+    let message = if body.is_empty() {
+        format!("{operation}: HTTP {status}")
+    } else {
+        format!("{operation}: HTTP {status}: {body}")
+    };
+    Err(match status {
+        StatusCode::UNAUTHORIZED => AppError::Unauthenticated(message),
+        StatusCode::FORBIDDEN => AppError::Forbidden(message),
+        StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND | StatusCode::CONFLICT => {
+            AppError::Internal(message)
+        }
+        _ => AppError::Transport(message),
+    })
 }
 
 // REST DTOs (match server/src/rest/library.rs exactly).
@@ -2788,7 +3352,11 @@ struct PlaylistJson {
 }
 impl From<PlaylistJson> for Playlist {
     fn from(p: PlaylistJson) -> Self {
-        Self { id: p.id, owner_id: p.owner_id, name: p.name }
+        Self {
+            id: p.id,
+            owner_id: p.owner_id,
+            name: p.name,
+        }
     }
 }
 
@@ -2800,7 +3368,11 @@ struct PlaylistTrackJson {
 }
 impl From<PlaylistTrackJson> for PlaylistTrack {
     fn from(t: PlaylistTrackJson) -> Self {
-        Self { playlist_id: t.playlist_id, track_id: t.track_id, position: t.position as i64 }
+        Self {
+            playlist_id: t.playlist_id,
+            track_id: t.track_id,
+            position: t.position as i64,
+        }
     }
 }
 
@@ -3124,7 +3696,9 @@ fn fav_path_segment(kind: &str) -> AppResult<&'static str> {
         "track" => Ok("tracks"),
         "album" => Ok("albums"),
         "artist" => Ok("artists"),
-        other => Err(AppError::Transport(format!("invalid favorite kind: {other}"))),
+        other => Err(AppError::Transport(format!(
+            "invalid favorite kind: {other}"
+        ))),
     }
 }
 
@@ -3217,9 +3791,8 @@ fn parse_upload_response(text: &str) -> AppResult<UploadResult> {
         }
     }
     // Fall back to single.
-    let single: SingleUploadResponse =
-        serde_json::from_str(text)
-            .map_err(|e| AppError::Transport(format!("upload single decode: {e}")))?;
+    let single: SingleUploadResponse = serde_json::from_str(text)
+        .map_err(|e| AppError::Transport(format!("upload single decode: {e}")))?;
     Ok(UploadResult::Single(SingleUploadResult {
         track_id: single.track_id,
         path: single.path,

@@ -40,7 +40,7 @@ pub async fn wait_for_shutdown(mut rx: ShutdownRx) {
 pub async fn wait_for_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         match signal(SignalKind::terminate()) {
             Ok(mut sigterm) => {
                 tokio::select! {

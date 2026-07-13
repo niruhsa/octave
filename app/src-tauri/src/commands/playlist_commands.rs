@@ -12,7 +12,7 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::library::LibraryView;
-use crate::playlists::{PlaylistDetailView, PlaylistService, MergedPlaylist};
+use crate::playlists::{MergedPlaylist, PlaylistDetailView, PlaylistService};
 use crate::AppStateHandle;
 
 async fn service<'a>(state: &'a State<'a, AppStateHandle>) -> AppResult<PlaylistService<'a>> {

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -304,7 +304,9 @@ impl UploadsService {
         self.uploads_root()?; // fail fast if staging dir isn't configured
 
         if files.is_empty() {
-            return Err(AppError::InvalidArgument("upload requires at least one file".into()));
+            return Err(AppError::InvalidArgument(
+                "upload requires at least one file".into(),
+            ));
         }
         for (i, f) in files.iter().enumerate() {
             validate_file(i, f)?;
@@ -355,7 +357,8 @@ impl UploadsService {
 
         debug!(upload_id = %upload.id, files = files.len(), "upload session initialized");
         let view = self.build_view(&upload).await?;
-        self.publish_state(&upload, "initialized", None, &view.files_models).await;
+        self.publish_state(&upload, "initialized", None, &view.files_models)
+            .await;
         Ok(view.view)
     }
 
@@ -451,7 +454,8 @@ impl UploadsService {
         // Recompute session-wide progress for the broadcast + completion check.
         let files = self.repo.list_files(upload_id).await?;
         let upload_complete = files.iter().all(|f| f.received_chunks >= f.total_chunks);
-        self.publish_progress(&upload, Some(file_index), &files).await;
+        self.publish_progress(&upload, Some(file_index), &files)
+            .await;
 
         if upload_complete {
             self.maybe_finalize(caller, upload_id).await?;
@@ -507,7 +511,10 @@ impl UploadsService {
         let rows = self
             .repo
             .list_uploads(
-                UploadFilter { user_id: user_filter, state },
+                UploadFilter {
+                    user_id: user_filter,
+                    state,
+                },
                 limit.clamp(1, 200),
                 offset.max(0),
             )
@@ -535,7 +542,8 @@ impl UploadsService {
         }
         let upload = self.load(id).await?;
         let built = self.build_view(&upload).await?;
-        self.publish_state(&upload, "cancelled", None, &built.files_models).await;
+        self.publish_state(&upload, "cancelled", None, &built.files_models)
+            .await;
         Ok(built.view)
     }
 
@@ -556,7 +564,8 @@ impl UploadsService {
         }
         let upload = self.load(id).await?;
         let built = self.build_view(&upload).await?;
-        self.publish_state(&upload, "paused", None, &built.files_models).await;
+        self.publish_state(&upload, "paused", None, &built.files_models)
+            .await;
         Ok(built.view)
     }
 
@@ -574,10 +583,13 @@ impl UploadsService {
                 upload.state
             )));
         }
-        self.repo.set_upload_state(id, UploadState::Uploading).await?;
+        self.repo
+            .set_upload_state(id, UploadState::Uploading)
+            .await?;
         let upload = self.load(id).await?;
         let built = self.build_view(&upload).await?;
-        self.publish_state(&upload, "resumed", None, &built.files_models).await;
+        self.publish_state(&upload, "resumed", None, &built.files_models)
+            .await;
         Ok(built.view)
     }
 
@@ -594,8 +606,7 @@ impl UploadsService {
     pub fn spawn_stall_sweeper(&self) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let mut tick =
-                tokio::time::interval(std::time::Duration::from_secs(STALL_SWEEP_SECS));
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(STALL_SWEEP_SECS));
             tick.tick().await; // consume the immediate first tick
             loop {
                 tick.tick().await;
@@ -648,7 +659,10 @@ impl UploadsService {
         let mut first_error: Option<String> = None;
 
         for file in &files {
-            match self.reassemble_and_ingest_file(caller, upload_id, file).await {
+            match self
+                .reassemble_and_ingest_file(caller, upload_id, file)
+                .await
+            {
                 Ok(fr) => {
                     report.tracks_ingested += fr.ingested + fr.already_indexed;
                     if !fr.ok {
@@ -913,10 +927,18 @@ impl UploadsService {
             report,
             files: file_views,
         };
-        Ok(BuiltView { view, files_models: files })
+        Ok(BuiltView {
+            view,
+            files_models: files,
+        })
     }
 
-    async fn publish_progress(&self, upload: &Upload, file_index: Option<i32>, files: &[UploadFile]) {
+    async fn publish_progress(
+        &self,
+        upload: &Upload,
+        file_index: Option<i32>,
+        files: &[UploadFile],
+    ) {
         let bytes_received = session_bytes_received(files);
         let (chunks_received, total_chunks) = session_chunks(files);
         self.hub.publish(UploadEvent {
@@ -1020,7 +1042,10 @@ fn authorize_owner_or_admin(caller: &Identity, upload: &Upload) -> Result<()> {
 fn validate_file(idx: usize, f: &FileInit) -> Result<()> {
     let where_ = || format!("file {idx} ({})", f.filename);
     if f.filename.trim().is_empty() {
-        return Err(AppError::InvalidArgument(format!("{}: filename required", where_())));
+        return Err(AppError::InvalidArgument(format!(
+            "{}: filename required",
+            where_()
+        )));
     }
     if f.total_size <= 0 || f.chunk_size <= 0 {
         return Err(AppError::InvalidArgument(format!(
@@ -1035,7 +1060,10 @@ fn validate_file(idx: usize, f: &FileInit) -> Result<()> {
         )));
     }
     if !is_sha256_hex(&f.hash) {
-        return Err(AppError::InvalidArgument(format!("{}: invalid file hash", where_())));
+        return Err(AppError::InvalidArgument(format!(
+            "{}: invalid file hash",
+            where_()
+        )));
     }
     // Verify the chunk map is sorted, contiguous, and covers the whole file.
     let mut chunks = f.chunks.clone();
@@ -1121,7 +1149,12 @@ mod tests {
     use super::*;
 
     fn chunk(index: i32, start: i64, end: i64) -> ChunkInit {
-        ChunkInit { index, start, end, hash: "a".repeat(64) }
+        ChunkInit {
+            index,
+            start,
+            end,
+            hash: "a".repeat(64),
+        }
     }
 
     fn file(total: i64, chunk_size: i64, chunks: Vec<ChunkInit>) -> FileInit {
@@ -1190,7 +1223,11 @@ mod tests {
         let owner = Uuid::new_v4();
         let other = Uuid::new_v4();
         let admin = Identity::SecretKey;
-        let user = Identity::User { id: owner, username: "u".into(), level: PermissionLevel::Manager };
+        let user = Identity::User {
+            id: owner,
+            username: "u".into(),
+            level: PermissionLevel::Manager,
+        };
         assert!(can_see(&admin, Some(owner)));
         assert!(can_see(&admin, None));
         assert!(can_see(&user, Some(owner)));
@@ -1200,22 +1237,20 @@ mod tests {
 
     #[test]
     fn session_progress_helpers() {
-        let files = vec![
-            UploadFile {
-                id: Uuid::new_v4(),
-                upload_id: Uuid::new_v4(),
-                file_index: 0,
-                filename: "a".into(),
-                file_hash: "x".into(),
-                total_size: 10,
-                chunk_size: 4,
-                total_chunks: 3,
-                received_chunks: 2,
-                state: UploadFileState::Uploading,
-                error: None,
-                created_at: OffsetDateTime::now_utc(),
-            },
-        ];
+        let files = vec![UploadFile {
+            id: Uuid::new_v4(),
+            upload_id: Uuid::new_v4(),
+            file_index: 0,
+            filename: "a".into(),
+            file_hash: "x".into(),
+            total_size: 10,
+            chunk_size: 4,
+            total_chunks: 3,
+            received_chunks: 2,
+            state: UploadFileState::Uploading,
+            error: None,
+            created_at: OffsetDateTime::now_utc(),
+        }];
         // 2 chunks × 4 = 8, under the 10-byte cap.
         assert_eq!(session_bytes_received(&files), 8);
         assert_eq!(session_chunks(&files), (2, 3));

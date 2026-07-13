@@ -24,7 +24,11 @@ pub const WS2_BASE: &str = "https://musicbrainz.org/ws/2";
 pub fn user_agent(contact: Option<&str>) -> String {
     match contact {
         Some(c) if !c.trim().is_empty() => {
-            format!("music-server/{} ( {} )", env!("CARGO_PKG_VERSION"), c.trim())
+            format!(
+                "music-server/{} ( {} )",
+                env!("CARGO_PKG_VERSION"),
+                c.trim()
+            )
         }
         _ => format!(
             "music-server/{} ( https://github.com/ )",

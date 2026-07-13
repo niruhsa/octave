@@ -29,11 +29,11 @@ use axum::http::header;
 use tauri::{Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
-use crate::AppStateHandle;
 use crate::cache::repo;
 use crate::error::{AppError, AppResult};
 use crate::player::server::{auth_header_value, proxy_client};
 use crate::transport::Credential;
+use crate::AppStateHandle;
 
 /// Files to keep on disk at once. We only need the next track; the margin covers
 /// the just-played + currently-serving + next without ever evicting a file
@@ -176,7 +176,11 @@ async fn run(app: tauri::AppHandle, track_id: String) {
             return;
         }
     };
-    let url = format!("{}/tracks/{}/stream", auth.server_config().rest_root(), track_id);
+    let url = format!(
+        "{}/tracks/{}/stream",
+        auth.server_config().rest_root(),
+        track_id
+    );
 
     let mut last_err: Option<AppError> = None;
     for attempt in 0..MAX_ATTEMPTS {
@@ -249,7 +253,13 @@ async fn download(url: &str, cred: &Credential, path: &Path) -> AppResult<Option
 fn file_stem(track_id: &str) -> String {
     track_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -262,10 +272,7 @@ mod tests {
     /// download) and never a discarded one.
     #[test]
     fn ready_only_after_complete() {
-        let dir = std::env::temp_dir().join(format!(
-            "octave-prefetch-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("octave-prefetch-test-{}", std::process::id()));
         let cache = PrefetchCache::new(dir.clone());
 
         assert!(cache.ready("t1").is_none(), "unknown id is not ready");

@@ -250,14 +250,20 @@ mod tests {
             }
             let mut out: Vec<TrackPlayStat> = counts
                 .into_iter()
-                .map(|((track_id, track_title, artist_name), plays)| TrackPlayStat {
-                    track_id,
-                    track_title,
-                    artist_name,
-                    plays,
-                })
+                .map(
+                    |((track_id, track_title, artist_name), plays)| TrackPlayStat {
+                        track_id,
+                        track_title,
+                        artist_name,
+                        plays,
+                    },
+                )
                 .collect();
-            out.sort_by(|a, b| b.plays.cmp(&a.plays).then(a.track_title.cmp(&b.track_title)));
+            out.sort_by(|a, b| {
+                b.plays
+                    .cmp(&a.plays)
+                    .then(a.track_title.cmp(&b.track_title))
+            });
             out.truncate(limit.max(0) as usize);
             Ok(out)
         }
@@ -286,7 +292,11 @@ mod tests {
                     plays,
                 })
                 .collect();
-            out.sort_by(|a, b| b.plays.cmp(&a.plays).then(a.artist_name.cmp(&b.artist_name)));
+            out.sort_by(|a, b| {
+                b.plays
+                    .cmp(&a.plays)
+                    .then(a.artist_name.cmp(&b.artist_name))
+            });
             out.truncate(limit.max(0) as usize);
             Ok(out)
         }
@@ -366,7 +376,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Track>> {
-            Ok(self.rows.lock().unwrap().iter().find(|t| t.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == id)
+                .cloned())
         }
         async fn list_by_album(&self, _: Uuid) -> Result<Vec<Track>> {
             Ok(vec![])
@@ -451,7 +467,13 @@ mod tests {
             Ok(self.insert(&new.name))
         }
         async fn get(&self, id: Uuid) -> Result<Option<Artist>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list(&self, _: i64, _: i64) -> Result<Vec<Artist>> {
             Ok(vec![])
@@ -514,7 +536,10 @@ mod tests {
         let t2 = tracks.insert(artist.id, album_id, "UNFORGIVEN");
 
         let n = svc
-            .record(&me, &[play(t1.id, 200_000, true), play(t2.id, 30_000, false)])
+            .record(
+                &me,
+                &[play(t1.id, 200_000, true), play(t2.id, 30_000, false)],
+            )
             .await
             .unwrap();
         assert_eq!(n, 2);
@@ -536,7 +561,10 @@ mod tests {
         let t1 = tracks.insert(artist.id, Uuid::new_v4(), "real");
         // One real track + one that doesn't exist → only the real one recorded.
         let n = svc
-            .record(&me, &[play(t1.id, 1000, false), play(Uuid::new_v4(), 1000, false)])
+            .record(
+                &me,
+                &[play(t1.id, 1000, false), play(Uuid::new_v4(), 1000, false)],
+            )
             .await
             .unwrap();
         assert_eq!(n, 1);
@@ -551,9 +579,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
-        let err = svc.recent(&Identity::SecretKey, None, None).await.unwrap_err();
+        let err = svc
+            .recent(&Identity::SecretKey, None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
-        let err = svc.stats(&Identity::SecretKey, None, None).await.unwrap_err();
+        let err = svc
+            .stats(&Identity::SecretKey, None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::InvalidArgument(_)));
     }
 

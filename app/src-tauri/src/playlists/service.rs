@@ -100,12 +100,18 @@ impl<'a> PlaylistService<'a> {
             };
             repo::upsert_playlist(self.pool, &row).await?;
         }
-        Ok(LibraryView::server(rows.into_iter().map(MergedPlaylist::from_transport).collect()))
+        Ok(LibraryView::server(
+            rows.into_iter()
+                .map(MergedPlaylist::from_transport)
+                .collect(),
+        ))
     }
 
     async fn list_from_cache(&self) -> AppResult<LibraryView<MergedPlaylist>> {
         let rows = repo::list_playlists(self.pool).await?;
-        Ok(LibraryView::cache(rows.into_iter().map(MergedPlaylist::from_cache).collect()))
+        Ok(LibraryView::cache(
+            rows.into_iter().map(MergedPlaylist::from_cache).collect(),
+        ))
     }
 
     /// One playlist with its ordered entries. Online: fetches the server
@@ -166,7 +172,11 @@ impl<'a> PlaylistService<'a> {
     }
 
     async fn get_from_cache(&self, id: &str) -> AppResult<Option<PlaylistDetailView>> {
-        let p = match repo::list_playlists(self.pool).await?.into_iter().find(|p| p.id == id) {
+        let p = match repo::list_playlists(self.pool)
+            .await?
+            .into_iter()
+            .find(|p| p.id == id)
+        {
             Some(p) => p,
             None => return Ok(None),
         };
@@ -194,7 +204,9 @@ impl<'a> PlaylistService<'a> {
             .await?
             .into_iter()
             .find(|p| p.id == id)
-            .ok_or_else(|| AppError::Internal("playlist vanished from cache after mutation".into()))?;
+            .ok_or_else(|| {
+                AppError::Internal("playlist vanished from cache after mutation".into())
+            })?;
         let rows = repo::list_playlist_tracks(self.pool, id).await?;
         let tracks: Vec<PlaylistTrack> = rows
             .iter()
@@ -317,7 +329,9 @@ impl<'a> PlaylistService<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT id, album_id, artist_id, title, track_no, disc_no,
                    duration_ms, codec, bitrate_kbps, file_size,
@@ -365,11 +379,7 @@ impl<'a> PlaylistService<'a> {
         Ok(MergedPlaylist::from_transport(p))
     }
 
-    async fn create_offline(
-        &self,
-        name: &str,
-        owner: Option<String>,
-    ) -> AppResult<MergedPlaylist> {
+    async fn create_offline(&self, name: &str, owner: Option<String>) -> AppResult<MergedPlaylist> {
         let owner_id = owner.ok_or_else(|| {
             AppError::AuthNotConfigured(
                 "offline playlist create needs a user_id; SECRET_KEY has none".into(),
@@ -398,11 +408,7 @@ impl<'a> PlaylistService<'a> {
 
     /// Rename. Online + server-known id: server renames, cache mirrors.
     /// Offline or local-id: enqueue + optimistic cache update.
-    pub async fn rename_playlist(
-        &self,
-        id: &str,
-        name: &str,
-    ) -> AppResult<MergedPlaylist> {
+    pub async fn rename_playlist(&self, id: &str, name: &str) -> AppResult<MergedPlaylist> {
         if is_local_id(id) {
             return self.rename_offline(id, name).await;
         }
@@ -433,7 +439,10 @@ impl<'a> PlaylistService<'a> {
         // Update the cache row (if it exists) so the UI reflects the rename
         // immediately, then enqueue the op. A local-id row is in the cache;
         // a server-id row may or may not be — upsert covers both.
-        let existing = repo::list_playlists(self.pool).await?.into_iter().find(|p| p.id == id);
+        let existing = repo::list_playlists(self.pool)
+            .await?
+            .into_iter()
+            .find(|p| p.id == id);
         let owner_id = match existing {
             Some(p) => p.owner_id,
             None => self.owner_id().await?.unwrap_or_default(),
@@ -630,11 +639,7 @@ impl<'a> PlaylistService<'a> {
         }
     }
 
-    async fn try_server_remove(
-        &self,
-        playlist_id: &str,
-        position: i32,
-    ) -> AppResult<()> {
+    async fn try_server_remove(&self, playlist_id: &str, position: i32) -> AppResult<()> {
         let cred = self.cred().await?;
         self.server()
             .remove_playlist_track(&cred, playlist_id, position)
@@ -683,13 +688,19 @@ impl<'a> PlaylistService<'a> {
         to_position: i32,
     ) -> AppResult<PlaylistDetailView> {
         if is_local_id(playlist_id) {
-            return self.reorder_offline(playlist_id, from_position, to_position).await;
+            return self
+                .reorder_offline(playlist_id, from_position, to_position)
+                .await;
         }
-        match self.try_server_reorder(playlist_id, from_position, to_position).await {
+        match self
+            .try_server_reorder(playlist_id, from_position, to_position)
+            .await
+        {
             Ok(()) => self.get_refreshed_online(playlist_id).await,
             Err(e) if is_offline_signal(&e) => {
                 tracing::info!(err = %e, "reorder_track: server unavailable, queuing");
-                self.reorder_offline(playlist_id, from_position, to_position).await
+                self.reorder_offline(playlist_id, from_position, to_position)
+                    .await
             }
             Err(e) => Err(e),
         }
@@ -705,7 +716,8 @@ impl<'a> PlaylistService<'a> {
         self.server()
             .reorder_playlist_track(&cred, playlist_id, from_position, to_position)
             .await?;
-        self.optimistic_reorder(playlist_id, from_position, to_position).await
+        self.optimistic_reorder(playlist_id, from_position, to_position)
+            .await
     }
 
     async fn reorder_offline(
@@ -714,7 +726,8 @@ impl<'a> PlaylistService<'a> {
         from_position: i32,
         to_position: i32,
     ) -> AppResult<PlaylistDetailView> {
-        self.optimistic_reorder(playlist_id, from_position, to_position).await?;
+        self.optimistic_reorder(playlist_id, from_position, to_position)
+            .await?;
         enqueue(
             self.pool,
             PendingOpKind::PlaylistReorderTrack {
@@ -741,10 +754,14 @@ impl<'a> PlaylistService<'a> {
         for (i, r) in rows.iter_mut().enumerate() {
             r.position = (i + 1) as i64;
         }
-        let from = (from_position as usize).saturating_sub(1).min(rows.len().saturating_sub(1));
+        let from = (from_position as usize)
+            .saturating_sub(1)
+            .min(rows.len().saturating_sub(1));
         // `to_position` is the destination *slot* in 1-based terms; clamp to
         // the valid range so we don't panic on a bad input.
-        let to = (to_position as usize).saturating_sub(1).min(rows.len().saturating_sub(1));
+        let to = (to_position as usize)
+            .saturating_sub(1)
+            .min(rows.len().saturating_sub(1));
         if from == to || from >= rows.len() {
             return Ok(());
         }
@@ -843,7 +860,9 @@ mod tests {
         rows.insert(insert_at, row("p", "c", 0));
         renumber(&mut rows);
         assert_eq!(
-            rows.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.track_id.as_str(), r.position))
+                .collect::<Vec<_>>(),
             [("a", 1), ("b", 2), ("c", 3)]
         );
     }
@@ -855,7 +874,9 @@ mod tests {
         rows.insert(insert_at, row("p", "x", 0));
         renumber(&mut rows);
         assert_eq!(
-            rows.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.track_id.as_str(), r.position))
+                .collect::<Vec<_>>(),
             [("a", 1), ("x", 2), ("b", 3), ("c", 4)]
         );
     }
@@ -869,22 +890,35 @@ mod tests {
         }
         renumber(&mut rows);
         assert_eq!(
-            rows.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.track_id.as_str(), r.position))
+                .collect::<Vec<_>>(),
             [("a", 1), ("c", 2)]
         );
     }
 
     #[test]
     fn reorder_moves_entry_without_losing_it() {
-        let mut rows = vec![row("p", "a", 1), row("p", "b", 2), row("p", "c", 3), row("p", "d", 4)];
+        let mut rows = vec![
+            row("p", "a", 1),
+            row("p", "b", 2),
+            row("p", "c", 3),
+            row("p", "d", 4),
+        ];
         renumber(&mut rows);
-        let from = (4_i32 as usize).saturating_sub(1).min(rows.len().saturating_sub(1)); // 4 → idx 3
-        let to = (1_i32 as usize).saturating_sub(1).min(rows.len().saturating_sub(1)); // 1 → idx 0
+        let from = (4_i32 as usize)
+            .saturating_sub(1)
+            .min(rows.len().saturating_sub(1)); // 4 → idx 3
+        let to = (1_i32 as usize)
+            .saturating_sub(1)
+            .min(rows.len().saturating_sub(1)); // 1 → idx 0
         let moved = rows.remove(from);
         rows.insert(to, moved);
         renumber(&mut rows);
         assert_eq!(
-            rows.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.track_id.as_str(), r.position))
+                .collect::<Vec<_>>(),
             [("d", 1), ("a", 2), ("b", 3), ("c", 4)]
         );
     }
@@ -893,15 +927,21 @@ mod tests {
     fn reorder_same_position_is_noop() {
         let mut rows = vec![row("p", "a", 1), row("p", "b", 2)];
         renumber(&mut rows);
-        let from = (1_i32 as usize).saturating_sub(1).min(rows.len().saturating_sub(1));
-        let to = (1_i32 as usize).saturating_sub(1).min(rows.len().saturating_sub(1));
+        let from = (1_i32 as usize)
+            .saturating_sub(1)
+            .min(rows.len().saturating_sub(1));
+        let to = (1_i32 as usize)
+            .saturating_sub(1)
+            .min(rows.len().saturating_sub(1));
         if from != to {
             let moved = rows.remove(from);
             rows.insert(to, moved);
         }
         renumber(&mut rows);
         assert_eq!(
-            rows.iter().map(|r| (r.track_id.as_str(), r.position)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.track_id.as_str(), r.position))
+                .collect::<Vec<_>>(),
             [("a", 1), ("b", 2)]
         );
     }

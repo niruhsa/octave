@@ -16,7 +16,7 @@ use rustfft::num_complex::Complex;
 
 use crate::error::{AppError, Result};
 
-use super::decode::{decode_mono, DecodeError, MonoPcm};
+use super::decode::{DecodeError, MonoPcm, decode_mono};
 
 /// Decode + embed an audio file into a fixed-length, unit-normalized vector
 /// whose cosine distance approximates perceptual similarity.
@@ -101,9 +101,7 @@ fn extract_blocking(path: &Path) -> Result<Vec<f32>> {
     let pcm = decode_mono(path).map_err(|e| match e {
         // Map "can't decode this codec" to InvalidArgument so the pass can tell
         // a skip apart from a real failure.
-        DecodeError::UnsupportedCodec => {
-            AppError::InvalidArgument(format!("unanalyzable: {}", e))
-        }
+        DecodeError::UnsupportedCodec => AppError::InvalidArgument(format!("unanalyzable: {}", e)),
         other => AppError::Internal(format!("decode {}: {other}", path.display())),
     })?;
     embed_mono(&pcm)
@@ -268,9 +266,18 @@ fn aggregate(rows: &[FrameRow]) -> Vec<f32> {
         push_stats(&col, &mut out);
     }
     // Spectral shape mean+var.
-    push_stats(&rows.iter().map(|r| r.centroid).collect::<Vec<_>>(), &mut out);
-    push_stats(&rows.iter().map(|r| r.rolloff).collect::<Vec<_>>(), &mut out);
-    push_stats(&rows.iter().map(|r| r.flatness).collect::<Vec<_>>(), &mut out);
+    push_stats(
+        &rows.iter().map(|r| r.centroid).collect::<Vec<_>>(),
+        &mut out,
+    );
+    push_stats(
+        &rows.iter().map(|r| r.rolloff).collect::<Vec<_>>(),
+        &mut out,
+    );
+    push_stats(
+        &rows.iter().map(|r| r.flatness).collect::<Vec<_>>(),
+        &mut out,
+    );
     // RMS energy mean+var.
     push_stats(&rows.iter().map(|r| r.rms).collect::<Vec<_>>(), &mut out);
     // Tempo (single value, normalized).

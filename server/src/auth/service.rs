@@ -198,9 +198,11 @@ impl AuthService {
         // Self-change by a non-admin requires the old password.
         if is_self && !is_admin {
             let old = old_password.unwrap_or("");
-            let user = self.users.get(target_id).await?.ok_or_else(|| {
-                AppError::NotFound("user not found".into())
-            })?;
+            let user = self
+                .users
+                .get(target_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("user not found".into()))?;
             if !password::verify(old, &user.password_hash)? {
                 return Err(AppError::Unauthenticated("old password incorrect".into()));
             }
@@ -264,9 +266,11 @@ impl AuthService {
     pub async fn delete_user(&self, caller: &Identity, target_id: Uuid) -> Result<()> {
         caller.require(PermissionLevel::Admin)?;
 
-        let user = self.users.get(target_id).await?.ok_or_else(|| {
-            AppError::NotFound("user not found".into())
-        })?;
+        let user = self
+            .users
+            .get(target_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
         // Capture before-image for audit before the row is destroyed.
         let before = serde_json::json!({
@@ -526,12 +530,7 @@ mod tests {
     async fn admin_reset_of_missing_user_is_not_found() {
         let (svc, _, _) = svc();
         let err = svc
-            .change_password(
-                &Identity::SecretKey,
-                Uuid::new_v4(),
-                None,
-                "brand-new-pw",
-            )
+            .change_password(&Identity::SecretKey, Uuid::new_v4(), None, "brand-new-pw")
             .await
             .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
@@ -568,16 +567,20 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].action, "user.delete");
         assert_eq!(entries[0].entity_id, Some(target));
-        assert!(entries[0].before_json.as_ref().unwrap().contains("username"));
+        assert!(
+            entries[0]
+                .before_json
+                .as_ref()
+                .unwrap()
+                .contains("username")
+        );
     }
 
     #[tokio::test]
     async fn secret_key_deletes_user() {
         let (svc, users, _) = svc();
         let target = make_user(&users, PermissionLevel::User, "pass1").await;
-        svc.delete_user(&Identity::SecretKey, target)
-            .await
-            .unwrap();
+        svc.delete_user(&Identity::SecretKey, target).await.unwrap();
     }
 
     #[tokio::test]

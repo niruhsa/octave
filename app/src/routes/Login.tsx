@@ -10,6 +10,7 @@ import {
 import { useAppStore } from "../store";
 import { btnPrimary, errorBox, input, label } from "../lib/ui";
 import { KeyIcon, ArtistIcon } from "../components/icons";
+import { useEqualizerStore } from "../equalizer/store";
 
 type Mode = "password" | "secret_key";
 
@@ -58,6 +59,9 @@ export default function Login() {
     setBusy(true);
     setErr(null);
     try {
+      // Invalidate any in-flight snapshot and return the shared DSP to Flat
+      // before the native account/server namespace can change.
+      useEqualizerStore.getState().resetForScopeChange();
       await authConfigureServer(restUrl, grpcUrl.trim() || undefined);
       setServerConfigured(true);
       setTransports(await authRefreshTransports());

@@ -30,6 +30,7 @@ import {
 } from "../ipc";
 import { useAppStore } from "../store";
 import { broadcastInvalidate } from "../App";
+import { useEqualizerStore } from "../equalizer/store";
 
 type SyncStatus = "idle" | "syncing" | "ok" | "error";
 
@@ -73,6 +74,10 @@ export const useSyncStore = create<SyncStoreState>((set, get) => ({
       broadcastInvalidate(["library"]);
       broadcastInvalidate(["playlists"]);
       broadcastInvalidate(["cache", "downloaded_tracks"]);
+      // The native scheduler reconciles the EQ's separately-scoped outbox in
+      // the same pass. Refresh its Zustand snapshot without disturbing audio;
+      // the runtime applies only the newly resolved post-mix profile.
+      await useEqualizerStore.getState().load();
     } catch (e) {
       // AuthNotConfigured is the anonymous case — treat as a no-op, not an
       // error the user needs to see.

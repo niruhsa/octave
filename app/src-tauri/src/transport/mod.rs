@@ -744,7 +744,10 @@ impl Page {
 
 impl Default for Page {
     fn default() -> Self {
-        Self { limit: 50, offset: 0 }
+        Self {
+            limit: 50,
+            offset: 0,
+        }
     }
 }
 

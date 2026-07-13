@@ -43,16 +43,20 @@ struct ForegroundArgs<'a> {
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("download-session")
         .setup(|app, _api| {
-            let handle: Option<PluginHandle<R>> = {
-                #[cfg(target_os = "android")]
+            let handle: Option<PluginHandle<R>> =
                 {
-                    Some(_api.register_android_plugin("dev.niruhsa.octave", "DownloadServicePlugin")?)
-                }
-                #[cfg(not(target_os = "android"))]
-                {
-                    None
-                }
-            };
+                    #[cfg(target_os = "android")]
+                    {
+                        Some(_api.register_android_plugin(
+                            "dev.niruhsa.octave",
+                            "DownloadServicePlugin",
+                        )?)
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        None
+                    }
+                };
             app.manage(DownloadSessionHandle(std::sync::Mutex::new(handle)));
             Ok(())
         })

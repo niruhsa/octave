@@ -92,7 +92,9 @@ impl pb::favorite_service_server::FavoriteService for FavoriteServer {
             .favorite(&caller, kind, id)
             .await
             .map_err(map_err)?;
-        Ok(Response::new(pb::FavoriteStatusResponse { favorited: true }))
+        Ok(Response::new(pb::FavoriteStatusResponse {
+            favorited: true,
+        }))
     }
 
     async fn unfavorite(
@@ -107,7 +109,9 @@ impl pb::favorite_service_server::FavoriteService for FavoriteServer {
             .unfavorite(&caller, kind, id)
             .await
             .map_err(map_err)?;
-        Ok(Response::new(pb::FavoriteStatusResponse { favorited: false }))
+        Ok(Response::new(pb::FavoriteStatusResponse {
+            favorited: false,
+        }))
     }
 
     async fn is_favorite(
@@ -153,7 +157,11 @@ impl pb::favorite_service_server::FavoriteService for FavoriteServer {
         req: Request<pb::ListFavoritesRequest>,
     ) -> Result<Response<pb::ListFavoriteArtistsResponse>, Status> {
         let caller = self.caller(&req).await?;
-        let rows = self.favorites.list_artists(&caller).await.map_err(map_err)?;
+        let rows = self
+            .favorites
+            .list_artists(&caller)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(pb::ListFavoriteArtistsResponse {
             artists: rows.into_iter().map(artist_to_pb).collect(),
         }))

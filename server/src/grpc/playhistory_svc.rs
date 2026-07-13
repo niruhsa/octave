@@ -96,11 +96,7 @@ impl pb::play_history_service_server::PlayHistoryService for PlayHistoryServer {
                 played_at: parse_played_at(&e.played_at)?,
             });
         }
-        let recorded = self
-            .plays
-            .record(&caller, &events)
-            .await
-            .map_err(map_err)? as i64;
+        let recorded = self.plays.record(&caller, &events).await.map_err(map_err)? as i64;
         Ok(Response::new(pb::RecordPlaysResponse { recorded }))
     }
 

@@ -260,7 +260,9 @@ mod tests {
     fn decode_mono_without_loudness_returns_none() {
         let rate = 44_100u32;
         let pcm_i16: Vec<i16> = (0..rate)
-            .map(|i| ((2.0 * PI * 440.0 * i as f32 / rate as f32).sin() * 0.3 * i16::MAX as f32) as i16)
+            .map(|i| {
+                ((2.0 * PI * 440.0 * i as f32 / rate as f32).sin() * 0.3 * i16::MAX as f32) as i16
+            })
             .collect();
         let f = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
         write_wav(f.path(), &pcm_i16, rate, 1);

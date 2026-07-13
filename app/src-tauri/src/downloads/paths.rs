@@ -38,13 +38,7 @@ pub fn sanitize(component: &str) -> String {
 
 /// `<root>/<artist>/<album>/<name>.<ext>` — the canonical download path
 /// for one media file or cover.
-pub fn track_path(
-    root: &Path,
-    artist: &str,
-    album: &str,
-    file_name: &str,
-    ext: &str,
-) -> PathBuf {
+pub fn track_path(root: &Path, artist: &str, album: &str, file_name: &str, ext: &str) -> PathBuf {
     root.join(sanitize(artist))
         .join(sanitize(album))
         .join(format!("{}.{}", sanitize(file_name), sanitize(ext)))
@@ -53,7 +47,10 @@ pub fn track_path(
 /// Derive a sensible file extension for a track from the server's
 /// `file_path` / `codec`. Falls back to `bin` when we can't tell.
 pub fn track_extension(server_file_path: &str, codec: &str) -> String {
-    if let Some(ext) = Path::new(server_file_path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = Path::new(server_file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         let ext = ext.trim();
         if !ext.is_empty() {
             return ext.to_ascii_lowercase();
@@ -99,9 +96,11 @@ pub const PODCASTS_DIR: &str = "Podcasts";
 
 /// `<root>/Podcasts/<show>/<name>.<ext>` — the download path for one episode.
 pub fn episode_path(root: &Path, show: &str, file_name: &str, ext: &str) -> PathBuf {
-    root.join(PODCASTS_DIR)
-        .join(sanitize(show))
-        .join(format!("{}.{}", sanitize(file_name), sanitize(ext)))
+    root.join(PODCASTS_DIR).join(sanitize(show)).join(format!(
+        "{}.{}",
+        sanitize(file_name),
+        sanitize(ext)
+    ))
 }
 
 /// Episode display name: `NNN - Title` (zero-padded episode number) or the
@@ -152,9 +151,9 @@ pub fn episode_extension(enclosure_url: &str, codec: Option<&str>) -> String {
 
 /// Ensure a directory exists, creating it (and parents) if needed.
 pub async fn ensure_dir(path: &Path) -> AppResult<()> {
-    tokio::fs::create_dir_all(path).await.map_err(|e| {
-        AppError::Internal(format!("create dir {}: {e}", path.display()))
-    })
+    tokio::fs::create_dir_all(path)
+        .await
+        .map_err(|e| AppError::Internal(format!("create dir {}: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -187,7 +186,10 @@ mod tests {
 
     #[test]
     fn episode_name_pads_and_sanitizes() {
-        assert_eq!(episode_file_name(Some(42), "Ep Title", "id"), "042 - Ep Title");
+        assert_eq!(
+            episode_file_name(Some(42), "Ep Title", "id"),
+            "042 - Ep Title"
+        );
         assert_eq!(episode_file_name(None, "Ep Title", "id"), "Ep Title");
         assert_eq!(episode_file_name(None, "", "uuid"), "uuid");
         assert_eq!(episode_file_name(Some(1), "A/B", "id"), "001 - AB");
@@ -198,7 +200,10 @@ mod tests {
         assert_eq!(episode_extension("https://x/ep.mp3", None), "mp3");
         assert_eq!(episode_extension("https://x/ep.m4a?token=1", None), "m4a");
         // No usable extension on the path → fall back to the codec.
-        assert_eq!(episode_extension("https://x/stream?id=9", Some("aac")), "m4a");
+        assert_eq!(
+            episode_extension("https://x/stream?id=9", Some("aac")),
+            "m4a"
+        );
         // Neither → mp3 default.
         assert_eq!(episode_extension("https://x/stream", None), "mp3");
     }

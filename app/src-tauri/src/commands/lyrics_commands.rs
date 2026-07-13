@@ -66,10 +66,7 @@ pub async fn set_lyrics(
 
 /// Manager: clear a track's lyrics.
 #[tauri::command]
-pub async fn clear_lyrics(
-    state: State<'_, AppStateHandle>,
-    track_id: String,
-) -> AppResult<Lyrics> {
+pub async fn clear_lyrics(state: State<'_, AppStateHandle>, track_id: String) -> AppResult<Lyrics> {
     let lyrics = manager(&state).await?.clear_lyrics(&track_id).await?;
     let _ = repo::upsert_track_lyrics(&state.pool, &track_id, &lyrics).await;
     Ok(lyrics)

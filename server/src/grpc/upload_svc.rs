@@ -21,13 +21,13 @@ use crate::error::AppError;
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::{AuthInterceptor, extract_credential};
 use crate::grpc::proto::upload as pb;
-use crate::shutdown::ShutdownRx;
 use crate::services::archive::ArchiveKind;
 use crate::services::{
     ChunkAck as SvcChunkAck, ChunkInit as SvcChunkInit, FileInit as SvcFileInit, IngestService,
     UploadEvent as SvcUploadEvent, UploadFileView as SvcUploadFileView, UploadHub,
     UploadSummary as SvcUploadSummary, UploadView as SvcUploadView, UploadsService, can_see, tag,
 };
+use crate::shutdown::ShutdownRx;
 
 /// Hard cap on a streamed upload: 5 GiB (matches the REST `DefaultBodyLimit`).
 const MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024 * 1024;

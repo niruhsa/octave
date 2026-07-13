@@ -136,10 +136,11 @@ async fn record(
     let mut events = Vec::with_capacity(body.events.len());
     for e in body.events {
         let played_at = match e.played_at.as_deref() {
-            Some(s) if !s.trim().is_empty() => Some(
-                OffsetDateTime::parse(s, &Rfc3339)
-                    .map_err(|_| AppError::InvalidArgument("invalid played_at (want RFC3339)".into()))?,
-            ),
+            Some(s) if !s.trim().is_empty() => {
+                Some(OffsetDateTime::parse(s, &Rfc3339).map_err(|_| {
+                    AppError::InvalidArgument("invalid played_at (want RFC3339)".into())
+                })?)
+            }
             _ => None,
         };
         events.push(PlayInput {
@@ -165,7 +166,10 @@ async fn list_recent(
     req: Request<Body>,
 ) -> Result<Json<ListRecentDto>, ApiError> {
     let caller = id(&req)?;
-    let rows = state.play_history.recent(&caller, q.limit, q.offset).await?;
+    let rows = state
+        .play_history
+        .recent(&caller, q.limit, q.offset)
+        .await?;
     let total = rows.len() as i64;
     Ok(Json(ListRecentDto {
         events: rows.into_iter().map(event_dto).collect(),

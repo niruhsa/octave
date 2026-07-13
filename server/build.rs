@@ -3,6 +3,12 @@
 use std::{fs, path::PathBuf};
 
 fn main() {
+    // Keep clean builds independent of a system-wide protobuf installation.
+    // In Rust 2024, mutating the build process environment is explicitly
+    // unsafe; this happens before any worker threads are spawned.
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc unavailable");
+    unsafe { std::env::set_var("PROTOC", protoc) };
+
     let proto_dir = PathBuf::from("proto");
     println!("cargo:rerun-if-changed=proto");
 

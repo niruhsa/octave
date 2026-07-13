@@ -3,8 +3,8 @@
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::auth::service::{AuthService, Credential};
 use crate::auth::Identity;
+use crate::auth::service::{AuthService, Credential};
 use crate::db::models::PermissionLevel;
 use crate::error::AppError;
 use crate::grpc::{interceptor::AuthInterceptor, proto::auth as pb};
@@ -64,7 +64,11 @@ impl pb::auth_service_server::AuthService for AuthServer {
                 username: String::new(),
                 level: pb::PermissionLevel::Admin as i32,
             },
-            Identity::User { id, username, level } => pb::WhoAmIResponse {
+            Identity::User {
+                id,
+                username,
+                level,
+            } => pb::WhoAmIResponse {
                 kind: "user".into(),
                 user_id: id.to_string(),
                 username,
@@ -97,9 +101,8 @@ impl pb::auth_service_server::AuthService for AuthServer {
     ) -> Result<Response<pb::ChangePasswordResponse>, Status> {
         let caller = self.interceptor.resolve(&req).await?;
         let body = req.into_inner();
-        let target_id = Uuid::parse_str(&body.user_id).map_err(|e| {
-            Status::invalid_argument(format!("invalid user_id: {e}"))
-        })?;
+        let target_id = Uuid::parse_str(&body.user_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid user_id: {e}")))?;
         let old = if body.old_password.is_empty() {
             None
         } else {
@@ -135,9 +138,8 @@ impl pb::auth_service_server::AuthService for AuthServer {
         req: Request<pb::DeleteUserRequest>,
     ) -> Result<Response<pb::DeleteUserResponse>, Status> {
         let caller = self.interceptor.resolve(&req).await?;
-        let target_id = Uuid::parse_str(&req.into_inner().user_id).map_err(|e| {
-            Status::invalid_argument(format!("invalid user_id: {e}"))
-        })?;
+        let target_id = Uuid::parse_str(&req.into_inner().user_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid user_id: {e}")))?;
         self.auth
             .delete_user(&caller, target_id)
             .await
@@ -179,6 +181,13 @@ pub fn map_err(e: AppError) -> Status {
         AppError::PermissionDenied(m) => Status::permission_denied(m),
         AppError::NotFound(m) => Status::not_found(m),
         AppError::InvalidArgument(m) => Status::invalid_argument(m),
+        AppError::Conflict { code, message } => {
+            let mut status = Status::aborted(message);
+            if let Ok(value) = code.parse() {
+                status.metadata_mut().insert("x-octave-error-code", value);
+            }
+            status
+        }
         other => Status::internal(other.to_string()),
     }
 }

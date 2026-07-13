@@ -38,10 +38,7 @@ impl Organizer {
     /// Missing metadata falls back to `Unknown`.  Track numbers are
     /// zero-padded to two digits (`01`, `02`, …).
     pub fn compute_destination(&self, source: &Path, tags: &TagInfo) -> PathBuf {
-        let ext = source
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("bin");
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("bin");
 
         let track_name = match tags.track_no {
             Some(n) => format!("{:02} - {}", n, sanitize(&tags.title)),
@@ -65,9 +62,7 @@ impl Organizer {
         let dest = self.compute_destination(source, tags);
 
         if dest.exists() {
-            let src_len = std::fs::metadata(source)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let src_len = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
             let dst_len = std::fs::metadata(&dest)
                 .map(|m| m.len())
                 .unwrap_or(u64::MAX);
@@ -78,12 +73,8 @@ impl Organizer {
         }
 
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                AppError::Internal(format!(
-                    "create dir {}: {e}",
-                    parent.display()
-                ))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::Internal(format!("create dir {}: {e}", parent.display())))?;
         }
         std::fs::copy(source, &dest).map_err(|e| {
             AppError::Internal(format!(
@@ -141,10 +132,7 @@ mod tests {
 
     #[test]
     fn sanitize_special_chars() {
-        assert_eq!(
-            sanitize("AC/DC: Back in Black"),
-            "AC_DC_ Back in Black"
-        );
+        assert_eq!(sanitize("AC/DC: Back in Black"), "AC_DC_ Back in Black");
     }
 
     #[test]
@@ -202,7 +190,13 @@ mod tests {
     #[test]
     fn compute_destination_japanese_artist() {
         let org = Organizer::new(PathBuf::from("/music"));
-        let tags = mk_tags("First Love", "宇多田ヒカル", "First Love", "Japanese", Some(1));
+        let tags = mk_tags(
+            "First Love",
+            "宇多田ヒカル",
+            "First Love",
+            "Japanese",
+            Some(1),
+        );
         let dest = org.compute_destination(Path::new("input.flac"), &tags);
         assert_eq!(
             dest,

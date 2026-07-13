@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cache::model as cache_model;
-use crate::transport::{AliasInfo, Album, Artist, Track};
+use crate::transport::{Album, AliasInfo, Artist, Track};
 
 /// Default album classification when a source (older server / offline cache)
 /// doesn't carry one.

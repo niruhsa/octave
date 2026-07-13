@@ -10,6 +10,29 @@ use std::path::{Path, PathBuf};
 fn main() {
     tauri_build::build();
 
+    // Generated gRPC clients are part of every clean app build. Use the same
+    // vendored compiler as the server so Windows/macOS/Android builders do not
+    // depend on a separately installed `protoc` executable.
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc unavailable");
+    // SAFETY: build scripts run before this process starts any worker threads.
+    unsafe { std::env::set_var("PROTOC", protoc) };
+
+    // `gen/android` is regeneration-sensitive. Fail an Android build loudly
+    // if `tauri android init` has dropped either half of the native EQ route
+    // bridge; otherwise automatic switching would silently degrade to manual.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        for path in [
+            "gen/android/app/src/main/java/dev/niruhsa/octave/AudioRoutePlugin.kt",
+            "gen/android/app/src/main/java/dev/niruhsa/octave/AudioRouteBridge.kt",
+        ] {
+            println!("cargo:rerun-if-changed={path}");
+            assert!(
+                Path::new(path).is_file(),
+                "missing Android EQ route bridge: {path}"
+            );
+        }
+    }
+
     let proto_dir = PathBuf::from("../../server/proto");
     println!("cargo:rerun-if-changed=../../server/proto");
 

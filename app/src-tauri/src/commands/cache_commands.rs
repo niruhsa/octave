@@ -18,7 +18,10 @@ use crate::AppStateHandle;
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn cache_upsert_artist(state: State<'_, AppStateHandle>, artist: Artist) -> AppResult<()> {
+pub async fn cache_upsert_artist(
+    state: State<'_, AppStateHandle>,
+    artist: Artist,
+) -> AppResult<()> {
     repo::upsert_artist(&state.pool, &artist).await
 }
 

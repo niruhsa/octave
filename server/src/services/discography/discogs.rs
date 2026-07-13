@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::{AppError, Result};
-use crate::services::musicbrainz::{user_agent, RateLimiter};
+use crate::services::musicbrainz::{RateLimiter, user_agent};
 
-use super::provider::{ArtistCandidate, DiscographyProvider, ProviderReleaseGroup, ProviderTrack};
 use super::r#match::{normalize_title, similarity};
+use super::provider::{ArtistCandidate, DiscographyProvider, ProviderReleaseGroup, ProviderTrack};
 
 const DISCOGS_BASE: &str = "https://api.discogs.com";
 /// Max release pages to walk per artist (100/page) — a runaway backstop.
@@ -82,10 +82,7 @@ impl DiscographyProvider for DiscogsDiscography {
     ) -> Result<Vec<ArtistCandidate>> {
         let url = format!("{DISCOGS_BASE}/database/search");
         let body = self
-            .get_json(
-                &url,
-                &[("q", name), ("type", "artist"), ("per_page", "8")],
-            )
+            .get_json(&url, &[("q", name), ("type", "artist"), ("per_page", "8")])
             .await?;
         let want = normalize_title(name);
         let mut out = Vec::new();

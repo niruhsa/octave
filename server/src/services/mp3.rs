@@ -40,11 +40,21 @@ fn samples_per_frame(version: MpegVersion, layer: u8) -> u32 {
 
 // Bitrate tables in kbps, indexed by the 4-bit bitrate index (0 = free,
 // 15 = invalid -> handled as 0/None).
-const BR_V1_L1: [u32; 16] = [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0];
-const BR_V1_L2: [u32; 16] = [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0];
-const BR_V1_L3: [u32; 16] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
-const BR_V2_L1: [u32; 16] = [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0];
-const BR_V2_L23: [u32; 16] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0];
+const BR_V1_L1: [u32; 16] = [
+    0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0,
+];
+const BR_V1_L2: [u32; 16] = [
+    0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0,
+];
+const BR_V1_L3: [u32; 16] = [
+    0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+];
+const BR_V2_L1: [u32; 16] = [
+    0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0,
+];
+const BR_V2_L23: [u32; 16] = [
+    0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+];
 
 const SR_V1: [u32; 3] = [44100, 48000, 32000];
 const SR_V2: [u32; 3] = [22050, 24000, 16000];
@@ -227,10 +237,7 @@ pub fn measure_mp3_duration(path: &Path) -> Option<Duration> {
             // frame predicts it ends (guards against false-positive syncs
             // inside tag/album-art data).
             let next = pos + h.frame_len;
-            if next + 2 <= data.len()
-                && data[next] == 0xFF
-                && (data[next + 1] & 0xE0) == 0xE0
-            {
+            if next + 2 <= data.len() && data[next] == 0xFF && (data[next + 1] & 0xE0) == 0xE0 {
                 break (pos, h);
             }
             // Or this is the only/last frame.

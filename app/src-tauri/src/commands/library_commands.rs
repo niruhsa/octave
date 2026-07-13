@@ -11,8 +11,8 @@ use tauri_plugin_fs::{FilePath, FsExt};
 
 use crate::auth::AuthManager;
 use crate::error::{AppError, AppResult};
-use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::library::service::LibraryService;
+use crate::library::{LibraryView, MergedAlbum, MergedArtist, MergedTrack};
 use crate::transport::{
     AlbumFolderInfo, ArtistStoragePaths, LibraryStorage, MetadataEdit, RelocateReport, RescanReport,
 };
@@ -34,7 +34,11 @@ async fn service<'a>(state: &'a State<'a, AppStateHandle>) -> AppResult<LibraryS
 
 fn normalise_limit(limit: Option<i64>) -> i64 {
     let l = limit.unwrap_or(DEFAULT_LIMIT);
-    if l <= 0 { DEFAULT_LIMIT } else { l.min(200) }
+    if l <= 0 {
+        DEFAULT_LIMIT
+    } else {
+        l.min(200)
+    }
 }
 
 fn normalise_offset(offset: Option<i64>) -> i64 {
@@ -52,7 +56,8 @@ pub async fn library_list_artists(
     offset: Option<i64>,
 ) -> AppResult<LibraryView<MergedArtist>> {
     let svc = service(&state).await?;
-    svc.list_artists(normalise_limit(limit), normalise_offset(offset)).await
+    svc.list_artists(normalise_limit(limit), normalise_offset(offset))
+        .await
 }
 
 #[tauri::command]
@@ -63,7 +68,8 @@ pub async fn library_search_artists(
     offset: Option<i64>,
 ) -> AppResult<LibraryView<MergedArtist>> {
     let svc = service(&state).await?;
-    svc.search_artists(&query, normalise_limit(limit), normalise_offset(offset)).await
+    svc.search_artists(&query, normalise_limit(limit), normalise_offset(offset))
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -73,9 +79,7 @@ pub async fn library_search_artists(
 /// The server's library-storage breakdown for the homepage widget. Online-only
 /// (a live server view); errors when offline so the UI can show "—".
 #[tauri::command]
-pub async fn library_get_storage(
-    state: State<'_, AppStateHandle>,
-) -> AppResult<LibraryStorage> {
+pub async fn library_get_storage(state: State<'_, AppStateHandle>) -> AppResult<LibraryStorage> {
     let svc = service(&state).await?;
     svc.get_library_storage().await
 }
@@ -101,7 +105,8 @@ pub async fn library_search_albums(
     offset: Option<i64>,
 ) -> AppResult<LibraryView<MergedAlbum>> {
     let svc = service(&state).await?;
-    svc.search_albums(&query, normalise_limit(limit), normalise_offset(offset)).await
+    svc.search_albums(&query, normalise_limit(limit), normalise_offset(offset))
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +130,8 @@ pub async fn library_search_tracks(
     offset: Option<i64>,
 ) -> AppResult<LibraryView<MergedTrack>> {
     let svc = service(&state).await?;
-    svc.search_tracks(&query, normalise_limit(limit), normalise_offset(offset)).await
+    svc.search_tracks(&query, normalise_limit(limit), normalise_offset(offset))
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +260,8 @@ pub async fn library_set_track_single_release(
     single_release: bool,
 ) -> AppResult<MergedTrack> {
     let svc = service(&state).await?;
-    svc.set_track_single_release(&track_id, single_release).await
+    svc.set_track_single_release(&track_id, single_release)
+        .await
 }
 
 #[tauri::command]
@@ -275,7 +282,8 @@ pub async fn library_set_album_type(
     single_track_id: Option<String>,
 ) -> AppResult<MergedAlbum> {
     let svc = service(&state).await?;
-    svc.set_album_type(&album_id, &album_type, single_track_id.as_deref()).await
+    svc.set_album_type(&album_id, &album_type, single_track_id.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -287,7 +295,8 @@ pub async fn library_add_artist_alias(
     language: Option<String>,
 ) -> AppResult<MergedArtist> {
     let svc = service(&state).await?;
-    svc.add_artist_alias(&artist_id, &name, sort_name.as_deref(), language.as_deref()).await
+    svc.add_artist_alias(&artist_id, &name, sort_name.as_deref(), language.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -318,7 +327,8 @@ pub async fn library_add_album_alias(
     language: Option<String>,
 ) -> AppResult<MergedAlbum> {
     let svc = service(&state).await?;
-    svc.add_album_alias(&album_id, &title, language.as_deref()).await
+    svc.add_album_alias(&album_id, &title, language.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -358,7 +368,8 @@ pub async fn library_add_track_alias(
     language: Option<String>,
 ) -> AppResult<MergedTrack> {
     let svc = service(&state).await?;
-    svc.add_track_alias(&track_id, &title, language.as_deref()).await
+    svc.add_track_alias(&track_id, &title, language.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -386,9 +397,7 @@ pub async fn library_set_primary_track_alias(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn library_rescan(
-    state: State<'_, AppStateHandle>,
-) -> AppResult<RescanReport> {
+pub async fn library_rescan(state: State<'_, AppStateHandle>) -> AppResult<RescanReport> {
     let auth = {
         let guard = state.auth.read().await;
         guard
@@ -403,10 +412,7 @@ pub async fn library_rescan(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn library_delete_artist(
-    state: State<'_, AppStateHandle>,
-    id: String,
-) -> AppResult<()> {
+pub async fn library_delete_artist(state: State<'_, AppStateHandle>, id: String) -> AppResult<()> {
     let auth = {
         let guard = state.auth.read().await;
         guard
@@ -417,10 +423,7 @@ pub async fn library_delete_artist(
 }
 
 #[tauri::command]
-pub async fn library_delete_album(
-    state: State<'_, AppStateHandle>,
-    id: String,
-) -> AppResult<()> {
+pub async fn library_delete_album(state: State<'_, AppStateHandle>, id: String) -> AppResult<()> {
     let auth = {
         let guard = state.auth.read().await;
         guard
@@ -431,10 +434,7 @@ pub async fn library_delete_album(
 }
 
 #[tauri::command]
-pub async fn library_delete_track(
-    state: State<'_, AppStateHandle>,
-    id: String,
-) -> AppResult<()> {
+pub async fn library_delete_track(state: State<'_, AppStateHandle>, id: String) -> AppResult<()> {
     let auth = {
         let guard = state.auth.read().await;
         guard
@@ -524,7 +524,8 @@ pub async fn library_upload_album_cover(
     let bytes = read_image_file(app, &path).await?;
     let content_type = sniff_image_content_type(&bytes, &path);
     let auth = auth_handle(&state).await?;
-    auth.upload_album_cover(&album_id, bytes, content_type).await
+    auth.upload_album_cover(&album_id, bytes, content_type)
+        .await
 }
 
 #[tauri::command]
@@ -537,7 +538,8 @@ pub async fn library_upload_artist_image(
     let bytes = read_image_file(app, &path).await?;
     let content_type = sniff_image_content_type(&bytes, &path);
     let auth = auth_handle(&state).await?;
-    auth.upload_artist_image(&artist_id, bytes, content_type).await
+    auth.upload_artist_image(&artist_id, bytes, content_type)
+        .await
 }
 
 #[cfg(test)]
@@ -546,7 +548,10 @@ mod tests {
 
     #[test]
     fn sniffs_by_magic_bytes() {
-        assert_eq!(sniff_image_content_type(&[0xFF, 0xD8, 0xFF, 0x00], "x"), "image/jpeg");
+        assert_eq!(
+            sniff_image_content_type(&[0xFF, 0xD8, 0xFF, 0x00], "x"),
+            "image/jpeg"
+        );
         assert_eq!(
             sniff_image_content_type(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "x"),
             "image/png"
@@ -559,8 +564,14 @@ mod tests {
     #[test]
     fn falls_back_to_extension_then_jpeg() {
         // Opaque bytes + a .png name → png by extension.
-        assert_eq!(sniff_image_content_type(&[0, 1, 2, 3], "/a/b/c.PNG"), "image/png");
+        assert_eq!(
+            sniff_image_content_type(&[0, 1, 2, 3], "/a/b/c.PNG"),
+            "image/png"
+        );
         // No magic, no usable extension → jpeg.
-        assert_eq!(sniff_image_content_type(&[0, 1, 2, 3], "msf%3A13974"), "image/jpeg");
+        assert_eq!(
+            sniff_image_content_type(&[0, 1, 2, 3], "msf%3A13974"),
+            "image/jpeg"
+        );
     }
 }

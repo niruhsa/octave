@@ -10,18 +10,19 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use super::store::{SecureStore, StoredCredential, StoredCredentialKind};
+use crate::equalizer::{
+    ChangePage, DeleteProfileRequest, EntityRevision, EqualizerChangeDetail,
+    EqualizerDeviceRuleInput, EqualizerMutationResponse, EqualizerProfileInput,
+    EqualizerRollbackResponse, EqualizerStateFetch, Revision,
+};
 use crate::error::{AppError, AppResult};
 use crate::transport::{
-    AliasInfo, Album, AlbumFolderInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
-    DiscoverSection, EpisodeProgress,
-    FingerprintStatus,
-    ListeningStats, Lyrics, MetadataEdit, NotificationPage, PermissionTier, PlayHistoryPage,
-    PlayInput,
-    Podcast,
-    PodcastCandidate, PodcastEpisode, RefreshReport, RelocateReport, RescanReport, ServerClient,
-    ServerConfig,
-    Track, TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter,
-    UploadResult, UploadSummary, UploadView,
+    Album, AlbumFolderInfo, AliasInfo, Artist, ArtistStoragePaths, ChunkAck, Credential,
+    DiscoverSection, EpisodeProgress, FingerprintStatus, ListeningStats, Lyrics, MetadataEdit,
+    NotificationPage, PermissionTier, PlayHistoryPage, PlayInput, Podcast, PodcastCandidate,
+    PodcastEpisode, RefreshReport, RelocateReport, RescanReport, ServerClient, ServerConfig, Track,
+    TransportHealth, TransportUsed, UploadEvent, UploadInitRequest, UploadListFilter, UploadResult,
+    UploadSummary, UploadView,
 };
 use crate::transport::{
     DiscographyCandidate, DiscographyIgnore, DiscographyReport, DiscographyStatus,
@@ -67,7 +68,9 @@ impl AuthManager {
                 *self.state.write().await = Some(cred);
             }
             Ok(None) => tracing::debug!("no stored credential"),
-            Err(e) => tracing::warn!(err = %e, "failed to restore credential; continuing anonymous"),
+            Err(e) => {
+                tracing::warn!(err = %e, "failed to restore credential; continuing anonymous")
+            }
         }
     }
 
@@ -239,9 +242,7 @@ impl AuthManager {
         cover: Option<(String, Vec<u8>)>,
     ) -> AppResult<UploadResult> {
         let cred = self.credential().await?;
-        self.server
-            .upload_file(&cred, filename, data, cover)
-            .await
+        self.server.upload_file(&cred, filename, data, cover).await
     }
 
     // ----- Uploads v2 (sessions + reports + live stream) ------------------
@@ -317,11 +318,7 @@ impl AuthManager {
     }
 
     /// Apply an opt-in metadata edit to a track. Manager+ gated server-side.
-    pub async fn edit_track_metadata(
-        &self,
-        id: &str,
-        edit: &MetadataEdit,
-    ) -> AppResult<Track> {
+    pub async fn edit_track_metadata(&self, id: &str, edit: &MetadataEdit) -> AppResult<Track> {
         let cred = self.credential().await?;
         self.server.edit_track_metadata(&cred, id, edit).await
     }
@@ -355,7 +352,9 @@ impl AuthManager {
         offset: Option<i64>,
     ) -> AppResult<NotificationPage> {
         let cred = self.credential().await?;
-        self.server.list_notifications(&cred, unread_only, limit, offset).await
+        self.server
+            .list_notifications(&cred, unread_only, limit, offset)
+            .await
     }
 
     pub async fn notifications_unread_count(&self) -> AppResult<i64> {
@@ -531,19 +530,14 @@ impl AuthManager {
         self.server.discography_candidates(&cred, artist_id).await
     }
 
-    pub async fn discography_resolve(
-        &self,
-        artist_id: &str,
-        mbid: Option<&str>,
-    ) -> AppResult<()> {
+    pub async fn discography_resolve(&self, artist_id: &str, mbid: Option<&str>) -> AppResult<()> {
         let cred = self.credential().await?;
-        self.server.discography_resolve(&cred, artist_id, mbid).await
+        self.server
+            .discography_resolve(&cred, artist_id, mbid)
+            .await
     }
 
-    pub async fn discography_ignores(
-        &self,
-        artist_id: &str,
-    ) -> AppResult<Vec<DiscographyIgnore>> {
+    pub async fn discography_ignores(&self, artist_id: &str) -> AppResult<Vec<DiscographyIgnore>> {
         let cred = self.credential().await?;
         self.server.discography_ignores(&cred, artist_id).await
     }
@@ -644,7 +638,9 @@ impl AuthManager {
         auto_download: i32,
     ) -> AppResult<Podcast> {
         let cred = self.credential().await?;
-        self.server.set_podcast_auto_download(&cred, id, auto_download).await
+        self.server
+            .set_podcast_auto_download(&cred, id, auto_download)
+            .await
     }
 
     pub async fn list_episodes(
@@ -654,7 +650,9 @@ impl AuthManager {
         offset: i32,
     ) -> AppResult<Vec<PodcastEpisode>> {
         let cred = self.credential().await?;
-        self.server.list_episodes(&cred, podcast_id, limit, offset).await
+        self.server
+            .list_episodes(&cred, podcast_id, limit, offset)
+            .await
     }
 
     pub async fn get_episode(&self, id: &str) -> AppResult<PodcastEpisode> {
@@ -708,12 +706,16 @@ impl AuthManager {
 
     pub async fn merge_artists(&self, survivor_id: &str, duplicate_id: &str) -> AppResult<Artist> {
         let cred = self.credential().await?;
-        self.server.merge_artists(&cred, survivor_id, duplicate_id).await
+        self.server
+            .merge_artists(&cred, survivor_id, duplicate_id)
+            .await
     }
 
     pub async fn merge_albums(&self, survivor_id: &str, duplicate_id: &str) -> AppResult<Album> {
         let cred = self.credential().await?;
-        self.server.merge_albums(&cred, survivor_id, duplicate_id).await
+        self.server
+            .merge_albums(&cred, survivor_id, duplicate_id)
+            .await
     }
 
     pub async fn list_artist_library_paths(
@@ -721,7 +723,9 @@ impl AuthManager {
         artist_id: &str,
     ) -> AppResult<ArtistStoragePaths> {
         let cred = self.credential().await?;
-        self.server.list_artist_library_paths(&cred, artist_id).await
+        self.server
+            .list_artist_library_paths(&cred, artist_id)
+            .await
     }
 
     pub async fn set_artist_language(
@@ -759,7 +763,9 @@ impl AuthManager {
         single_release: bool,
     ) -> AppResult<Track> {
         let cred = self.credential().await?;
-        self.server.move_track(&cred, track_id, album_id, single_release).await
+        self.server
+            .move_track(&cred, track_id, album_id, single_release)
+            .await
     }
 
     pub async fn set_track_single_release(
@@ -768,16 +774,16 @@ impl AuthManager {
         single_release: bool,
     ) -> AppResult<Track> {
         let cred = self.credential().await?;
-        self.server.set_track_single_release(&cred, track_id, single_release).await
+        self.server
+            .set_track_single_release(&cred, track_id, single_release)
+            .await
     }
 
-    pub async fn set_track_explicit(
-        &self,
-        track_id: &str,
-        explicit: bool,
-    ) -> AppResult<Track> {
+    pub async fn set_track_explicit(&self, track_id: &str, explicit: bool) -> AppResult<Track> {
         let cred = self.credential().await?;
-        self.server.set_track_explicit(&cred, track_id, explicit).await
+        self.server
+            .set_track_explicit(&cred, track_id, explicit)
+            .await
     }
 
     pub async fn set_album_type(
@@ -787,7 +793,9 @@ impl AuthManager {
         single_track_id: Option<&str>,
     ) -> AppResult<Album> {
         let cred = self.credential().await?;
-        self.server.set_album_type(&cred, album_id, album_type, single_track_id).await
+        self.server
+            .set_album_type(&cred, album_id, album_type, single_track_id)
+            .await
     }
 
     pub async fn add_artist_alias(
@@ -798,12 +806,16 @@ impl AuthManager {
         language: Option<&str>,
     ) -> AppResult<Artist> {
         let cred = self.credential().await?;
-        self.server.add_artist_alias(&cred, artist_id, name, sort_name, language).await
+        self.server
+            .add_artist_alias(&cred, artist_id, name, sort_name, language)
+            .await
     }
 
     pub async fn remove_artist_alias(&self, artist_id: &str, alias_id: &str) -> AppResult<Artist> {
         let cred = self.credential().await?;
-        self.server.remove_artist_alias(&cred, artist_id, alias_id).await
+        self.server
+            .remove_artist_alias(&cred, artist_id, alias_id)
+            .await
     }
 
     pub async fn set_primary_artist_alias(
@@ -812,7 +824,9 @@ impl AuthManager {
         alias_id: &str,
     ) -> AppResult<Artist> {
         let cred = self.credential().await?;
-        self.server.set_primary_artist_alias(&cred, artist_id, alias_id).await
+        self.server
+            .set_primary_artist_alias(&cred, artist_id, alias_id)
+            .await
     }
 
     pub async fn add_album_alias(
@@ -822,12 +836,16 @@ impl AuthManager {
         language: Option<&str>,
     ) -> AppResult<Album> {
         let cred = self.credential().await?;
-        self.server.add_album_alias(&cred, album_id, title, language).await
+        self.server
+            .add_album_alias(&cred, album_id, title, language)
+            .await
     }
 
     pub async fn remove_album_alias(&self, album_id: &str, alias_id: &str) -> AppResult<Album> {
         let cred = self.credential().await?;
-        self.server.remove_album_alias(&cred, album_id, alias_id).await
+        self.server
+            .remove_album_alias(&cred, album_id, alias_id)
+            .await
     }
 
     pub async fn set_primary_album_alias(
@@ -836,7 +854,9 @@ impl AuthManager {
         alias_id: &str,
     ) -> AppResult<Album> {
         let cred = self.credential().await?;
-        self.server.set_primary_album_alias(&cred, album_id, alias_id).await
+        self.server
+            .set_primary_album_alias(&cred, album_id, alias_id)
+            .await
     }
 
     pub async fn list_track_aliases(&self, track_id: &str) -> AppResult<Vec<AliasInfo>> {
@@ -851,12 +871,16 @@ impl AuthManager {
         language: Option<&str>,
     ) -> AppResult<Track> {
         let cred = self.credential().await?;
-        self.server.add_track_alias(&cred, track_id, title, language).await
+        self.server
+            .add_track_alias(&cred, track_id, title, language)
+            .await
     }
 
     pub async fn remove_track_alias(&self, track_id: &str, alias_id: &str) -> AppResult<Track> {
         let cred = self.credential().await?;
-        self.server.remove_track_alias(&cred, track_id, alias_id).await
+        self.server
+            .remove_track_alias(&cred, track_id, alias_id)
+            .await
     }
 
     pub async fn set_primary_track_alias(
@@ -865,7 +889,9 @@ impl AuthManager {
         alias_id: &str,
     ) -> AppResult<Track> {
         let cred = self.credential().await?;
-        self.server.set_primary_track_alias(&cred, track_id, alias_id).await
+        self.server
+            .set_primary_track_alias(&cred, track_id, alias_id)
+            .await
     }
 
     /// Upload a cover image for an album. Manager+ gated server-side.
@@ -876,7 +902,9 @@ impl AuthManager {
         content_type: &str,
     ) -> AppResult<()> {
         let cred = self.credential().await?;
-        self.server.upload_album_cover(&cred, album_id, bytes, content_type).await
+        self.server
+            .upload_album_cover(&cred, album_id, bytes, content_type)
+            .await
     }
 
     /// Upload an image for an artist. Manager+ gated server-side.
@@ -887,7 +915,9 @@ impl AuthManager {
         content_type: &str,
     ) -> AppResult<()> {
         let cred = self.credential().await?;
-        self.server.upload_artist_image(&cred, artist_id, bytes, content_type).await
+        self.server
+            .upload_artist_image(&cred, artist_id, bytes, content_type)
+            .await
     }
 
     /// Resolve the current credential against the server. Updates the
@@ -908,9 +938,20 @@ impl AuthManager {
             self.store.save(c).await?;
         }
         Ok(AuthSession {
-            kind: guard.as_ref().map(|c| c.kind).unwrap_or(StoredCredentialKind::Bearer),
-            user_id: if who.user_id.is_empty() { None } else { Some(who.user_id) },
-            username: if who.username.is_empty() { None } else { Some(who.username) },
+            kind: guard
+                .as_ref()
+                .map(|c| c.kind)
+                .unwrap_or(StoredCredentialKind::Bearer),
+            user_id: if who.user_id.is_empty() {
+                None
+            } else {
+                Some(who.user_id)
+            },
+            username: if who.username.is_empty() {
+                None
+            } else {
+                Some(who.username)
+            },
             tier: who.tier,
             expires_at: guard.as_ref().and_then(|c| c.expires_at.clone()),
         })
@@ -1006,6 +1047,117 @@ impl AuthManager {
         Ok(())
     }
 
+    // ----- Equalizer --------------------------------------------------
+
+    pub async fn equalizer_state(&self, known: Option<Revision>) -> AppResult<EqualizerStateFetch> {
+        self.server
+            .equalizer_state(&self.credential().await?, known)
+            .await
+    }
+
+    pub async fn equalizer_create_profile(
+        &self,
+        profile: EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_create_profile(&self.credential().await?, profile)
+            .await
+    }
+
+    pub async fn equalizer_update_profile(
+        &self,
+        expected: Revision,
+        profile: EqualizerProfileInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_update_profile(&self.credential().await?, expected, profile)
+            .await
+    }
+
+    pub async fn equalizer_delete_profile(
+        &self,
+        request: DeleteProfileRequest,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_delete_profile(&self.credential().await?, request)
+            .await
+    }
+
+    pub async fn equalizer_update_settings(
+        &self,
+        expected: Revision,
+        profile_id: Option<String>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_update_settings(&self.credential().await?, expected, profile_id)
+            .await
+    }
+
+    pub async fn equalizer_create_rule(
+        &self,
+        rule: EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_create_rule(&self.credential().await?, rule)
+            .await
+    }
+
+    pub async fn equalizer_update_rule(
+        &self,
+        expected: Revision,
+        rule: EqualizerDeviceRuleInput,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_update_rule(&self.credential().await?, expected, rule)
+            .await
+    }
+
+    pub async fn equalizer_delete_rule(
+        &self,
+        id: &str,
+        expected: Revision,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_delete_rule(&self.credential().await?, id, expected)
+            .await
+    }
+
+    pub async fn equalizer_reorder_rules(
+        &self,
+        rules: Vec<EntityRevision>,
+    ) -> AppResult<EqualizerMutationResponse> {
+        self.server
+            .equalizer_reorder_rules(&self.credential().await?, rules)
+            .await
+    }
+
+    pub async fn equalizer_list_changes(
+        &self,
+        subject_user_id: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+    ) -> AppResult<ChangePage> {
+        self.server
+            .equalizer_list_changes(&self.credential().await?, subject_user_id, cursor, limit)
+            .await
+    }
+
+    pub async fn equalizer_get_change(&self, audit_id: &str) -> AppResult<EqualizerChangeDetail> {
+        self.server
+            .equalizer_get_change(&self.credential().await?, audit_id)
+            .await
+    }
+
+    pub async fn equalizer_rollback_change(
+        &self,
+        audit_id: &str,
+        expected: Revision,
+    ) -> AppResult<EqualizerRollbackResponse> {
+        self.server
+            .equalizer_rollback_change(&self.credential().await?, audit_id, expected)
+            .await
+    }
+
     pub fn server(&self) -> &ServerClient {
         &self.server
     }
@@ -1024,7 +1176,13 @@ impl AuthManager {
 ///   *after* the gRPC attempt fails).
 fn seed_health(used: TransportUsed) -> TransportHealth {
     match used {
-        TransportUsed::Grpc => TransportHealth { rest: true, grpc: true },
-        TransportUsed::Rest => TransportHealth { rest: true, grpc: false },
+        TransportUsed::Grpc => TransportHealth {
+            rest: true,
+            grpc: true,
+        },
+        TransportUsed::Rest => TransportHealth {
+            rest: true,
+            grpc: false,
+        },
     }
 }

@@ -173,9 +173,9 @@ impl StreamingService {
             .get(episode_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
-        let file_path = ep.file_path.ok_or_else(|| {
-            AppError::NotFound(format!("episode {episode_id} is not downloaded"))
-        })?;
+        let file_path = ep
+            .file_path
+            .ok_or_else(|| AppError::NotFound(format!("episode {episode_id} is not downloaded")))?;
 
         let resolved = self.resolve_episode_path(&file_path)?;
         let meta = fs::metadata(&resolved).await.map_err(|e| {
@@ -183,7 +183,9 @@ impl StreamingService {
             AppError::NotFound(format!("episode {episode_id} file missing"))
         })?;
         if !meta.is_file() {
-            return Err(AppError::NotFound(format!("episode {episode_id} not a file")));
+            return Err(AppError::NotFound(format!(
+                "episode {episode_id} not a file"
+            )));
         }
 
         Ok(ResolvedStream {
@@ -213,7 +215,8 @@ impl StreamingService {
             (*root).join(&candidate)
         } else {
             return Err(AppError::Internal(
-                "episode file_path is relative but no PODCAST_PATH/LIBRARY_PATH is configured".into(),
+                "episode file_path is relative but no PODCAST_PATH/LIBRARY_PATH is configured"
+                    .into(),
             ));
         };
 
@@ -286,10 +289,7 @@ mod tests {
         ) -> crate::error::Result<crate::db::models::Track> {
             unimplemented!()
         }
-        async fn get(
-            &self,
-            _: Uuid,
-        ) -> crate::error::Result<Option<crate::db::models::Track>> {
+        async fn get(&self, _: Uuid) -> crate::error::Result<Option<crate::db::models::Track>> {
             Ok(None)
         }
         async fn list_by_album(
@@ -325,10 +325,16 @@ mod tests {
         async fn delete(&self, _: Uuid) -> crate::error::Result<()> {
             Ok(())
         }
-        async fn list_all_ids_paths(&self) -> crate::error::Result<Vec<crate::db::repo::TrackIdPath>> {
+        async fn list_all_ids_paths(
+            &self,
+        ) -> crate::error::Result<Vec<crate::db::repo::TrackIdPath>> {
             Ok(vec![])
         }
-        async fn update_duration(&self, _: Uuid, _: i64) -> crate::error::Result<Option<crate::db::models::Track>> {
+        async fn update_duration(
+            &self,
+            _: Uuid,
+            _: i64,
+        ) -> crate::error::Result<Option<crate::db::models::Track>> {
             Ok(None)
         }
         async fn update_file_props(
@@ -410,7 +416,10 @@ mod tests {
 
         let s = svc(Some(root));
         let err = s
-            .resolve_file_path(&format!("inside/../../{}", outside.file_name().unwrap().to_string_lossy()))
+            .resolve_file_path(&format!(
+                "inside/../../{}",
+                outside.file_name().unwrap().to_string_lossy()
+            ))
             .unwrap_err();
         let _ = std::fs::remove_file(&outside);
         assert!(matches!(err, AppError::PermissionDenied(_)), "got {err:?}");
@@ -429,7 +438,10 @@ mod tests {
     fn content_type_mapping() {
         assert_eq!(content_type_for(Path::new("x.flac")), "audio/flac");
         assert_eq!(content_type_for(Path::new("x.MP3")), "audio/mpeg");
-        assert_eq!(content_type_for(Path::new("x.opus")), "audio/ogg; codecs=opus");
+        assert_eq!(
+            content_type_for(Path::new("x.opus")),
+            "audio/ogg; codecs=opus"
+        );
         assert_eq!(
             content_type_for(Path::new("x.unknown")),
             "application/octet-stream"

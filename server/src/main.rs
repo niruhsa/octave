@@ -7,25 +7,25 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use server::auth::AuthService;
+use server::auth::Identity;
 use server::config::Config;
+use server::db::repo::TrackFeatureRepo;
 use server::db::{self, pg::PgRepos};
 use server::error::{AppError, Result};
 use server::rest::RestState;
-use server::services::{
-    build_audio_resolver, build_discography_provider, build_extractor, build_index,
-    run_optimize_pass, ArtworkService,
-    CoverArtArchive, CoverArtSource, DebouncedWarmer, DiscographyCfg, DiscographyService,
-    NewReleaseNotifier, FavoritesService, FcmSender, FingerprintService, ImageOptimizer, IngestService,
-    ItunesDirectory, LibraryService, LrcLibSource, LyricsService, LyricsSource, MetadataService,
-    NotificationService, PlaylistRecWarmer,
-    PlayHistoryService, PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService,
-    PushSender, RecommendationCache, RecommendationService, ScanService, StorageService,
-    StreamingService, UploadHub, UploadsService, REC_CACHE_MAX, REC_CACHE_TTL, REC_WARM_DEBOUNCE,
-};
-use server::db::repo::TrackFeatureRepo;
-use server::auth::Identity;
 use server::services::organizer::Organizer;
 use server::services::watch as ingest_watcher;
+use server::services::{
+    ArtworkService, CoverArtArchive, CoverArtSource, DebouncedWarmer, DiscographyCfg,
+    DiscographyService, EqualizerService, FavoritesService, FcmSender, FingerprintService,
+    ImageOptimizer, IngestService, ItunesDirectory, LibraryService, LrcLibSource, LyricsService,
+    LyricsSource, MetadataService, NewReleaseNotifier, NotificationService, PlayHistoryService,
+    PlaylistRecWarmer, PlaylistService, PodcastDirectory, PodcastIndexDirectory, PodcastService,
+    PushSender, REC_CACHE_MAX, REC_CACHE_TTL, REC_WARM_DEBOUNCE, RecommendationCache,
+    RecommendationService, ScanService, StorageService, StreamingService, UploadHub,
+    UploadsService, build_audio_resolver, build_discography_provider, build_extractor, build_index,
+    run_optimize_pass,
+};
 use server::{grpc, rest};
 
 #[tokio::main]
@@ -42,9 +42,10 @@ async fn main() -> Result<()> {
         "starting music server"
     );
 
-    let database_url = config.database_url.as_deref().ok_or_else(|| {
-        AppError::Config("DATABASE_URL is required (see PLAN.md Phase 1)".into())
-    })?;
+    let database_url = config
+        .database_url
+        .as_deref()
+        .ok_or_else(|| AppError::Config("DATABASE_URL is required (see PLAN.md Phase 1)".into()))?;
     let pool = db::connect(database_url).await?;
     db::run_migrations(&pool).await?;
     let repos = PgRepos::new(pool);
@@ -55,6 +56,7 @@ async fn main() -> Result<()> {
         Arc::new(repos.clone()),
         Arc::new(repos.clone()),
     );
+    let equalizer = EqualizerService::new(Arc::new(repos.clone()), Arc::new(repos.clone()));
     // Optional FCM push backend (Phase 10 — real-time notifications). Built only
     // when FCM_ENABLED; a bad credential path/key is a hard startup error so a
     // misconfigured push setup never boots silently broken.
@@ -238,8 +240,9 @@ async fn main() -> Result<()> {
     // wired when FETCH_ARTWORK is on — manual cover/image uploads need only the
     // cache dir, so they work regardless of the auto-fetch toggle.
     let artwork = if config.artwork_path.is_some() || config.fetch_artwork {
-        let source: Option<Arc<dyn CoverArtSource>> =
-            config.fetch_artwork.then(|| Arc::new(CoverArtArchive::new()) as Arc<dyn CoverArtSource>);
+        let source: Option<Arc<dyn CoverArtSource>> = config
+            .fetch_artwork
+            .then(|| Arc::new(CoverArtArchive::new()) as Arc<dyn CoverArtSource>);
         Some(ArtworkService::new(
             library.clone(),
             source,
@@ -312,9 +315,10 @@ async fn main() -> Result<()> {
 
     // Start the ingest-folder watcher (background, non-blocking).
     let _watcher = match &ingest {
-        Some(ingest_svc) => Some(ingest_watcher::start(ingest_svc.clone()).map_err(|e| {
-            AppError::Internal(format!("ingest watcher: {e}"))
-        })?),
+        Some(ingest_svc) => Some(
+            ingest_watcher::start(ingest_svc.clone())
+                .map_err(|e| AppError::Internal(format!("ingest watcher: {e}")))?,
+        ),
         None => None,
     };
 
@@ -322,9 +326,9 @@ async fn main() -> Result<()> {
     // The service needs an ingest pipeline to stage/organise files, so it is
     // only available when a library/ingest root is configured.
     let upload_hub = UploadHub::new();
-    let uploads = ingest.clone().map(|ing| {
-        UploadsService::new(Arc::new(repos.clone()), ing, upload_hub.clone())
-    });
+    let uploads = ingest
+        .clone()
+        .map(|ing| UploadsService::new(Arc::new(repos.clone()), ing, upload_hub.clone()));
     // Server-side stall sweeper: autonomously pause an active upload that has
     // received no chunk for ≥1 min, so the server reflects `paused` even when the
     // client can't deliver its own pause (network down / app killed).
@@ -464,6 +468,7 @@ async fn main() -> Result<()> {
         notifications: notifications.clone(),
         play_history: play_history.clone(),
         favorites: favorites.clone(),
+        equalizer: equalizer.clone(),
         discover: discover.clone(),
         fingerprint: fingerprint.clone(),
         discography: discography.clone(),
@@ -491,6 +496,7 @@ async fn main() -> Result<()> {
         notifications,
         play_history,
         favorites,
+        equalizer,
         discover,
         fingerprint,
         discography,
@@ -501,7 +507,11 @@ async fn main() -> Result<()> {
         upload_hub,
         shutdown_rx.clone(),
     ));
-    let mut rest_task = tokio::spawn(rest::serve(config.rest_addr, config.rest_tls.clone(), rest_state));
+    let mut rest_task = tokio::spawn(rest::serve(
+        config.rest_addr,
+        config.rest_tls.clone(),
+        rest_state,
+    ));
 
     // Run until a transport exits on its own (bind error / panic) or the
     // shutdown signal fans out to both. If one transport dies, stop the other.

@@ -94,7 +94,9 @@ impl StorageService {
         })
         .await
         .map_err(|e| AppError::Internal(format!("storage walk join: {e}")))?;
-        self.storage.set_library_disk(artwork_bytes, other_bytes).await?;
+        self.storage
+            .set_library_disk(artwork_bytes, other_bytes)
+            .await?;
         Ok(())
     }
 

@@ -102,7 +102,10 @@ async fn dispatch<R: tauri::Runtime>(
     //    credential injected. Keeps the token out of the webview.
     let auth = state.auth.read().await.clone();
     let Some(auth): Option<Arc<AuthManager>> = auth else {
-        return text(StatusCode::NOT_FOUND, "no local cover and not authenticated");
+        return text(
+            StatusCode::NOT_FOUND,
+            "no local cover and not authenticated",
+        );
     };
     let cred = match auth.credential().await {
         Ok(c) => c,
@@ -213,13 +216,26 @@ impl ImageCache {
         let mut g = self.inner.lock().unwrap();
         let seq = g.next_seq;
         g.next_seq += 1;
-        if let Some(old) = g.map.insert(key, CachedImage { body, content_type, seq, at: Instant::now() }) {
+        if let Some(old) = g.map.insert(
+            key,
+            CachedImage {
+                body,
+                content_type,
+                seq,
+                at: Instant::now(),
+            },
+        ) {
             g.bytes = g.bytes.saturating_sub(old.body.len());
         }
         g.bytes += len;
         // Evict the oldest entries (lowest seq) until back under the cap.
         while g.bytes > self.max_bytes && g.map.len() > 1 {
-            let Some(oldest) = g.map.iter().min_by_key(|(_, e)| e.seq).map(|(k, _)| k.clone()) else {
+            let Some(oldest) = g
+                .map
+                .iter()
+                .min_by_key(|(_, e)| e.seq)
+                .map(|(k, _)| k.clone())
+            else {
                 break;
             };
             if let Some(e) = g.map.remove(&oldest) {
@@ -327,9 +343,7 @@ fn build_image_response(content_type: Option<&str>, body: Vec<u8>) -> Response<V
     builder.body(body).unwrap()
 }
 
-fn auth_header_value(
-    cred: &crate::transport::Credential,
-) -> crate::error::AppResult<HeaderValue> {
+fn auth_header_value(cred: &crate::transport::Credential) -> crate::error::AppResult<HeaderValue> {
     let s = match cred {
         crate::transport::Credential::SecretKey(k) => format!("SecretKey {k}"),
         crate::transport::Credential::Bearer(t) => format!("Bearer {t}"),
@@ -351,10 +365,9 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(b);
                 i += 3;
                 continue;

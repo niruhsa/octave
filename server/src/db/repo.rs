@@ -29,7 +29,8 @@ pub trait ArtistRepo: Send + Sync {
     async fn list(&self, limit: i64, offset: i64) -> Result<Vec<Artist>>;
     async fn count(&self) -> Result<i64>;
     async fn search(&self, query: &str, limit: i64, offset: i64) -> Result<Vec<Artist>>;
-    async fn update(&self, id: Uuid, name: &str, sort_name: Option<&str>) -> Result<Option<Artist>>;
+    async fn update(&self, id: Uuid, name: &str, sort_name: Option<&str>)
+    -> Result<Option<Artist>>;
     /// Set (or clear, with `None`) the artist's image path. Leaves name /
     /// sort_name untouched, so it composes with `update`.
     async fn set_image(&self, id: Uuid, image_path: Option<&str>) -> Result<Option<Artist>>;
@@ -70,11 +71,8 @@ pub trait AlbumRepo: Send + Sync {
     async fn recompute_loudness(&self, _album_id: Uuid) -> Result<()> {
         Ok(())
     }
-    async fn find_by_artist_and_title(
-        &self,
-        artist_id: Uuid,
-        title: &str,
-    ) -> Result<Option<Album>>;
+    async fn find_by_artist_and_title(&self, artist_id: Uuid, title: &str)
+    -> Result<Option<Album>>;
     /// `(id, cover_path)` for every album that has a cover set. Used by the
     /// image-optimization pass.
     async fn all_cover_paths(&self) -> Result<Vec<(Uuid, String)>>;
@@ -164,11 +162,7 @@ pub trait TrackRepo: Send + Sync {
     }
     /// Mark a track positively instrumental / not-found (records the current
     /// `source_sig`) so the pass stops retrying it. Returns the updated row.
-    async fn set_lyrics_instrumental(
-        &self,
-        _id: Uuid,
-        _source_sig: &str,
-    ) -> Result<Option<Track>> {
+    async fn set_lyrics_instrumental(&self, _id: Uuid, _source_sig: &str) -> Result<Option<Track>> {
         Ok(None)
     }
     /// Clear a track's lyrics (Manager remove / re-resolve). Returns the row.
@@ -236,11 +230,8 @@ pub trait PlaylistRepo: Send + Sync {
     async fn list_tracks(&self, playlist_id: Uuid) -> Result<Vec<PlaylistTrack>>;
     /// Position to use when appending (`max(position) + 1`, or 1 when empty).
     async fn next_position(&self, playlist_id: Uuid) -> Result<i32>;
-    async fn get_track_at(
-        &self,
-        playlist_id: Uuid,
-        position: i32,
-    ) -> Result<Option<PlaylistTrack>>;
+    async fn get_track_at(&self, playlist_id: Uuid, position: i32)
+    -> Result<Option<PlaylistTrack>>;
 }
 
 #[async_trait]
@@ -263,12 +254,8 @@ pub trait FavoriteRepo: Send + Sync {
     async fn add(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()>;
     /// Remove a favorite. Idempotent.
     async fn remove(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid) -> Result<()>;
-    async fn is_favorite(
-        &self,
-        user_id: Uuid,
-        kind: FavoriteKind,
-        entity_id: Uuid,
-    ) -> Result<bool>;
+    async fn is_favorite(&self, user_id: Uuid, kind: FavoriteKind, entity_id: Uuid)
+    -> Result<bool>;
     /// Entity ids of `kind` the user has favorited, newest first.
     async fn list_ids(&self, user_id: Uuid, kind: FavoriteKind) -> Result<Vec<Uuid>>;
 }
@@ -427,12 +414,7 @@ pub trait TrackFeatureRepo: Send + Sync {
     /// The `k` nearest tracks to `seed` by cosine distance (nearest first, seed
     /// excluded), scored within `model_version` only. Empty when `seed` has no
     /// vector for that model.
-    async fn nearest(
-        &self,
-        seed: Uuid,
-        model_version: &str,
-        k: usize,
-    ) -> Result<Vec<(Uuid, f32)>> {
+    async fn nearest(&self, seed: Uuid, model_version: &str, k: usize) -> Result<Vec<(Uuid, f32)>> {
         let rows = self.all_for_model(model_version).await?;
         let Some(seed_row) = rows.iter().find(|f| f.track_id == seed) else {
             return Ok(Vec::new());
@@ -549,11 +531,114 @@ pub trait DeviceTokenRepo: Send + Sync {
 #[async_trait]
 pub trait AuditRepo: Send + Sync {
     async fn record(&self, entry: NewAuditEntry) -> Result<AuditEntry>;
-    async fn list_for_entity(
+    async fn list_for_entity(&self, entity_type: &str, entity_id: Uuid) -> Result<Vec<AuditEntry>>;
+
+    /// Read one audit row by id. The default preserves existing test fakes;
+    /// production Postgres overrides it.
+    async fn get_by_id(&self, _id: Uuid) -> Result<Option<AuditEntry>> {
+        Ok(None)
+    }
+
+    /// Cursor-paginated EQ history. `before_created`/`before_id` are either
+    /// both present or both absent and implement `(created_at,id) < cursor`.
+    async fn list_equalizer_changes(
         &self,
-        entity_type: &str,
-        entity_id: Uuid,
-    ) -> Result<Vec<AuditEntry>>;
+        _subject_user_id: Option<Uuid>,
+        _before_created: Option<OffsetDateTime>,
+        _before_id: Option<Uuid>,
+        _limit: i64,
+    ) -> Result<Vec<AuditEntry>> {
+        Ok(Vec::new())
+    }
+}
+
+/// Transactional persistence boundary for the entire per-user equalizer
+/// aggregate. Mutations own their audit write so state and history commit (or
+/// roll back) together.
+#[async_trait]
+pub trait EqualizerRepo: Send + Sync {
+    async fn get_equalizer_state(&self, owner_id: Uuid) -> Result<EqualizerState>;
+
+    async fn create_equalizer_profile(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        profile: EqualizerProfileDraft,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn update_equalizer_profile(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        profile_id: Uuid,
+        expected_revision: i64,
+        profile: EqualizerProfileDraft,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn delete_equalizer_profile(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        request: DeleteEqualizerProfile,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn update_equalizer_settings(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        expected_settings_revision: i64,
+        default_profile_id: Option<Uuid>,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn create_equalizer_rule(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        rule: EqualizerDeviceRuleDraft,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn update_equalizer_rule(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        rule_id: Uuid,
+        expected_revision: i64,
+        rule: EqualizerDeviceRuleDraft,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn delete_equalizer_rule(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        rule_id: Uuid,
+        expected_revision: i64,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    async fn reorder_equalizer_rules(
+        &self,
+        actor_id: Option<Uuid>,
+        owner_id: Uuid,
+        rules: Vec<EntityRevision>,
+    ) -> Result<EqualizerMutationOutcome>;
+
+    /// Check global primary-key ownership before advertising rollback as
+    /// eligible. In-memory/fake repositories may keep the default because
+    /// their state is owner-isolated; Postgres overrides this check.
+    async fn equalizer_ids_available_for_owner(
+        &self,
+        _owner_id: Uuid,
+        _profile_ids: &[Uuid],
+        _rule_ids: &[Uuid],
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
+    async fn rollback_equalizer_change(
+        &self,
+        actor_id: Option<Uuid>,
+        audit_id: Uuid,
+        expected_state_revision: i64,
+    ) -> Result<EqualizerRollbackOutcome>;
 }
 
 #[async_trait]
@@ -666,7 +751,11 @@ pub trait PodcastEpisodeRepo: Send + Sync {
         offset: i64,
     ) -> Result<Vec<PodcastEpisode>>;
     /// The newest episodes that have no `file_path` yet (drives auto-download).
-    async fn newest_undownloaded(&self, podcast_id: Uuid, limit: i64) -> Result<Vec<PodcastEpisode>>;
+    async fn newest_undownloaded(
+        &self,
+        podcast_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<PodcastEpisode>>;
     /// Every cached episode guid for a show. Drives the incremental refresh:
     /// the walk compares each fetched feed page against this set and stops once
     /// it reaches episodes already cached.

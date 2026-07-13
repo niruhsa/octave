@@ -94,7 +94,10 @@ pub async fn play_history_list(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> AppResult<PlayHistoryPage> {
-    manager(&state).await?.list_play_history(limit, offset).await
+    manager(&state)
+        .await?
+        .list_play_history(limit, offset)
+        .await
 }
 
 /// Aggregate listening stats over a window (`window_days` 0/None = all time).
@@ -104,8 +107,5 @@ pub async fn play_history_stats(
     window_days: Option<i64>,
     limit: Option<i64>,
 ) -> AppResult<ListeningStats> {
-    manager(&state)
-        .await?
-        .play_stats(window_days, limit)
-        .await
+    manager(&state).await?.play_stats(window_days, limit).await
 }

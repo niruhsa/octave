@@ -23,9 +23,9 @@ use serde_json::Value;
 use crate::config::DiscographyConfig;
 use crate::db::models::TrackFingerprint;
 use crate::error::{AppError, Result};
-use crate::services::musicbrainz::{user_agent, RateLimiter};
+use crate::services::musicbrainz::{RateLimiter, user_agent};
 
-use super::service::{dominant_artist, AudioResolver};
+use super::service::{AudioResolver, dominant_artist};
 
 const ACOUSTID_LOOKUP: &str = "https://api.acoustid.org/v2/lookup";
 
@@ -151,8 +151,7 @@ fn encode_fingerprint(hex: &str) -> Option<String> {
 
 /// URL-safe base64 (`-_`, no padding) — AcoustID's fingerprint encoding.
 fn base64_url_nopad(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];

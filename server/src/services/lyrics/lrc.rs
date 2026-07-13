@@ -241,9 +241,27 @@ mod tests {
         let p = parse(lrc);
         assert!(p.synced);
         assert_eq!(p.lines.len(), 3);
-        assert_eq!(p.lines[0], LyricLine { ms: 12_000, text: "Line one".into() });
-        assert_eq!(p.lines[1], LyricLine { ms: 17_500, text: "Line two".into() });
-        assert_eq!(p.lines[2], LyricLine { ms: 65_000, text: "Line three".into() });
+        assert_eq!(
+            p.lines[0],
+            LyricLine {
+                ms: 12_000,
+                text: "Line one".into()
+            }
+        );
+        assert_eq!(
+            p.lines[1],
+            LyricLine {
+                ms: 17_500,
+                text: "Line two".into()
+            }
+        );
+        assert_eq!(
+            p.lines[2],
+            LyricLine {
+                ms: 65_000,
+                text: "Line three".into()
+            }
+        );
         assert_eq!(p.plain, "Line one\nLine two\nLine three");
     }
 
@@ -320,7 +338,13 @@ mod tests {
         let lrc = "[00:05.00]\n[00:10.00]Words";
         let p = parse(lrc);
         assert_eq!(p.lines.len(), 2);
-        assert_eq!(p.lines[0], LyricLine { ms: 5_000, text: String::new() });
+        assert_eq!(
+            p.lines[0],
+            LyricLine {
+                ms: 5_000,
+                text: String::new()
+            }
+        );
         assert_eq!(p.plain, "Words");
     }
 

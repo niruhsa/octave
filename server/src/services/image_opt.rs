@@ -105,7 +105,12 @@ impl ImageOptimizer {
 
     /// Read `source`, optimize it into `variant`, and write the cached file for
     /// `key`. Returns the cached path on success.
-    pub async fn optimize_file(&self, key: &str, source: &Path, variant: Variant) -> Result<PathBuf> {
+    pub async fn optimize_file(
+        &self,
+        key: &str,
+        source: &Path,
+        variant: Variant,
+    ) -> Result<PathBuf> {
         let bytes = fs::read(source).await.map_err(AppError::Io)?;
         let bytes_in = bytes.len();
         let (dim, quality) = self.dim_quality(variant);
@@ -113,7 +118,9 @@ impl ImageOptimizer {
         let optimized = tokio::task::spawn_blocking(move || encode_optimized(&bytes, dim, quality))
             .await
             .map_err(|e| AppError::Internal(format!("optimize task join: {e}")))??;
-        fs::create_dir_all(&self.optimized_dir).await.map_err(AppError::Io)?;
+        fs::create_dir_all(&self.optimized_dir)
+            .await
+            .map_err(AppError::Io)?;
         let opt = self.optimized_path(key, variant);
         let bytes_out = optimized.len();
         fs::write(&opt, &optimized).await.map_err(AppError::Io)?;
@@ -144,8 +151,8 @@ async fn is_fresh(opt: &Path, source: &Path) -> bool {
 /// Decode `bytes`, downscale so the longest side is `<= max_dim` (preserving
 /// aspect ratio; never upscales), and re-encode as JPEG at `quality`.
 fn encode_optimized(bytes: &[u8], max_dim: u32, quality: u8) -> Result<Vec<u8>> {
-    use image::codecs::jpeg::JpegEncoder;
     use image::DynamicImage;
+    use image::codecs::jpeg::JpegEncoder;
 
     let img = image::load_from_memory(bytes)
         .map_err(|e| AppError::Internal(format!("decode image: {e}")))?;
@@ -168,12 +175,17 @@ fn encode_optimized(bytes: &[u8], max_dim: u32, quality: u8) -> Result<Vec<u8>> 
 /// Ensure every album cover + artist image is optimized. Idempotent + cheap on
 /// repeat (already-fresh variants are skipped). Errors are logged, never fatal —
 /// this runs on startup + on a timer.
-pub async fn run_optimize_pass(albums: &dyn AlbumRepo, artists: &dyn ArtistRepo, opt: &ImageOptimizer) {
+pub async fn run_optimize_pass(
+    albums: &dyn AlbumRepo,
+    artists: &dyn ArtistRepo,
+    opt: &ImageOptimizer,
+) {
     let mut count = 0u64;
     match albums.all_cover_paths().await {
         Ok(rows) => {
             for (id, path) in rows {
-                opt.ensure_all(&ImageOptimizer::album_key(id), Path::new(&path)).await;
+                opt.ensure_all(&ImageOptimizer::album_key(id), Path::new(&path))
+                    .await;
                 count += 1;
             }
         }
@@ -182,7 +194,8 @@ pub async fn run_optimize_pass(albums: &dyn AlbumRepo, artists: &dyn ArtistRepo,
     match artists.all_image_paths().await {
         Ok(rows) => {
             for (id, path) in rows {
-                opt.ensure_all(&ImageOptimizer::artist_key(id), Path::new(&path)).await;
+                opt.ensure_all(&ImageOptimizer::artist_key(id), Path::new(&path))
+                    .await;
                 count += 1;
             }
         }
@@ -241,7 +254,12 @@ mod tests {
         // byte payload is far smaller than the full optimized image.
         assert_eq!(decoded.width(), LOW_DIM);
         assert_eq!(decoded.height(), LOW_DIM * 3 / 4);
-        assert!(low.len() < full.len() / 4, "low {} vs full {}", low.len(), full.len());
+        assert!(
+            low.len() < full.len() / 4,
+            "low {} vs full {}",
+            low.len(),
+            full.len()
+        );
     }
 
     #[test]
@@ -259,6 +277,9 @@ mod tests {
         let id = Uuid::nil();
         assert!(ImageOptimizer::album_key(id).starts_with("album-"));
         assert!(ImageOptimizer::artist_key(id).starts_with("artist-"));
-        assert_ne!(ImageOptimizer::album_key(id), ImageOptimizer::artist_key(id));
+        assert_ne!(
+            ImageOptimizer::album_key(id),
+            ImageOptimizer::artist_key(id)
+        );
     }
 }

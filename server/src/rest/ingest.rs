@@ -64,7 +64,9 @@ async fn upload(
     Extension(caller): Extension<Identity>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<UploadResult>), ApiError> {
-    caller.require(PermissionLevel::Manager).map_err(ApiError::from)?;
+    caller
+        .require(PermissionLevel::Manager)
+        .map_err(ApiError::from)?;
 
     let ingest = state
         .ingest
@@ -86,17 +88,14 @@ async fn upload(
     {
         let field_name = field.name().map(|s| s.to_string());
         let content_type = field.content_type().map(|s| s.to_string());
-        let filename = field
-            .file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                let name = field_name.clone().unwrap_or_else(|| "upload".to_string());
-                let ct = content_type
-                    .as_deref()
-                    .and_then(mime_to_ext)
-                    .unwrap_or("bin");
-                format!("{name}.{ct}")
-            });
+        let filename = field.file_name().map(|s| s.to_string()).unwrap_or_else(|| {
+            let name = field_name.clone().unwrap_or_else(|| "upload".to_string());
+            let ct = content_type
+                .as_deref()
+                .and_then(mime_to_ext)
+                .unwrap_or("bin");
+            format!("{name}.{ct}")
+        });
 
         let data = field
             .bytes()
@@ -131,7 +130,12 @@ async fn upload(
     let upload_dir = ingest_root.join(".tmp").join(Uuid::new_v4().to_string());
     tokio::fs::create_dir_all(&upload_dir)
         .await
-        .map_err(|e| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+        .map_err(|e| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })
         .map_err(ApiError::from)?;
 
     // Audio/archive file keeps its real extension so ingest can detect it.
@@ -142,9 +146,11 @@ async fn upload(
     let source_path = upload_dir.join(format!("source.{ext}"));
     if let Err(e) = tokio::fs::write(&source_path, &data).await {
         let _ = tokio::fs::remove_dir_all(&upload_dir).await;
-        return Err(
-            AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())).into(),
-        );
+        return Err(AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+        .into());
     }
 
     // Write the cover sidecar as `cover.<imgext>` next to the source so the
@@ -229,7 +235,9 @@ async fn ingest_scan(
     Extension(caller): Extension<Identity>,
     req: Request<Body>,
 ) -> Result<Json<IngestScanResponse>, ApiError> {
-    caller.require(PermissionLevel::Manager).map_err(ApiError::from)?;
+    caller
+        .require(PermissionLevel::Manager)
+        .map_err(ApiError::from)?;
 
     let body: IngestScanBody = crate::rest::parse_json(req).await?;
     let ingest = state
@@ -243,9 +251,7 @@ async fn ingest_scan(
         .map(PathBuf::from)
         .or_else(|| ingest.ingest_root.clone())
         .ok_or_else(|| {
-            AppError::InvalidArgument(
-                "no ingest root provided and INGEST_PATH is unset".into(),
-            )
+            AppError::InvalidArgument("no ingest root provided and INGEST_PATH is unset".into())
         })?;
 
     if !root.is_dir() {
@@ -320,11 +326,7 @@ async fn ingest_scan(
 /// Classify a multipart field as the cover image rather than the primary
 /// source file. Matches when the field is named like a cover, its
 /// content-type is `image/*`, or its filename has an image extension.
-fn is_cover_field(
-    field_name: Option<&str>,
-    content_type: Option<&str>,
-    filename: &str,
-) -> bool {
+fn is_cover_field(field_name: Option<&str>, content_type: Option<&str>, filename: &str) -> bool {
     const COVER_FIELD_NAMES: &[&str] = &["cover", "artwork", "art", "image", "thumbnail"];
     const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif"];
 

@@ -92,8 +92,12 @@ fn nonempty(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-fn nz_i32(v: i32) -> Option<i32> { if v == 0 { None } else { Some(v) } }
-fn nz_i64(v: i64) -> Option<i64> { if v == 0 { None } else { Some(v) } }
+fn nz_i32(v: i32) -> Option<i32> {
+    if v == 0 { None } else { Some(v) }
+}
+fn nz_i64(v: i64) -> Option<i64> {
+    if v == 0 { None } else { Some(v) }
+}
 
 fn page_of(p: Option<pb::Pagination>) -> (Option<i64>, Option<i64>) {
     match p {
@@ -232,8 +236,14 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     ) -> Result<Response<pb::Artist>, Status> {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "artist")?;
-        let a = self.library.get_artist(&caller, id).await.map_err(map_err)?;
-        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+        let a = self
+            .library
+            .get_artist(&caller, id)
+            .await
+            .map_err(map_err)?;
+        Ok(Response::new(
+            self.artist_pb_with_aliases(&caller, a).await?,
+        ))
     }
     async fn update_artist(
         &self,
@@ -248,7 +258,9 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .update_artist(&caller, id, &body.name, sort.as_deref())
             .await
             .map_err(map_err)?;
-        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+        Ok(Response::new(
+            self.artist_pb_with_aliases(&caller, a).await?,
+        ))
     }
     async fn delete_artist(
         &self,
@@ -256,7 +268,11 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     ) -> Result<Response<pb::DeleteResponse>, Status> {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "artist")?;
-        let deleted = self.library.delete_artist(&caller, id).await.map_err(map_err)?;
+        let deleted = self
+            .library
+            .delete_artist(&caller, id)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(pb::DeleteResponse { deleted }))
     }
     async fn list_artists(
@@ -352,7 +368,11 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     ) -> Result<Response<pb::DeleteResponse>, Status> {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "album")?;
-        let deleted = self.library.delete_album(&caller, id).await.map_err(map_err)?;
+        let deleted = self
+            .library
+            .delete_album(&caller, id)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(pb::DeleteResponse { deleted }))
     }
     async fn list_albums_by_artist(
@@ -423,7 +443,11 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             channels: None,
             metadata_json,
         };
-        let t = self.library.create_track(&caller, new).await.map_err(map_err)?;
+        let t = self
+            .library
+            .create_track(&caller, new)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(track_to_pb(t)))
     }
     async fn get_track(
@@ -449,7 +473,14 @@ impl pb::library_service_server::LibraryService for LibraryServer {
         };
         let t = self
             .library
-            .update_track(&caller, id, &b.title, nz_i32(b.track_no), nz_i32(b.disc_no), &meta)
+            .update_track(
+                &caller,
+                id,
+                &b.title,
+                nz_i32(b.track_no),
+                nz_i32(b.disc_no),
+                &meta,
+            )
             .await
             .map_err(map_err)?;
         Ok(Response::new(track_to_pb(t)))
@@ -460,7 +491,11 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     ) -> Result<Response<pb::DeleteResponse>, Status> {
         let caller = self.caller(&req).await?;
         let id = parse_uuid(&req.into_inner().id, "track")?;
-        let deleted = self.library.delete_track(&caller, id).await.map_err(map_err)?;
+        let deleted = self
+            .library
+            .delete_track(&caller, id)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(pb::DeleteResponse { deleted }))
     }
     async fn list_tracks_by_album(
@@ -558,7 +593,9 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .merge_artists(&caller, survivor, duplicate)
             .await
             .map_err(map_err)?;
-        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+        Ok(Response::new(
+            self.artist_pb_with_aliases(&caller, a).await?,
+        ))
     }
     async fn merge_albums(
         &self,
@@ -670,7 +707,9 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             )
             .await
             .map_err(map_err)?;
-        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+        Ok(Response::new(
+            self.artist_pb_with_aliases(&caller, a).await?,
+        ))
     }
     async fn remove_artist_alias(
         &self,
@@ -685,7 +724,9 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .remove_artist_alias(&caller, id, alias_id)
             .await
             .map_err(map_err)?;
-        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+        Ok(Response::new(
+            self.artist_pb_with_aliases(&caller, a).await?,
+        ))
     }
     async fn set_primary_artist_alias(
         &self,
@@ -700,7 +741,9 @@ impl pb::library_service_server::LibraryService for LibraryServer {
             .set_primary_artist_alias(&caller, id, alias_id)
             .await
             .map_err(map_err)?;
-        Ok(Response::new(self.artist_pb_with_aliases(&caller, a).await?))
+        Ok(Response::new(
+            self.artist_pb_with_aliases(&caller, a).await?,
+        ))
     }
     async fn list_album_aliases(
         &self,
@@ -841,7 +884,11 @@ impl pb::library_service_server::LibraryService for LibraryServer {
     ) -> Result<Response<pb::ScanResponse>, Status> {
         let caller = self.caller(&req).await?;
         let root = req.into_inner().root_path;
-        let root_arg = if root.is_empty() { None } else { Some(PathBuf::from(root)) };
+        let root_arg = if root.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(root))
+        };
         let report = self
             .scan
             .scan(&caller, root_arg.as_deref())

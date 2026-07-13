@@ -220,15 +220,12 @@ fn should_process(path: &Path) -> bool {
     }
     // `.tmp` staging dir under INGEST_PATH/.tmp is ours; skip anything
     // whose path components include a leading-dot directory.
-    if path
-        .components()
-        .any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        })
-    {
+    if path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .map(|s| s.starts_with('.'))
+            .unwrap_or(false)
+    }) {
         return false;
     }
     true

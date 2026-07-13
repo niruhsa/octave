@@ -250,11 +250,7 @@ impl IngestService {
     /// Only the immediate children of `dir` are grouped — a nested
     /// `Language/Artist/Album/Track.flac` tree still yields one album per
     /// leaf `Album` folder, since each track's parent directory is its album.
-    pub async fn organize_dir(
-        &self,
-        caller: &Identity,
-        dir: &Path,
-    ) -> Result<DirIngestResult> {
+    pub async fn organize_dir(&self, caller: &Identity, dir: &Path) -> Result<DirIngestResult> {
         let mut files = collect_audio_files(dir);
         files.sort();
 
@@ -376,9 +372,7 @@ impl IngestService {
         // folder — a `cover.jpg` sidecar (or art embedded in the first track) —
         // so user-supplied artwork wins over a remote lookup. `local_cover`
         // scans the source's parent dir (== `dir`) for the sidecar.
-        if needs_cover
-            && let Some((source, dest)) = &first_placed
-        {
+        if needs_cover && let Some((source, dest)) = &first_placed {
             if let Some(cover) = local_cover(source) {
                 match self
                     .write_cover_to_library(caller, &album, dest, &cover)

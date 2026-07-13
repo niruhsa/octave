@@ -14,10 +14,10 @@
 use std::path::Path;
 use std::time::Duration as StdDuration;
 
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::formats::probe::Hint;
 use symphonia::core::units::{TimeBase, Timestamp};
 
 /// The maximum number of packets to walk when the format reader doesn't
@@ -39,7 +39,10 @@ pub fn measure_duration(path: &Path) -> Option<StdDuration> {
     // for a VBR file without a Xing/VBRI index, which can be off by minutes.
     // Counting frames is correct for CBR and VBR alike.
     if matches!(
-        path.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
         Some("mp3" | "mp2" | "mp1")
     ) {
         return crate::services::mp3::measure_mp3_duration(path);
@@ -86,10 +89,7 @@ pub fn measure_duration(path: &Path) -> Option<StdDuration> {
 
 /// Walk packets through `format` until EOF, returning the timestamp of the
 /// last packet converted to seconds via the track's timebase.
-fn walk_to_end(
-    format: &mut dyn FormatReader,
-    tb: Option<TimeBase>,
-) -> Option<StdDuration> {
+fn walk_to_end(format: &mut dyn FormatReader, tb: Option<TimeBase>) -> Option<StdDuration> {
     let tb = tb?;
     let mut last_ts = Timestamp::new(0);
     let mut walked: u64 = 0;

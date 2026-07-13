@@ -12,7 +12,7 @@ use std::f32::consts::PI;
 use std::io::Write;
 use std::path::PathBuf;
 
-use server::services::fingerprint::{cosine_similarity, DspExtractor, FeatureExtractor};
+use server::services::fingerprint::{DspExtractor, FeatureExtractor, cosine_similarity};
 
 /// Write a mono 16-bit PCM WAV of `samples` at `rate` Hz to a temp path.
 fn write_wav(name: &str, rate: u32, samples: &[f32]) -> PathBuf {
@@ -75,16 +75,16 @@ async fn dsp_extracts_unit_norm_embeddings_and_ranks_an_obvious_pair() {
     for e in [&ea, &ea2, &eb] {
         assert_eq!(e.len(), dims, "embedding length matches dims()");
         let norm = e.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-4, "embedding is unit-norm (got {norm})");
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "embedding is unit-norm (got {norm})"
+        );
     }
 
     // The obvious pair (220 vs 220) must be more similar than 220 vs 660.
     let near = cosine_similarity(&ea, &ea2);
     let far = cosine_similarity(&ea, &eb);
-    assert!(
-        near > far,
-        "near pair {near} should beat far pair {far}"
-    );
+    assert!(near > far, "near pair {near} should beat far pair {far}");
 
     for p in [a, a2, b] {
         let _ = std::fs::remove_file(p);

@@ -119,21 +119,13 @@ impl PlaylistService {
             .ok_or_else(|| AppError::NotFound(format!("playlist {id}")))
     }
 
-    pub async fn get_with_tracks(
-        &self,
-        caller: &Identity,
-        id: Uuid,
-    ) -> Result<PlaylistWithTracks> {
+    pub async fn get_with_tracks(&self, caller: &Identity, id: Uuid) -> Result<PlaylistWithTracks> {
         let playlist = self.get(caller, id).await?;
         let tracks = self.playlists.list_tracks(id).await?;
         Ok(PlaylistWithTracks { playlist, tracks })
     }
 
-    pub async fn list_for_owner(
-        &self,
-        caller: &Identity,
-        owner_id: Uuid,
-    ) -> Result<Vec<Playlist>> {
+    pub async fn list_for_owner(&self, caller: &Identity, owner_id: Uuid) -> Result<Vec<Playlist>> {
         caller.require(PermissionLevel::User)?;
         // Listing another user's playlists is a Manager+ operation; the
         // owner can always see their own.
@@ -151,12 +143,7 @@ impl PlaylistService {
         self.playlists.list_for_owner(owner_id).await
     }
 
-    pub async fn rename(
-        &self,
-        caller: &Identity,
-        id: Uuid,
-        name: &str,
-    ) -> Result<Playlist> {
+    pub async fn rename(&self, caller: &Identity, id: Uuid, name: &str) -> Result<Playlist> {
         let before = self.require_owner_or_manager(caller, id).await?;
         let name = validate_name(name)?;
         let after = self
@@ -265,10 +252,7 @@ impl PlaylistService {
         position: i32,
     ) -> Result<Option<PlaylistTrack>> {
         self.require_owner_or_manager(caller, playlist_id).await?;
-        let before = self
-            .playlists
-            .get_track_at(playlist_id, position)
-            .await?;
+        let before = self.playlists.get_track_at(playlist_id, position).await?;
         let Some(before) = before else {
             return Ok(None);
         };
@@ -314,10 +298,7 @@ impl PlaylistService {
             .get_track_at(playlist_id, from)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track at position {from}")))?;
-        let moved = self
-            .playlists
-            .move_track(playlist_id, from, to)
-            .await?;
+        let moved = self.playlists.move_track(playlist_id, from, to).await?;
         if !moved {
             return Err(AppError::NotFound(format!("track at position {from}")));
         }
@@ -464,7 +445,7 @@ mod tests {
         AuditEntry, NewAuditEntry, NewPlaylist, NewTrack, NewUser, PermissionLevel, Playlist,
         PlaylistTrack, Track, User,
     };
-    use crate::db::repo::{AuditRepo, PlaylistRepo, TrackRepo, TrackIdPath, UserRepo};
+    use crate::db::repo::{AuditRepo, PlaylistRepo, TrackIdPath, TrackRepo, UserRepo};
     use async_trait::async_trait;
     use std::sync::Mutex;
     use time::OffsetDateTime;
@@ -495,7 +476,13 @@ mod tests {
             Ok(p)
         }
         async fn get(&self, id: Uuid) -> Result<Option<Playlist>> {
-            Ok(self.playlists.lock().unwrap().iter().find(|p| p.id == id).cloned())
+            Ok(self
+                .playlists
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|p| p.id == id)
+                .cloned())
         }
         async fn list_for_owner(&self, owner_id: Uuid) -> Result<Vec<Playlist>> {
             Ok(self
@@ -544,11 +531,7 @@ mod tests {
             g.push(row.clone());
             Ok(row)
         }
-        async fn remove_track_at(
-            &self,
-            playlist_id: Uuid,
-            position: i32,
-        ) -> Result<bool> {
+        async fn remove_track_at(&self, playlist_id: Uuid, position: i32) -> Result<bool> {
             let mut g = self.tracks.lock().unwrap();
             let before = g.len();
             g.retain(|t| !(t.playlist_id == playlist_id && t.position == position));
@@ -562,12 +545,7 @@ mod tests {
             }
             Ok(true)
         }
-        async fn move_track(
-            &self,
-            playlist_id: Uuid,
-            from: i32,
-            to: i32,
-        ) -> Result<bool> {
+        async fn move_track(&self, playlist_id: Uuid, from: i32, to: i32) -> Result<bool> {
             let mut g = self.tracks.lock().unwrap();
             let Some(idx) = g
                 .iter()
@@ -804,11 +782,7 @@ mod tests {
             self.entries.lock().unwrap().push(e);
             Ok(row)
         }
-        async fn list_for_entity(
-            &self,
-            _: &str,
-            _: Uuid,
-        ) -> Result<Vec<AuditEntry>> {
+        async fn list_for_entity(&self, _: &str, _: Uuid) -> Result<Vec<AuditEntry>> {
             Ok(vec![])
         }
     }
@@ -904,7 +878,9 @@ mod tests {
 
         let rows = pl.list_tracks(p.id).await.unwrap();
         assert_eq!(
-            rows.iter().map(|r| (r.position, r.track_id)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.position, r.track_id))
+                .collect::<Vec<_>>(),
             vec![(1, t3), (2, t1), (3, t2)]
         );
     }
@@ -914,7 +890,10 @@ mod tests {
         let (svc, ..) = make_service();
         let owner = user_identity(PermissionLevel::User);
         let p = svc.create(&owner, "x").await.unwrap();
-        let err = svc.add_track(&owner, p.id, Uuid::new_v4()).await.unwrap_err();
+        let err = svc
+            .add_track(&owner, p.id, Uuid::new_v4())
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
     }
 
@@ -952,15 +931,13 @@ mod tests {
             tr.add(*id);
             svc.add_track(&owner, p.id, *id).await.unwrap();
         }
-        let removed = svc
-            .remove_track_at(&owner, p.id, 2)
-            .await
-            .unwrap()
-            .unwrap();
+        let removed = svc.remove_track_at(&owner, p.id, 2).await.unwrap().unwrap();
         assert_eq!(removed.track_id, ids[1]);
         let rows = pl.list_tracks(p.id).await.unwrap();
         assert_eq!(
-            rows.iter().map(|r| (r.position, r.track_id)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.position, r.track_id))
+                .collect::<Vec<_>>(),
             vec![(1, ids[0]), (2, ids[2])]
         );
     }

@@ -111,6 +111,12 @@ bzip2 = "0.5"
 xz2 = "0.1"
 sha2 = "0.10"
 
+# Equalizer profile/device matcher canonicalization. Exact versions are pinned
+# because changing Unicode tables can otherwise silently change synced name or
+# selector identity across releases.
+unicode-normalization = "=0.1.25"
+unicode-casefold = "=0.2.0"
+
 # Follow notifications (Phase 10): real-time push via Firebase Cloud Messaging
 # (HTTP v1 API). `jsonwebtoken` signs the service-account JWT used to mint the
 # OAuth2 access token; the HTTP calls reuse `reqwest`. Only used when FCM_ENABLED.
@@ -160,3 +166,4 @@ tempfile = "3"
 
 [build-dependencies]
 tonic-build = "0.12"
+protoc-bin-vendored = "3"

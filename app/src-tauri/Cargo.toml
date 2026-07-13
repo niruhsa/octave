@@ -17,6 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 tonic-build = "0.12"
+protoc-bin-vendored = "3"
 
 [dev-dependencies]
 tempfile = "3"
@@ -28,6 +29,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
+hmac = "0.12"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -83,6 +87,15 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 
 [target.'cfg(target_os="windows")'.dependencies]
 sha2 = { version = "0.10" }
+windows-core = "0.61"
+windows = { version = "0.61", features = [
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_UI_Shell_PropertiesSystem",
+] }
 
 [target.'cfg(not(target_os="windows"))'.dependencies]
 # Upload hashing (per-chunk + whole-file SHA-256). The `asm` feature pulls in

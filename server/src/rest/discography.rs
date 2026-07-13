@@ -18,8 +18,8 @@ use crate::auth::Identity;
 use crate::db::models::{self as m, PermissionLevel};
 use crate::error::AppError;
 use crate::rest::{ApiError, RestState};
-use crate::services::discography::{ArtistCandidate, IgnoreRequest, SyncOutcome};
 use crate::services::DiscographyService;
+use crate::services::discography::{ArtistCandidate, IgnoreRequest, SyncOutcome};
 use crate::time_fmt::rfc3339;
 
 pub fn router() -> Router<RestState> {
@@ -140,7 +140,9 @@ async fn get_report(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let report = svc(&s)?.report(&c, id).await?;
-    Ok(Json(serde_json::json!({ "report": report.map(report_dto) })))
+    Ok(Json(
+        serde_json::json!({ "report": report.map(report_dto) }),
+    ))
 }
 
 /// `POST /artists/:id/discography/sync` — trigger a sync (slow: provider I/O).

@@ -15,11 +15,11 @@ use crate::db::models::{
     Album, DiscographyIgnore, DiscographyReport, NewDiscographyIgnore, NewStoredReport,
     PermissionLevel, TrackFingerprint,
 };
-use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, DiscographyRepo, TrackRepo};
+use crate::db::repo::{AlbumRepo, AliasRepo, ArtistRepo, DiscographyRepo, TrackRepo};
 use crate::error::{AppError, Result};
 use crate::services::NotificationService;
 
-use super::diff::{apply_ignores, ProviderSnapshot, SnapMissingTrack, SnapReleaseGroup};
+use super::diff::{ProviderSnapshot, SnapMissingTrack, SnapReleaseGroup, apply_ignores};
 use super::r#match::{matches_any, normalize_title, similarity};
 use super::provider::{ArtistCandidate, DiscographyProvider};
 
@@ -239,12 +239,13 @@ impl DiscographyService {
         // Resolve the provider artist id (sticky once set — but only for the
         // *active* provider; a provider switch makes a stored id stale and
         // re-resolves).
-        let resolved = state.as_ref().and_then(|s| {
-            match (s.provider.as_deref(), s.provider_id.as_deref()) {
-                (Some(p), Some(id)) if p == self.provider.id() => Some(id.to_string()),
-                _ => None,
-            }
-        });
+        let resolved =
+            state.as_ref().and_then(
+                |s| match (s.provider.as_deref(), s.provider_id.as_deref()) {
+                    (Some(p), Some(id)) if p == self.provider.id() => Some(id.to_string()),
+                    _ => None,
+                },
+            );
         let provider_artist_id = match resolved {
             Some(id) => id,
             None => match self.resolve_provider(&artist.name, artist_id).await? {
@@ -821,17 +822,17 @@ fn empty_report(artist_id: Uuid, provider: &str) -> DiscographyReport {
 mod tests {
     use super::*;
     use crate::db::models::{
-        Album, Artist, ArtistAlias, AlbumAlias, ArtistDiscoState, NewAlbum, NewAlbumAlias,
+        Album, AlbumAlias, Artist, ArtistAlias, ArtistDiscoState, NewAlbum, NewAlbumAlias,
         NewArtist, NewArtistAlias, NewTrack, NewTrackAlias, StoredReport, Track, TrackAlias,
     };
-    use crate::db::repo::{AliasRepo, AlbumRepo, ArtistRepo, DiscographyRepo, TrackIdPath, TrackRepo};
-    use crate::services::discography::provider::{
-        ProviderReleaseGroup, ProviderTrack,
+    use crate::db::repo::{
+        AlbumRepo, AliasRepo, ArtistRepo, DiscographyRepo, TrackIdPath, TrackRepo,
     };
+    use crate::services::discography::provider::{ProviderReleaseGroup, ProviderTrack};
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // ---- constructors -----------------------------------------------------
 
@@ -909,7 +910,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Artist>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list(&self, _: i64, _: i64) -> Result<Vec<Artist>> {
             Ok(self.rows.lock().unwrap().clone())
@@ -947,7 +954,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Album>> {
-            Ok(self.rows.lock().unwrap().iter().find(|a| a.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.id == id)
+                .cloned())
         }
         async fn list_by_artist(&self, artist_id: Uuid) -> Result<Vec<Album>> {
             Ok(self
@@ -1004,7 +1017,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Track>> {
-            Ok(self.rows.lock().unwrap().iter().find(|t| t.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == id)
+                .cloned())
         }
         async fn list_by_album(&self, album_id: Uuid) -> Result<Vec<Track>> {
             Ok(self
@@ -1225,7 +1244,13 @@ mod tests {
             Ok(())
         }
         async fn get_ignore(&self, id: Uuid) -> Result<Option<DiscographyIgnore>> {
-            Ok(self.ignores.lock().unwrap().iter().find(|i| i.id == id).cloned())
+            Ok(self
+                .ignores
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|i| i.id == id)
+                .cloned())
         }
         async fn remove_ignore(&self, artist_id: Uuid, id: Uuid) -> Result<()> {
             self.ignores
@@ -1493,7 +1518,10 @@ mod tests {
             ctx.provider.rg_calls.load(Ordering::SeqCst),
             ctx.provider.track_calls.load(Ordering::SeqCst),
         );
-        assert_eq!(calls_after_sync, calls_now, "suppression must not call the provider");
+        assert_eq!(
+            calls_after_sync, calls_now,
+            "suppression must not call the provider"
+        );
     }
 
     #[tokio::test]
@@ -1507,12 +1535,16 @@ mod tests {
         // A brand-new release (this year) appears on the provider → the next
         // sync announces exactly it.
         let year = OffsetDateTime::now_utc().year();
-        ctx.provider.groups.lock().unwrap().push(ProviderReleaseGroup {
-            provider_id: Uuid::new_v4().to_string(),
-            title: "Brand New LP".to_string(),
-            album_type: "album".to_string(),
-            year: Some(year),
-        });
+        ctx.provider
+            .groups
+            .lock()
+            .unwrap()
+            .push(ProviderReleaseGroup {
+                provider_id: Uuid::new_v4().to_string(),
+                title: "Brand New LP".to_string(),
+                album_type: "album".to_string(),
+                year: Some(year),
+            });
         ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
         assert_eq!(ctx.notifier.count.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -1526,12 +1558,16 @@ mod tests {
         let ctx = make(vec![candidate(&Uuid::new_v4().to_string(), 100)]);
         ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
         // A newly-*cataloged* but decades-old release must not masquerade as new.
-        ctx.provider.groups.lock().unwrap().push(ProviderReleaseGroup {
-            provider_id: Uuid::new_v4().to_string(),
-            title: "Old Reissue".to_string(),
-            album_type: "album".to_string(),
-            year: Some(1970),
-        });
+        ctx.provider
+            .groups
+            .lock()
+            .unwrap()
+            .push(ProviderReleaseGroup {
+                provider_id: Uuid::new_v4().to_string(),
+                title: "Old Reissue".to_string(),
+                album_type: "album".to_string(),
+                year: Some(1970),
+            });
         ctx.svc.sync_artist(&mgr(), ctx.artist_id).await.unwrap();
         assert_eq!(ctx.notifier.count.load(Ordering::SeqCst), 0);
     }

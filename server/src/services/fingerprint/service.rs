@@ -13,11 +13,11 @@ use std::sync::Arc;
 use futures_util::stream::{self, StreamExt};
 use uuid::Uuid;
 
-use crate::db::repo::{AlbumRepo, TrackFeatureRepo, TrackRepo};
 use crate::db::models::{LoudnessMeta, NewTrackFeature};
+use crate::db::repo::{AlbumRepo, TrackFeatureRepo, TrackRepo};
 use crate::error::{AppError, Result};
 
-use super::decode::{decode_with_loudness, DecodeError};
+use super::decode::{DecodeError, decode_with_loudness};
 use super::extractor::FeatureExtractor;
 use super::index::SimilarityIndex;
 
@@ -144,7 +144,11 @@ impl FingerprintService {
             .map(|v| v.len() as i64)
             .unwrap_or(0);
         let loudness_measured = if self.loudness_enabled() {
-            self.tracks.loudness_counts().await.map(|c| c.measured).unwrap_or(0)
+            self.tracks
+                .loudness_counts()
+                .await
+                .map(|c| c.measured)
+                .unwrap_or(0)
         } else {
             0
         };
@@ -233,7 +237,14 @@ impl FingerprintService {
                 let model = model.clone();
                 async move {
                     analyze_one(
-                        &*extractor, &*features, &*tracks, id, path, sig, &model, need_embed,
+                        &*extractor,
+                        &*features,
+                        &*tracks,
+                        id,
+                        path,
+                        sig,
+                        &model,
+                        need_embed,
                         need_loud,
                     )
                     .await
@@ -271,9 +282,7 @@ impl FingerprintService {
             }
         }
 
-        if fp_on
-            && let Err(e) = self.index.reload().await
-        {
+        if fp_on && let Err(e) = self.index.reload().await {
             tracing::warn!(error = %e, "analysis pass: index reload failed");
         }
         tracing::info!(
@@ -301,9 +310,11 @@ impl FingerprintService {
             .get(track_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("track {track_id}")))?;
-        let path = self
-            .resolve(&track.file_path)
-            .ok_or_else(|| AppError::Internal("track file_path is relative but no LIBRARY_PATH is configured".into()))?;
+        let path = self.resolve(&track.file_path).ok_or_else(|| {
+            AppError::Internal(
+                "track file_path is relative but no LIBRARY_PATH is configured".into(),
+            )
+        })?;
         let sig = source_sig(&path)
             .ok_or_else(|| AppError::Io(std::io::Error::other("track file unreadable")))?;
         let model = self.extractor.model_version().to_string();
@@ -313,8 +324,15 @@ impl FingerprintService {
             return Ok(()); // analysis subsystem present but nothing enabled
         }
         let res = analyze_one(
-            &*self.extractor, &*self.features, &*self.tracks, track_id, path, sig, &model,
-            need_embed, need_loud,
+            &*self.extractor,
+            &*self.features,
+            &*self.tracks,
+            track_id,
+            path,
+            sig,
+            &model,
+            need_embed,
+            need_loud,
         )
         .await;
         if let (Some(albums), Some(album)) = (&self.loudness, res.loud_album)
@@ -332,9 +350,9 @@ impl FingerprintService {
             AnalyzeOutcome::Unanalyzable => Err(AppError::InvalidArgument(
                 "track codec is not analyzable by this build".into(),
             )),
-            AnalyzeOutcome::Failed => {
-                Err(AppError::Internal(format!("failed to analyze track {track_id}")))
-            }
+            AnalyzeOutcome::Failed => Err(AppError::Internal(format!(
+                "failed to analyze track {track_id}"
+            ))),
         }
     }
 
@@ -377,13 +395,22 @@ struct AnalyzeOne {
 
 impl AnalyzeOne {
     fn analyzed() -> Self {
-        Self { outcome: AnalyzeOutcome::Analyzed, loud_album: None }
+        Self {
+            outcome: AnalyzeOutcome::Analyzed,
+            loud_album: None,
+        }
     }
     fn unanalyzable() -> Self {
-        Self { outcome: AnalyzeOutcome::Unanalyzable, loud_album: None }
+        Self {
+            outcome: AnalyzeOutcome::Unanalyzable,
+            loud_album: None,
+        }
     }
     fn failed() -> Self {
-        Self { outcome: AnalyzeOutcome::Failed, loud_album: None }
+        Self {
+            outcome: AnalyzeOutcome::Failed,
+            loud_album: None,
+        }
     }
 }
 
@@ -406,10 +433,12 @@ async fn analyze_one(
     if !need_loud {
         // Embedding only — the extractor owns the decode (unchanged path).
         return match extractor.extract(&path).await {
-            Ok(embedding) => match upsert_embedding(features, track_id, embedding, model, sig, &path).await {
-                Ok(()) => AnalyzeOne::analyzed(),
-                Err(()) => AnalyzeOne::failed(),
-            },
+            Ok(embedding) => {
+                match upsert_embedding(features, track_id, embedding, model, sig, &path).await {
+                    Ok(()) => AnalyzeOne::analyzed(),
+                    Err(()) => AnalyzeOne::failed(),
+                }
+            }
             // The extractor maps "can't decode this codec" to InvalidArgument.
             Err(AppError::InvalidArgument(_)) => AnalyzeOne::unanalyzable(),
             Err(e) => {
@@ -453,8 +482,14 @@ async fn analyze_one(
         };
         match emb {
             Ok(embedding) => {
-                if upsert_embedding(features, track_id, embedding, model, sig, &path).await.is_err() {
-                    return AnalyzeOne { outcome: AnalyzeOutcome::Failed, loud_album };
+                if upsert_embedding(features, track_id, embedding, model, sig, &path)
+                    .await
+                    .is_err()
+                {
+                    return AnalyzeOne {
+                        outcome: AnalyzeOutcome::Failed,
+                        loud_album,
+                    };
                 }
             }
             // Embedding-specific "too short / no frames" — loudness may still be
@@ -462,12 +497,18 @@ async fn analyze_one(
             Err(AppError::InvalidArgument(_)) => {}
             Err(e) => {
                 tracing::debug!(%track_id, error = %e, "fingerprint: extract failed");
-                return AnalyzeOne { outcome: AnalyzeOutcome::Failed, loud_album };
+                return AnalyzeOne {
+                    outcome: AnalyzeOutcome::Failed,
+                    loud_album,
+                };
             }
         }
     }
 
-    AnalyzeOne { outcome: AnalyzeOutcome::Analyzed, loud_album }
+    AnalyzeOne {
+        outcome: AnalyzeOutcome::Analyzed,
+        loud_album,
+    }
 }
 
 /// Persist an embedding row. `Err(())` on a DB error (already logged).
@@ -523,9 +564,7 @@ fn compute_chromaprint(_path: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{
-        NewTrack, Track, TrackFeature, TrackFeatureStatus,
-    };
+    use crate::db::models::{NewTrack, Track, TrackFeature, TrackFeatureStatus};
     use crate::db::repo::TrackIdPath;
     use async_trait::async_trait;
     use std::path::Path;
@@ -593,7 +632,13 @@ mod tests {
             Ok(())
         }
         async fn get(&self, id: Uuid) -> Result<Option<TrackFeature>> {
-            Ok(self.rows.lock().unwrap().iter().find(|f| f.track_id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|f| f.track_id == id)
+                .cloned())
         }
         async fn all_for_model(&self, model: &str) -> Result<Vec<TrackFeature>> {
             Ok(self
@@ -684,7 +729,13 @@ mod tests {
             unreachable!()
         }
         async fn get(&self, id: Uuid) -> Result<Option<Track>> {
-            Ok(self.rows.lock().unwrap().iter().find(|t| t.id == id).cloned())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == id)
+                .cloned())
         }
         async fn list_by_album(&self, _: Uuid) -> Result<Vec<Track>> {
             Ok(vec![])
@@ -692,7 +743,14 @@ mod tests {
         async fn search(&self, _: &str, _: i64, _: i64) -> Result<Vec<Track>> {
             Ok(vec![])
         }
-        async fn update(&self, _: Uuid, _: &str, _: Option<i32>, _: Option<i32>, _: &str) -> Result<Option<Track>> {
+        async fn update(
+            &self,
+            _: Uuid,
+            _: &str,
+            _: Option<i32>,
+            _: Option<i32>,
+            _: &str,
+        ) -> Result<Option<Track>> {
             Ok(None)
         }
         async fn find_by_file_path(&self, _: &str) -> Result<Option<Track>> {

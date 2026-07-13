@@ -15,6 +15,7 @@ pub mod commands;
 pub mod db;
 pub mod download_session;
 pub mod downloads;
+pub mod equalizer;
 pub mod error;
 pub mod library;
 pub mod media_session;
@@ -37,10 +38,11 @@ pub const USER_AGENT: &str = concat!(
     " (https://github.com/niruhsa/octave)"
 );
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
@@ -53,7 +55,50 @@ use crate::auth::AuthManager;
 ///   has supplied a server URL via `auth_configure_server`.
 pub struct AppStateHandle {
     pub pool: SqlitePool,
-    pub auth: RwLock<Option<Arc<AuthManager>>>,
+    pub auth: Arc<RwLock<Option<Arc<AuthManager>>>>,
+}
+
+/// Coalesces Android `AudioDeviceCallback` bursts before re-running the native
+/// resolver. Desktop adapters perform the same settle check in their monitor.
+#[derive(Default)]
+pub struct EqualizerRouteDebouncer(AtomicU64);
+
+async fn apply_equalizer_outputs(app: tauri::AppHandle, outputs: Vec<equalizer::AudioOutput>) {
+    let service = app
+        .state::<Arc<equalizer::EqualizerService>>()
+        .inner()
+        .clone();
+    match service.update_outputs(outputs).await {
+        Ok(resolved) => {
+            let _ = app.emit("equalizer-effective-changed", resolved);
+        }
+        Err(error) => tracing::warn!(%error, "resolve changed audio output failed"),
+    }
+}
+
+/// Re-query the platform adapter and publish only the redacted resolved state.
+pub(crate) async fn refresh_equalizer_outputs(app: tauri::AppHandle) {
+    match equalizer::audio_output::query_outputs(app.clone()).await {
+        Ok(outputs) => apply_equalizer_outputs(app, outputs).await,
+        Err(error) => tracing::debug!(%error, "query changed audio output failed"),
+    }
+}
+
+/// Schedule the token-authenticated Android route hint after the documented
+/// 650 ms settle window. Each newer hint invalidates the prior timer.
+pub(crate) fn schedule_equalizer_output_refresh(app: tauri::AppHandle) {
+    let state = app.state::<EqualizerRouteDebouncer>();
+    let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(650)).await;
+        let current = app
+            .state::<EqualizerRouteDebouncer>()
+            .0
+            .load(Ordering::SeqCst);
+        if generation == current {
+            refresh_equalizer_outputs(app).await;
+        }
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -98,6 +143,10 @@ pub fn run() {
         // (fetch/delete the registration token); no-op on desktop. When FCM is
         // available it supersedes the WorkManager poll above.
         .plugin(push::init())
+        // Native output discovery for automatic equalizer profile selection.
+        // Android binds the Kotlin AudioManager bridge; desktop adapters use
+        // the platform audio APIs directly. Raw endpoint ids never cross IPC.
+        .plugin(equalizer::audio_output::init())
         // Phase 6 — Downloads: `cover://<album_id>` serves a downloaded
         // album cover from app-private storage to the webview's `<img>`.
         // (Playback no longer uses a custom protocol — see the loopback HTTP
@@ -113,10 +162,11 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(db::open(&db_path))
                 .map_err(|e| format!("open cache db at {}: {e:?}", db_path.display()))?;
 
-            app.manage(AppStateHandle {
-                pool,
-                auth: RwLock::new(None),
-            });
+            let auth = Arc::new(RwLock::new(None));
+            let equalizer = Arc::new(equalizer::EqualizerService::new(pool.clone(), auth.clone()));
+            app.manage(AppStateHandle { pool, auth });
+            app.manage(equalizer);
+            app.manage(EqualizerRouteDebouncer::default());
 
             // Pause/cancel control for the active upload job (one at a time).
             app.manage(commands::upload_commands::UploadControl::default());
@@ -162,6 +212,19 @@ pub fn run() {
                 token: token.to_string(),
             });
             tracing::info!(port, "media server listening on 127.0.0.1");
+
+            // Android sends only a generic, token-authenticated loopback hint;
+            // Rust re-queries the plugin so no endpoint id enters the URL or
+            // WebView. Desktop monitors deliver already-queried descriptors.
+            if let Err(error) = equalizer::audio_output::configure_callback(app.handle()) {
+                tracing::warn!(%error, "configure Android EQ route callback failed");
+            }
+            let monitor_app = app.handle().clone();
+            equalizer::audio_output::spawn_monitor(monitor_app, |app, outputs| async move {
+                apply_equalizer_outputs(app, outputs).await
+            });
+            #[cfg(target_os = "android")]
+            tauri::async_runtime::spawn(refresh_equalizer_outputs(app.handle().clone()));
 
             // Look-ahead prefetch cache: while a streamed track plays we fetch
             // the next one to a temp file so it can be served locally at the
@@ -223,6 +286,34 @@ pub fn run() {
             commands::auth_commands::auth_change_password,
             commands::auth_commands::auth_list_users,
             commands::auth_commands::auth_delete_user,
+            // synced parametric EQ + device-local output resolution
+            commands::equalizer_commands::equalizer_snapshot,
+            commands::equalizer_commands::equalizer_sync_now,
+            commands::equalizer_commands::equalizer_get_local_preferences,
+            commands::equalizer_commands::equalizer_set_local_preferences,
+            commands::equalizer_commands::equalizer_set_manual_override,
+            commands::equalizer_commands::equalizer_clear_manual_override,
+            commands::equalizer_commands::equalizer_create_profile,
+            commands::equalizer_commands::equalizer_update_profile,
+            commands::equalizer_commands::equalizer_delete_profile,
+            commands::equalizer_commands::equalizer_set_default,
+            commands::equalizer_commands::equalizer_create_device_rule,
+            commands::equalizer_commands::equalizer_update_device_rule,
+            commands::equalizer_commands::equalizer_delete_device_rule,
+            commands::equalizer_commands::equalizer_reorder_device_rules,
+            commands::equalizer_commands::equalizer_promote_local_profile,
+            commands::equalizer_commands::equalizer_attach_current_output,
+            commands::equalizer_commands::equalizer_detach_current_output,
+            commands::equalizer_commands::equalizer_audio_outputs,
+            commands::equalizer_commands::equalizer_current_output,
+            commands::equalizer_commands::equalizer_conflicts,
+            commands::equalizer_commands::equalizer_resolve_conflict,
+            commands::equalizer_commands::equalizer_parse_text,
+            commands::equalizer_commands::equalizer_import_file,
+            commands::equalizer_commands::equalizer_export_file,
+            commands::equalizer_commands::equalizer_list_changes,
+            commands::equalizer_commands::equalizer_get_change,
+            commands::equalizer_commands::equalizer_rollback_change,
             // library browse + search
             commands::library_commands::library_list_artists,
             commands::library_commands::library_search_artists,

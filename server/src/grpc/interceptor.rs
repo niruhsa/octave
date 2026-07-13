@@ -4,8 +4,8 @@
 use tonic::service::Interceptor;
 use tonic::{Request, Status};
 
-use crate::auth::service::{AuthService, Credential};
 use crate::auth::Identity;
+use crate::auth::service::{AuthService, Credential};
 use crate::error::AppError;
 
 #[derive(Clone)]

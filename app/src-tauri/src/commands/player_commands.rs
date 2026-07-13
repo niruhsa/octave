@@ -10,7 +10,9 @@ use tauri::Manager;
 
 use crate::error::AppResult;
 use crate::player::prefetch::PrefetchCache;
-use crate::player::server::{MediaServer, action_base_url, cover_url, episode_media_url, media_url};
+use crate::player::server::{
+    action_base_url, cover_url, episode_media_url, media_url, MediaServer,
+};
 
 /// Return the webview-loadable URL for a track (or podcast episode) id. It
 /// targets the in-app loopback HTTP server (see `player::server`), which streams
@@ -43,9 +45,7 @@ pub async fn player_cover_url(
 /// Base loopback URL the native media notification posts transport actions to.
 /// The frontend hands this to the native side (via `media_session_update`).
 #[tauri::command]
-pub async fn player_action_url_base(
-    media: tauri::State<'_, MediaServer>,
-) -> AppResult<String> {
+pub async fn player_action_url_base(media: tauri::State<'_, MediaServer>) -> AppResult<String> {
     Ok(action_base_url(media.port, &media.token))
 }
 

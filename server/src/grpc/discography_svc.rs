@@ -11,8 +11,8 @@ use crate::db::models::{DiscographyIgnore, DiscographyReport, PermissionLevel};
 use crate::grpc::auth_svc::map_err;
 use crate::grpc::interceptor::AuthInterceptor;
 use crate::grpc::proto::discography as pb;
-use crate::services::discography::{ArtistCandidate, IgnoreRequest, SyncOutcome};
 use crate::services::DiscographyService;
+use crate::services::discography::{ArtistCandidate, IgnoreRequest, SyncOutcome};
 use crate::time_fmt::rfc3339;
 
 #[derive(Clone)]
@@ -135,7 +135,11 @@ impl pb::discography_service_server::DiscographyService for DiscographyServer {
     ) -> Result<Response<pb::SyncResponse>, Status> {
         let caller = self.caller(&req).await?;
         let id = req_uuid(&req.into_inner().artist_id, "artist")?;
-        let out = self.svc()?.sync_artist(&caller, id).await.map_err(map_err)?;
+        let out = self
+            .svc()?
+            .sync_artist(&caller, id)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(match out {
             SyncOutcome::Report(r) => pb::SyncResponse {
                 status: "report".to_string(),
@@ -183,7 +187,11 @@ impl pb::discography_service_server::DiscographyService for DiscographyServer {
     ) -> Result<Response<pb::IgnoreList>, Status> {
         let caller = self.caller(&req).await?;
         let id = req_uuid(&req.into_inner().artist_id, "artist")?;
-        let ignores = self.svc()?.list_ignores(&caller, id).await.map_err(map_err)?;
+        let ignores = self
+            .svc()?
+            .list_ignores(&caller, id)
+            .await
+            .map_err(map_err)?;
         Ok(Response::new(pb::IgnoreList {
             ignores: ignores.into_iter().map(ignore_to_pb).collect(),
         }))

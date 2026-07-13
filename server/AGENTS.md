@@ -128,6 +128,26 @@ This file owns the **server's** status and detail. When server work changes beha
 Keep the **Status** section below in sync with the root docs.
 
 ## Status
+**Synced parametric equalizer (server).** The server is now the online authority
+for per-user equalizer profiles, defaults, and portable output rules; audio DSP
+and exact hardware bindings remain client-only. Migration
+[`20271201000000_equalizer.sql`](./migrations/20271201000000_equalizer.sql)
+adds owner-scoped profiles/bands/settings/rules with composite ownership FKs,
+strict version/range checks, normalized uniqueness, and monotonic aggregate
+revisions. [`EqualizerService`](./src/services/equalizer.rs) implements bounded
+validation, compare-and-swap/idempotent mutations, reference-safe delete and
+rule reorder, complete before/after audit snapshots, paginated history, and
+revision-safe rollback (including rollback-of-rollback). The
+`music.equalizer.v1` gRPC service and `/equalizer/...` REST tree are at parity;
+REST state reads additionally support private ETags/`If-None-Match`. Ordinary
+state is bearer-owned (`SECRET_KEY` cannot own it); Managers receive redacted
+history, while Admins and the administrative `SECRET_KEY` can inspect full
+detail and rollback. Focused server EQ tests pass (14/14); all-target check and
+clippy complete. The full suite passes 249 tests; its two remaining failures
+are the REST/gRPC TLS integration tests because
+`tests/fixtures/tls/{cert,key}.pem` is absent. Live Postgres
+transport/migration rehearsal remains part of deployment verification.
+
 **Album folder rename.** A manager can rename an album's on-disk folder to match
 its title (any album type — album/EP/single/live) or to a hand-entered name, with
 the track files physically moved and `file_path`s updated.

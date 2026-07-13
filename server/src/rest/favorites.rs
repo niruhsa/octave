@@ -130,42 +130,81 @@ fn track_dto(t: m::Track) -> FavTrackDto {
 // `Identity` is read via `Extension` (the auth middleware inserts it into the
 // request extensions), so these don't consume the whole `Request` body.
 
-async fn fav_track(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn fav_track(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     s.favorites.favorite(&c, FavoriteKind::Track, id).await?;
     Ok(Json(FavoriteStatusDto { favorited: true }))
 }
-async fn unfav_track(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn unfav_track(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     s.favorites.unfavorite(&c, FavoriteKind::Track, id).await?;
     Ok(Json(FavoriteStatusDto { favorited: false }))
 }
-async fn is_fav_track(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn is_fav_track(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     let favorited = s.favorites.is_favorite(&c, FavoriteKind::Track, id).await?;
     Ok(Json(FavoriteStatusDto { favorited }))
 }
 
-async fn fav_album(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn fav_album(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     s.favorites.favorite(&c, FavoriteKind::Album, id).await?;
     Ok(Json(FavoriteStatusDto { favorited: true }))
 }
-async fn unfav_album(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn unfav_album(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     s.favorites.unfavorite(&c, FavoriteKind::Album, id).await?;
     Ok(Json(FavoriteStatusDto { favorited: false }))
 }
-async fn is_fav_album(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn is_fav_album(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     let favorited = s.favorites.is_favorite(&c, FavoriteKind::Album, id).await?;
     Ok(Json(FavoriteStatusDto { favorited }))
 }
 
-async fn fav_artist(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn fav_artist(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     s.favorites.favorite(&c, FavoriteKind::Artist, id).await?;
     Ok(Json(FavoriteStatusDto { favorited: true }))
 }
-async fn unfav_artist(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
+async fn unfav_artist(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
     s.favorites.unfavorite(&c, FavoriteKind::Artist, id).await?;
     Ok(Json(FavoriteStatusDto { favorited: false }))
 }
-async fn is_fav_artist(State(s): State<RestState>, Extension(c): Extension<Identity>, Path(id): Path<Uuid>) -> Result<Json<FavoriteStatusDto>, ApiError> {
-    let favorited = s.favorites.is_favorite(&c, FavoriteKind::Artist, id).await?;
+async fn is_fav_artist(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<FavoriteStatusDto>, ApiError> {
+    let favorited = s
+        .favorites
+        .is_favorite(&c, FavoriteKind::Artist, id)
+        .await?;
     Ok(Json(FavoriteStatusDto { favorited }))
 }
 
@@ -175,7 +214,10 @@ async fn is_fav_artist(State(s): State<RestState>, Extension(c): Extension<Ident
 pub struct ListTracksDto {
     pub tracks: Vec<FavTrackDto>,
 }
-async fn list_tracks(State(s): State<RestState>, Extension(c): Extension<Identity>) -> Result<Json<ListTracksDto>, ApiError> {
+async fn list_tracks(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+) -> Result<Json<ListTracksDto>, ApiError> {
     let rows = s.favorites.list_tracks(&c).await?;
     Ok(Json(ListTracksDto {
         tracks: rows.into_iter().map(track_dto).collect(),
@@ -186,7 +228,10 @@ async fn list_tracks(State(s): State<RestState>, Extension(c): Extension<Identit
 pub struct ListAlbumsDto {
     pub albums: Vec<FavAlbumDto>,
 }
-async fn list_albums(State(s): State<RestState>, Extension(c): Extension<Identity>) -> Result<Json<ListAlbumsDto>, ApiError> {
+async fn list_albums(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+) -> Result<Json<ListAlbumsDto>, ApiError> {
     let rows = s.favorites.list_albums(&c).await?;
     Ok(Json(ListAlbumsDto {
         albums: rows.into_iter().map(album_dto).collect(),
@@ -197,7 +242,10 @@ async fn list_albums(State(s): State<RestState>, Extension(c): Extension<Identit
 pub struct ListArtistsDto {
     pub artists: Vec<FavArtistDto>,
 }
-async fn list_artists(State(s): State<RestState>, Extension(c): Extension<Identity>) -> Result<Json<ListArtistsDto>, ApiError> {
+async fn list_artists(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+) -> Result<Json<ListArtistsDto>, ApiError> {
     let rows = s.favorites.list_artists(&c).await?;
     Ok(Json(ListArtistsDto {
         artists: rows.into_iter().map(artist_dto).collect(),
@@ -208,7 +256,10 @@ async fn list_artists(State(s): State<RestState>, Extension(c): Extension<Identi
 pub struct ListTrackIdsDto {
     pub track_ids: Vec<String>,
 }
-async fn list_track_ids(State(s): State<RestState>, Extension(c): Extension<Identity>) -> Result<Json<ListTrackIdsDto>, ApiError> {
+async fn list_track_ids(
+    State(s): State<RestState>,
+    Extension(c): Extension<Identity>,
+) -> Result<Json<ListTrackIdsDto>, ApiError> {
     let ids = s.favorites.favorited_track_ids(&c).await?;
     Ok(Json(ListTrackIdsDto {
         track_ids: ids.into_iter().map(|i| i.to_string()).collect(),

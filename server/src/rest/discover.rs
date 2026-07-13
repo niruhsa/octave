@@ -136,10 +136,9 @@ pub struct RadioDto {
 
 fn parse_opt_uuid(s: Option<String>, what: &str) -> Result<Option<Uuid>, ApiError> {
     match s.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        Some(v) => Ok(Some(
-            Uuid::parse_str(v)
-                .map_err(|_| AppError::InvalidArgument(format!("invalid {what} id")))?,
-        )),
+        Some(v) => Ok(Some(Uuid::parse_str(v).map_err(|_| {
+            AppError::InvalidArgument(format!("invalid {what} id"))
+        })?)),
         None => Ok(None),
     }
 }
@@ -201,7 +200,10 @@ async fn recommendations(
             seeds.push(id);
         }
     }
-    let limit = body.limit.filter(|n| *n > 0).unwrap_or(PLAYLIST_REC_DEFAULT);
+    let limit = body
+        .limit
+        .filter(|n| *n > 0)
+        .unwrap_or(PLAYLIST_REC_DEFAULT);
     let tracks = s.discover.recommend_for_playlist(&c, &seeds, limit).await?;
     Ok(Json(RadioDto {
         tracks: tracks.into_iter().map(track_dto).collect(),

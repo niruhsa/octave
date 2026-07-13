@@ -78,9 +78,7 @@ fn validate_url(raw: &str) -> AppResult<String> {
         )));
     }
     if url.host_str().is_none() {
-        return Err(AppError::Internal(format!(
-            "URL '{raw}' is missing a host"
-        )));
+        return Err(AppError::Internal(format!("URL '{raw}' is missing a host")));
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
@@ -119,11 +117,7 @@ mod tests {
 
     #[test]
     fn accepts_explicit_pair() {
-        let cfg = ServerConfig::new(
-            "http://10.0.0.1:9000",
-            "http://10.0.0.1:9001",
-        )
-        .unwrap();
+        let cfg = ServerConfig::new("http://10.0.0.1:9000", "http://10.0.0.1:9001").unwrap();
         assert_eq!(cfg.rest_root(), "http://10.0.0.1:9000");
         assert_eq!(cfg.grpc_endpoint(), "http://10.0.0.1:9001");
         assert!(cfg.grpc_explicit, "a user-supplied gRPC URL is explicit");

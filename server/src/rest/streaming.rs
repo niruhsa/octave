@@ -128,7 +128,10 @@ pub(crate) async fn serve_resolved(
 
 fn base_headers(resolved: &ResolvedStream) -> HeaderMap {
     let mut h = HeaderMap::new();
-    h.insert(CONTENT_TYPE, HeaderValue::from_static(resolved.content_type));
+    h.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(resolved.content_type),
+    );
     h.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     if let Some(modified) = resolved.modified {
         if let Some(val) = http_date(modified) {
