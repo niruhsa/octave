@@ -705,10 +705,12 @@ impl EqualizerService {
         let support = repo::get_sync_state(&self.pool, &scope)
             .await?
             .support_state;
-        if support == SupportState::FutureFormat {
-            return self.snapshot().await;
-        }
-        if matches!(support, SupportState::Unknown | SupportState::Unsupported) {
+        // Future-format quarantine must be fail-closed, but it must not be an
+        // absorbing state. A previous client (or a transient REST decode
+        // failure) may have persisted the verdict; always give the current
+        // server/client pair a non-mutating state probe so an upgraded or
+        // repaired client can recover the account snapshot by itself.
+        if support_requires_probe(support) {
             match self.probe_support(&scope, &auth, &credential).await {
                 Ok(SupportState::Supported) => {}
                 Ok(_) | Err(AppError::Transport(_)) => return self.snapshot().await,
@@ -1154,6 +1156,13 @@ fn endpoint_unimplemented(error: &AppError) -> bool {
     matches!(error, AppError::Unsupported(message) if message.starts_with("endpoint_unimplemented:"))
 }
 
+fn support_requires_probe(support: SupportState) -> bool {
+    matches!(
+        support,
+        SupportState::Unknown | SupportState::Unsupported | SupportState::FutureFormat
+    )
+}
+
 fn state_is_supported_v1(state: &EqualizerState) -> bool {
     state.state_format_version == EQ_STATE_FORMAT_VERSION
         && state
@@ -1457,6 +1466,14 @@ mod tests {
             promotion_profile_id("server:b:user:1", "local-profile")
         );
         assert!(uuid::Uuid::parse_str(&first).is_ok());
+    }
+
+    #[test]
+    fn future_format_quarantine_is_reprobed() {
+        assert!(!support_requires_probe(SupportState::Supported));
+        assert!(support_requires_probe(SupportState::Unknown));
+        assert!(support_requires_probe(SupportState::Unsupported));
+        assert!(support_requires_probe(SupportState::FutureFormat));
     }
 
     #[tokio::test]

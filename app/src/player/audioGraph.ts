@@ -8,7 +8,12 @@
 // ReplayGain semantics. One post-mix EQ corrects the selected output equally
 // for both sides of a crossfade. Flat is a unity bank, never graph destruction.
 
-import { buildFrequencyGrid, dbToLinear, EQ_HEADROOM_MARGIN_DB } from "../equalizer/dsp";
+import {
+  buildFrequencyGrid,
+  dbToLinear,
+  EQ_HEADROOM_MARGIN_DB,
+  equalizerProfileAudioSignature,
+} from "../equalizer/dsp";
 import {
   cloneEqualizerProfile,
   EQ_FORMAT_VERSION,
@@ -70,6 +75,7 @@ let attachedCount = 0;
 let attachmentFailed = false;
 
 let desiredEqualizer: EqualizerRequest = { profile: null, bypassed: true };
+let desiredEqualizerSignature = "flat";
 let activeBank: EqualizerBank | null = null;
 let transition: BankTransition | null = null;
 let pendingEqualizer: EqualizerRequest | null = null;
@@ -140,11 +146,16 @@ function flatBank(
   c: AudioContext,
   request: EqualizerRequest,
   warning: string | null = null,
+  initialOutputGain = 1,
 ): EqualizerBank {
   if (!mix || !master) throw new Error("audio graph not initialized");
   const input = c.createGain();
   const output = c.createGain();
   input.gain.value = 1;
+  // A standby branch must be silent before it is connected. In particular,
+  // WebKit may render between graph mutations; connecting at the GainNode's
+  // default value (1) and muting it afterward can leak one full-scale quantum.
+  output.gain.value = initialOutputGain;
   input.connect(output);
   mix.connect(input);
   output.connect(master);
@@ -168,11 +179,20 @@ function flatBank(
 }
 
 /** Build a complete connected bank. The caller owns its output envelope. */
-function buildBank(c: AudioContext, request: EqualizerRequest): EqualizerBank {
+function buildBank(
+  c: AudioContext,
+  request: EqualizerRequest,
+  initialOutputGain = 1,
+): EqualizerBank {
   const profile = request.profile;
-  if (request.bypassed || !profile) return flatBank(c, request);
+  if (request.bypassed || !profile) return flatBank(c, request, null, initialOutputGain);
   if (!isSupportedProfile(profile)) {
-    return flatBank(c, request, "This profile format is unsupported or invalid; playing Flat.");
+    return flatBank(
+      c,
+      request,
+      "This profile format is unsupported or invalid; playing Flat.",
+      initialOutputGain,
+    );
   }
 
   const incompatible = profile.bands.find(
@@ -183,12 +203,15 @@ function buildBank(c: AudioContext, request: EqualizerRequest): EqualizerBank {
       c,
       request,
       `Band ${incompatible.position} (${incompatible.frequency_hz} Hz) is at or above this output's Nyquist limit; playing Flat.`,
+      initialOutputGain,
     );
   }
   if (!mix || !master) throw new Error("audio graph not initialized");
 
   const input = c.createGain();
   const output = c.createGain();
+  // Set before connecting for the same render-quantum safety as flatBank.
+  output.gain.value = initialOutputGain;
   const filters = profile.bands
     .filter((band) => band.enabled)
     .map((band) => {
@@ -339,19 +362,25 @@ function switchBank(request: EqualizerRequest): void {
     return;
   }
 
-  const next = buildBank(c, request);
+  const next = buildBank(c, request, 0);
   const now = c.currentTime;
+  const midpoint = now + EQ_SWITCH_SECONDS / 2;
   const endTime = now + EQ_SWITCH_SECONDS;
+  next.output.gain.cancelScheduledValues(now);
   next.output.gain.setValueAtTime(0, now);
+  next.output.gain.setValueAtTime(0, midpoint);
   next.output.gain.linearRampToValueAtTime(1, endTime);
   activeBank.output.gain.cancelScheduledValues(now);
   activeBank.output.gain.setValueAtTime(1, now);
-  activeBank.output.gain.linearRampToValueAtTime(0, endTime);
+  activeBank.output.gain.linearRampToValueAtTime(0, midpoint);
+  activeBank.output.gain.setValueAtTime(0, endTime);
   transitionToken += 1;
   const token = transitionToken;
   transition = { token, old: activeBank, next, endTime };
-  // Linear complementary ramps: the two branches carry correlated copies, so
-  // equal-power ramps would create a +3 dB midpoint.
+  // Fade out, then fade in. Different IIR banks do not have complementary
+  // phase, so overlapping them can comb-filter or spike even when their gain
+  // envelopes add to one. The short zero crossing is click-free and avoids
+  // summing two differently filtered copies on WebKit/macOS.
   window.setTimeout(() => finishTransition(token), EQ_SWITCH_SECONDS * 1000 + 12);
 }
 
@@ -461,10 +490,19 @@ export function setEqualizerProfile(
   profile: EqualizerProfile | null,
   options: { bypassed?: boolean } = {},
 ): void {
-  desiredEqualizer = {
+  const next = {
     profile: profile ? cloneEqualizerProfile(profile) : null,
     bypassed: options.bypassed ?? profile == null,
   };
+  const signature = equalizerProfileAudioSignature(next.profile, next.bypassed);
+  // Snapshot polling returns fresh objects. Do not turn an identical profile
+  // into a recurring live-bank transition every time account state refreshes.
+  if (signature === desiredEqualizerSignature) {
+    desiredEqualizer = next;
+    return;
+  }
+  desiredEqualizer = next;
+  desiredEqualizerSignature = signature;
   if (!ctx || attachedCount < 2) {
     publishDiagnostics(pendingDiagnostics(desiredEqualizer));
     return;

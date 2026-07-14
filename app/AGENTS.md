@@ -107,7 +107,11 @@ dependency-group conflicts. Revisions serialize as decimal strings end to end.
   `AuthManager`; old servers downgrade explicitly to the local-only layer and
   collision-safely preserve the last complete synced snapshot and exact-binding
   references there. Newer unsupported formats are quarantined read-only and
-  play Flat rather than being installed, mutated, or replayed.
+  play Flat rather than being installed, mutated, or replayed. Quarantine is
+  fail-closed but recoverable: each sync re-probes the state endpoint, and
+  account startup reconciles EQ independently of the broader library sync, so
+  a current Android client can clear a stale verdict and restore its account
+  profiles without an app-data reset.
   Replay is FIFO (replay before pull), compare-and-swap conflicts are isolated
   with dependent operations, and mirror replacement + acknowledgement + tail
   rebase commit atomically.
@@ -125,10 +129,13 @@ dependency-group conflicts. Revisions serialize as decimal strings end to end.
   resolved profile in the existing Web Audio graph without changing playback
   rate or the media transport path.
 - The playback graph mixes both gapless/crossfade decks before one dual-bank
-  peaking-filter cascade. Complete banks switch with a 40 ms complementary
-  ramp, rapid requests coalesce latest-wins, actual Web Audio response data and
-  sample rate drive optional steady-state auto headroom, and invalid/future or
-  above-Nyquist profiles fail closed to Flat. Settings provides 1–32-band
+  peaking-filter cascade. Identical refreshed snapshots are audio-signature
+  deduplicated; real changes connect the standby bank muted and use a 40 ms
+  fade-out/fade-in zero crossing so differently phased IIR banks never overlap
+  or leak a full-scale WebKit render quantum. Rapid requests coalesce latest-wins,
+  actual Web Audio response data and sample rate drive optional steady-state
+  auto headroom, and invalid/future or above-Nyquist profiles fail closed to Flat.
+  Settings provides 1–32-band
   editing, live A/B preview, response curve, local master/automation gates,
   output-rule ordering, conflict state, native import/export, and audit UI.
 - Platform support: Windows uses Core Audio endpoint/default callbacks with a
@@ -137,13 +144,15 @@ dependency-group conflicts. Revisions serialize as decimal strings end to end.
   uses `AudioDeviceCallback` plus API 33+ media-route prediction, reports older
   ambiguous routes as connected-only, and keeps route IDs session-only. No new
   Android permission is required.
-- Verification: frontend Vitest **14 passed**, production `npm run build`
-  passed, the full native Rust suite **111 passed**, and all-target Rust check
-  and clippy completed (repository baseline warnings remain). Android's arm64
-  Rust target check and `:app:compileArmDebugKotlin --offline` passed with the
-  installed NDK/JBR. The macOS adapter could not be compiled on this Windows
-  host because the Apple target/SDK is unavailable. Remaining manual coverage
-  is live bearer sync/conflict/rollback against Postgres and physical Windows,
+- Verification: frontend Vitest **15 passed**, production `npm run build`
+  passed, the full native Rust suite **112 passed**, and all-target Rust check
+  and clippy completed (repository baseline warnings remain). The Android Rust
+  targets are installed, but this Windows workspace currently lacks the
+  SDK/NDK compiler (`aarch64-linux-android-clang`), so this follow-up could not
+  repeat the prior arm64/Kotlin checks. The macOS adapter could not be compiled
+  on this Windows host because the Apple target/SDK is unavailable. Remaining
+  manual coverage is live bearer sync/conflict/rollback against Postgres and
+  physical Windows,
   macOS, and Android route/audio-transition testing.
 
 **Album folder rename (client).** The Album route gains a Manager+ "Folder on disk"

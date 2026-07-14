@@ -21,6 +21,35 @@ export const dbToLinear = (db: number): number => 10 ** (db / 20);
 export const linearToDb = (linear: number): number =>
   linear > 0 ? 20 * Math.log10(linear) : Number.NEGATIVE_INFINITY;
 
+/**
+ * Stable identity for the values that can change audible EQ output.
+ *
+ * Native snapshots are refreshed regularly and therefore arrive as new
+ * objects even when the selected profile has not changed. Keeping transport
+ * metadata out of this signature prevents those refreshes from rebuilding a
+ * live Web Audio filter bank (and producing a needless transition).
+ */
+export function equalizerProfileAudioSignature(
+  profile: EqualizerProfile | null,
+  bypassed: boolean,
+): string {
+  if (bypassed || profile == null) return "flat";
+  return JSON.stringify([
+    profile.id,
+    profile.format_version,
+    profile.preamp_db,
+    profile.auto_headroom_enabled,
+    profile.bands.map((band) => [
+      band.position,
+      band.enabled,
+      band.filter_kind,
+      band.frequency_hz,
+      band.gain_db,
+      band.q,
+    ]),
+  ]);
+}
+
 function uniqueSorted(values: number[]): number[] {
   values.sort((a, b) => a - b);
   const result: number[] = [];
@@ -141,4 +170,3 @@ export function calculateEqualizerResponse(
     incompatibleBandPosition: null,
   };
 }
-

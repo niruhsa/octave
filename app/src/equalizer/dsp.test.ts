@@ -3,6 +3,7 @@ import {
   calculateEqualizerResponse,
   dbToLinear,
   EQ_HEADROOM_MARGIN_DB,
+  equalizerProfileAudioSignature,
   peakingMagnitude,
 } from "./dsp";
 import type { EqualizerBand, EqualizerProfile } from "./types";
@@ -33,6 +34,36 @@ const profile = (
 });
 
 describe("parametric EQ response model", () => {
+  it("deduplicates refreshed snapshots by audible profile values", () => {
+    const now = new Date().toISOString();
+    const original: EqualizerProfile = {
+      id: "profile-1",
+      name: "Headphones",
+      format_version: 1,
+      preamp_db: -2,
+      auto_headroom_enabled: true,
+      bands: [band(1, 1_000, 3, 1.2)],
+      revision: "4",
+      created_at: now,
+      updated_at: now,
+      source: "synced",
+    };
+    const refreshed = {
+      ...original,
+      bands: original.bands.map((value) => ({ ...value })),
+      source: undefined,
+      unsynced: false,
+    };
+    expect(equalizerProfileAudioSignature(original, false)).toBe(
+      equalizerProfileAudioSignature(refreshed, false),
+    );
+    refreshed.bands[0].gain_db = 4;
+    expect(equalizerProfileAudioSignature(original, false)).not.toBe(
+      equalizerProfileAudioSignature(refreshed, false),
+    );
+    expect(equalizerProfileAudioSignature(original, true)).toBe("flat");
+  });
+
   it("keeps a flat cascade at exact unity with zero safety trim", () => {
     const response = calculateEqualizerResponse(
       profile([band(1, 100, 0), band(2, 1_000, 0), band(3, 10_000, 0)]),

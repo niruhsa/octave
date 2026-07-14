@@ -213,7 +213,7 @@ export function EqualizerSettings() {
     return (
       <div className="flex flex-col gap-3">
         <div className={errorBox}>{error ?? "Equalizer service is not available in this build."}</div>
-        <button type="button" className={btnGhostSm} onClick={() => void load()}>Retry</button>
+        <button type="button" className={btnGhostSm} onClick={() => void load(true)}>Retry</button>
       </div>
     );
   }

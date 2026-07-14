@@ -17,6 +17,7 @@ import {
   equalizerSetLocalPreferences,
   equalizerSetManualOverride,
   equalizerSnapshot,
+  equalizerSyncNow,
   equalizerUpdateDeviceRule,
   equalizerUpdateProfile,
 } from "../ipc";
@@ -115,7 +116,7 @@ type EqualizerStore = {
   previewImmediateToken: number;
   previewStoppedMessage: string | null;
 
-  load: () => Promise<void>;
+  load: (refreshServer?: boolean) => Promise<void>;
   refreshOutputs: () => Promise<void>;
   acceptResolvedEvent: (resolved: ResolvedEqualizer) => void;
   setGraph: (graph: EqualizerGraphDiagnostics) => void;
@@ -156,6 +157,16 @@ async function refreshedSnapshot(): Promise<EqualizerSnapshot> {
   return equalizerSnapshot();
 }
 
+async function synchronizedSnapshot(): Promise<EqualizerSnapshot> {
+  try {
+    return await equalizerSyncNow();
+  } catch {
+    // Account startup must remain offline-first. A failed server reconcile
+    // must not hide the last complete mirror or the device-local EQ layer.
+    return refreshedSnapshot();
+  }
+}
+
 let scopeLoadGeneration = 0;
 
 export const useEqualizerStore = create<EqualizerStore>((set, get) => ({
@@ -174,14 +185,14 @@ export const useEqualizerStore = create<EqualizerStore>((set, get) => ({
   previewImmediateToken: 0,
   previewStoppedMessage: null,
 
-  load: async () => {
+  load: async (refreshServer = false) => {
     const generation = ++scopeLoadGeneration;
     set({ loading: true, error: null });
     try {
-      const [snapshot, conflicts] = await Promise.all([
-        refreshedSnapshot(),
-        equalizerConflicts(),
-      ]);
+      const snapshot = refreshServer ? await synchronizedSnapshot() : await refreshedSnapshot();
+      // Read conflicts after reconciliation: sync can move a dependency group
+      // into or out of this table, so a parallel read could install a stale UI.
+      const conflicts = await equalizerConflicts();
       if (generation !== scopeLoadGeneration) return;
       const topLevelSupported =
         snapshot.support_state !== "future_format" &&

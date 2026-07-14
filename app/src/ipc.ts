@@ -1326,6 +1326,10 @@ export async function onMediaSessionAction(
 export const equalizerSnapshot = () =>
   invoke<EqualizerSnapshot>("equalizer_snapshot");
 
+/** Reconcile the EQ independently from the broader library/playlist sync. */
+export const equalizerSyncNow = () =>
+  invoke<EqualizerSnapshot>("equalizer_sync_now");
+
 export const equalizerCreateProfile = (profile: EqualizerProfileInput) =>
   invoke<EqualizerMutationResponse>("equalizer_create_profile", { profile });
 

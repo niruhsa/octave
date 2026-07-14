@@ -51,7 +51,11 @@ export function useEqualizerRuntime(): void {
   const scopeKey = `${session?.kind ?? "none"}:${session?.user_id ?? "none"}`;
   useEffect(() => {
     audioGraph.setEqualizerProfile(null, { bypassed: true });
-    void load();
+    // EQ reconciliation is intentionally independent from the broader sync:
+    // a library/playlist failure must not hide this account's profiles. The
+    // native probe also lets a current client recover a stale future-format
+    // quarantine left by an older build.
+    void load(true);
   }, [load, scopeKey]);
 
   useEffect(() => {

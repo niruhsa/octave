@@ -316,11 +316,11 @@ function ServerSession() {
         setSession(null);
         navigate("/login");
       }
-      await equalizer.load();
+      await equalizer.load(true);
     } catch (caught) {
       setErr(formatError(caught));
       // Re-read whichever native scope ultimately remained configured.
-      void equalizer.load();
+      void equalizer.load(true);
     } finally {
       setBusy(false);
     }
