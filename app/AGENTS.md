@@ -132,8 +132,9 @@ for the version-2 rule tone fields. Revisions serialize as decimal strings end t
   rate or the media transport path.
 - The playback graph mixes both gapless/crossfade decks before one dual-bank
   filter cascade. Portable rules add 0–100% bass/treble dials on desktop and
-  mobile, resolved natively and rendered as bounded 120 Hz low-shelf / 8 kHz
-  high-shelf gain with mandatory modeled headroom. Identical refreshed snapshots are audio-signature
+  mobile, with click-to-type readouts on desktop and press-and-hold numeric
+  entry on mobile. They are resolved natively and rendered as bounded 120 Hz
+  low-shelf / 8 kHz high-shelf gain with mandatory modeled headroom. Identical refreshed snapshots are audio-signature
   deduplicated; real changes connect the standby bank muted and use a 40 ms
   fade-out/fade-in zero crossing so differently phased IIR banks never overlap
   or leak a full-scale WebKit render quantum. Rapid requests coalesce latest-wins,

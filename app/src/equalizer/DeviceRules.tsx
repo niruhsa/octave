@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { btnDangerSm, btnGhostSm, btnPrimary, card, input, label } from "../lib/ui";
 import { TrashIcon } from "../components/icons";
 import {
@@ -26,6 +26,172 @@ const accuracyLabel: Record<EqualizerOutputSummary["accuracy"], string> = {
 const normalizeMatcherPreview = (value: string) =>
   value.normalize("NFKC").toLocaleLowerCase("en-US").trim().replace(/\s+/gu, " ");
 
+const clampTonePercent = (value: number) =>
+  Math.round(Math.min(100, Math.max(0, value)));
+
+function ToneValueField({
+  label: fieldLabel,
+  value,
+  disabled,
+  onCommit,
+}: {
+  label: "Bass" | "Treble";
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const holdTimerRef = useRef<number | null>(null);
+  const holdReadyRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  const cancelBlurRef = useRef(false);
+  const pointerStartRef = useRef({ x: 0, y: 0 });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+
+  const clearHold = () => {
+    if (holdTimerRef.current != null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => clearHold, []);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  const beginEditing = () => {
+    if (disabled || editing) return;
+    const field = inputRef.current;
+    setDraft(String(value));
+    setEditing(true);
+    if (field) {
+      // Keep this synchronous with click/pointer-up so mobile WebViews open the keyboard.
+      field.readOnly = false;
+      field.inputMode = "numeric";
+      field.focus();
+      field.select();
+    }
+  };
+
+  const commitDraft = () => {
+    if (!editing) return;
+    const parsed = draft.trim() === "" ? value : Number(draft);
+    const nextValue = clampTonePercent(Number.isFinite(parsed) ? parsed : value);
+    setDraft(String(nextValue));
+    setEditing(false);
+    onCommit(nextValue);
+  };
+
+  const cancelEditing = () => {
+    cancelBlurRef.current = true;
+    setDraft(String(value));
+    setEditing(false);
+    inputRef.current?.blur();
+  };
+
+  return (
+    <span
+      className={`flex h-6 items-center rounded border px-1 font-mono text-[11px] transition-colors ${
+        editing
+          ? "border-oct-accent/70 bg-oct-bg text-oct-text"
+          : "border-transparent text-oct-text hover:border-oct-border"
+      }`}
+      title="Click to type on desktop; press and hold to type on mobile"
+    >
+      <span aria-hidden="true">+</span>
+      <input
+        ref={inputRef}
+        type="number"
+        inputMode={editing ? "numeric" : "none"}
+        pattern="[0-9]*"
+        min={0}
+        max={100}
+        step={1}
+        value={editing ? draft : value}
+        readOnly={!editing}
+        disabled={disabled}
+        aria-label={`${fieldLabel} extra percentage. Click to type on desktop or press and hold on mobile.`}
+        className="w-7 appearance-none bg-transparent p-0 text-right font-mono text-[11px] text-oct-text outline-none disabled:cursor-not-allowed [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        onChange={(event) => setDraft(event.target.value)}
+        onPointerDown={(event) => {
+          if (editing || (event.pointerType !== "touch" && event.pointerType !== "pen")) return;
+          event.preventDefault();
+          suppressClickRef.current = true;
+          holdReadyRef.current = false;
+          pointerStartRef.current = { x: event.clientX, y: event.clientY };
+          clearHold();
+          holdTimerRef.current = window.setTimeout(() => {
+            holdReadyRef.current = true;
+            holdTimerRef.current = null;
+          }, 550);
+        }}
+        onPointerMove={(event) => {
+          if (editing || (event.pointerType !== "touch" && event.pointerType !== "pen")) return;
+          const moved =
+            Math.hypot(
+              event.clientX - pointerStartRef.current.x,
+              event.clientY - pointerStartRef.current.y,
+            ) > 10;
+          if (moved) {
+            holdReadyRef.current = false;
+            clearHold();
+          }
+        }}
+        onPointerUp={(event) => {
+          if (editing || (event.pointerType !== "touch" && event.pointerType !== "pen")) return;
+          event.preventDefault();
+          clearHold();
+          if (holdReadyRef.current) beginEditing();
+          holdReadyRef.current = false;
+          window.setTimeout(() => {
+            // A cancelled compatibility click must not suppress a later mouse click.
+            suppressClickRef.current = false;
+          }, 0);
+        }}
+        onPointerCancel={() => {
+          suppressClickRef.current = false;
+          holdReadyRef.current = false;
+          clearHold();
+        }}
+        onClick={(event) => {
+          if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            event.preventDefault();
+            return;
+          }
+          beginEditing();
+        }}
+        onContextMenu={(event) => event.preventDefault()}
+        onBlur={() => {
+          if (cancelBlurRef.current) {
+            cancelBlurRef.current = false;
+            return;
+          }
+          commitDraft();
+        }}
+        onKeyDown={(event) => {
+          if (!editing && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            beginEditing();
+          } else if (editing && event.key === "Enter") {
+            event.preventDefault();
+            inputRef.current?.blur();
+          } else if (editing && event.key === "Escape") {
+            event.preventDefault();
+            cancelEditing();
+          }
+        }}
+      />
+      <span aria-hidden="true">%</span>
+    </span>
+  );
+}
+
 function ToneDial({
   label: dialLabel,
   value,
@@ -37,11 +203,11 @@ function ToneDial({
   value: number;
   disabled: boolean;
   onChange: (value: number) => void;
-  onCommit: () => void;
+  onCommit: (value: number) => void;
 }) {
   const angle = -135 + value * 2.7;
   return (
-    <label className={`flex flex-col items-center gap-1 ${disabled ? "opacity-50" : ""}`}>
+    <div className={`flex flex-col items-center gap-1 ${disabled ? "opacity-50" : ""}`}>
       <span className="text-[10px] font-medium uppercase tracking-wide text-oct-faint">
         {dialLabel}
       </span>
@@ -91,12 +257,20 @@ function ToneDial({
           aria-valuetext={`${value}% extra`}
           className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
           onChange={(event) => onChange(Number(event.target.value))}
-          onPointerUp={onCommit}
-          onKeyUp={onCommit}
+          onPointerUp={(event) => onCommit(Number(event.currentTarget.value))}
+          onKeyUp={(event) => onCommit(Number(event.currentTarget.value))}
         />
       </span>
-      <span className="font-mono text-[11px] text-oct-text">+{value}%</span>
-    </label>
+      <ToneValueField
+        label={dialLabel}
+        value={value}
+        disabled={disabled}
+        onCommit={(nextValue) => {
+          onChange(nextValue);
+          onCommit(nextValue);
+        }}
+      />
+    </div>
   );
 }
 
@@ -116,20 +290,35 @@ function RuleToneControls({
     setTreble(rule.treble_boost_percent);
   }, [rule.bass_boost_percent, rule.treble_boost_percent]);
 
-  const save = () => {
-    if (bass === rule.bass_boost_percent && treble === rule.treble_boost_percent) return;
-    onCommit({ ...rule, bass_boost_percent: bass, treble_boost_percent: treble });
+  const save = (nextBass: number, nextTreble: number) => {
+    if (
+      nextBass === rule.bass_boost_percent &&
+      nextTreble === rule.treble_boost_percent
+    ) {
+      return;
+    }
+    onCommit({
+      ...rule,
+      bass_boost_percent: nextBass,
+      treble_boost_percent: nextTreble,
+    });
   };
 
   return (
     <div className="flex shrink-0 items-center justify-center gap-5 self-center sm:gap-4">
-      <ToneDial label="Bass" value={bass} disabled={disabled} onChange={setBass} onCommit={save} />
+      <ToneDial
+        label="Bass"
+        value={bass}
+        disabled={disabled}
+        onChange={setBass}
+        onCommit={(nextBass) => save(nextBass, treble)}
+      />
       <ToneDial
         label="Treble"
         value={treble}
         disabled={disabled}
         onChange={setTreble}
-        onCommit={save}
+        onCommit={(nextTreble) => save(bass, nextTreble)}
       />
     </div>
   );
