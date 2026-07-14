@@ -21,7 +21,7 @@ use super::models::*;
 use super::pg::PgRepos;
 use super::repo::EqualizerRepo;
 
-const STATE_FORMAT_VERSION: i32 = 1;
+const STATE_FORMAT_VERSION: i32 = 2;
 const SNAPSHOT_FORMAT_VERSION: i32 = 1;
 const MAX_PROFILES: usize = 64;
 const MAX_RULES: usize = 64;
@@ -65,6 +65,8 @@ struct RuleRow {
     selector_json: String,
     priority: i32,
     enabled: bool,
+    bass_boost_percent: i32,
+    treble_boost_percent: i32,
     revision: i64,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
@@ -203,7 +205,8 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>, owner_id: Uuid) -> Resul
 
     let rule_rows = sqlx::query_as::<_, RuleRow>(
         r#"SELECT id, profile_id, action, label, selector_json, priority,
-                  enabled, revision, created_at, updated_at
+                  enabled, bass_boost_percent, treble_boost_percent,
+                  revision, created_at, updated_at
            FROM equalizer_device_rules
            WHERE owner_id = $1
            ORDER BY priority DESC, id"#,
@@ -232,6 +235,8 @@ async fn load_state(tx: &mut Transaction<'_, Postgres>, owner_id: Uuid) -> Resul
             selectors,
             priority: r.priority,
             enabled: r.enabled,
+            bass_boost_percent: r.bass_boost_percent,
+            treble_boost_percent: r.treble_boost_percent,
             revision: r.revision,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -367,6 +372,8 @@ fn rule_matches_draft(r: &EqualizerDeviceRule, d: &EqualizerDeviceRuleDraft) -> 
         && r.action == d.action
         && r.selectors == d.selectors
         && r.enabled == d.enabled
+        && r.bass_boost_percent == d.bass_boost_percent
+        && r.treble_boost_percent == d.treble_boost_percent
 }
 
 fn ensure_profile_name_available(
@@ -810,8 +817,9 @@ impl EqualizerRepo for PgRepos {
         sqlx::query(
             r#"INSERT INTO equalizer_device_rules
                  (id, owner_id, profile_id, action, label, selector_json,
-                  selector_hash, priority, enabled)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+                  selector_hash, priority, enabled, bass_boost_percent,
+                  treble_boost_percent)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
         )
         .bind(rule.id)
         .bind(owner_id)
@@ -822,6 +830,8 @@ impl EqualizerRepo for PgRepos {
         .bind(&rule.selector_hash)
         .bind(priority)
         .bind(rule.enabled)
+        .bind(rule.bass_boost_percent)
+        .bind(rule.treble_boost_percent)
         .execute(&mut *tx)
         .await
         .map_err(rule_insert_error)?;
@@ -869,7 +879,8 @@ impl EqualizerRepo for PgRepos {
         sqlx::query(
             r#"UPDATE equalizer_device_rules
                SET profile_id = $3, action = $4, label = $5, selector_json = $6,
-                   selector_hash = $7, enabled = $8,
+                   selector_hash = $7, enabled = $8, bass_boost_percent = $9,
+                   treble_boost_percent = $10,
                    revision = revision + 1, updated_at = now()
                WHERE owner_id = $1 AND id = $2"#,
         )
@@ -881,6 +892,8 @@ impl EqualizerRepo for PgRepos {
         .bind(&rule.selector_json)
         .bind(&rule.selector_hash)
         .bind(rule.enabled)
+        .bind(rule.bass_boost_percent)
+        .bind(rule.treble_boost_percent)
         .execute(&mut *tx)
         .await
         .map_err(rule_insert_error)?;
@@ -1234,8 +1247,9 @@ async fn restore_state(
         sqlx::query(
             r#"INSERT INTO equalizer_device_rules
                  (id, owner_id, profile_id, action, label, selector_json,
-                  selector_hash, priority, enabled, revision, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
+                  selector_hash, priority, enabled, bass_boost_percent,
+                  treble_boost_percent, revision, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
         )
         .bind(rule.id)
         .bind(owner_id)
@@ -1246,6 +1260,8 @@ async fn restore_state(
         .bind(selector_hash)
         .bind(rule.priority)
         .bind(rule.enabled)
+        .bind(rule.bass_boost_percent)
+        .bind(rule.treble_boost_percent)
         .bind(rule.revision)
         .bind(rule.created_at)
         .bind(rule.updated_at)

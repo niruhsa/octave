@@ -336,6 +336,8 @@ fn rule_input(value: pb::EqualizerDeviceRuleInput) -> Result<EqualizerDeviceRule
             })
             .collect(),
         enabled: value.enabled,
+        bass_boost_percent: i32::try_from(value.bass_boost_percent).unwrap_or(i32::MAX),
+        treble_boost_percent: i32::try_from(value.treble_boost_percent).unwrap_or(i32::MAX),
     })
 }
 
@@ -429,6 +431,8 @@ fn rule_to_pb(value: m::EqualizerDeviceRule) -> pb::EqualizerDeviceRule {
         revision: value.revision,
         created_at: rfc3339(value.created_at),
         updated_at: rfc3339(value.updated_at),
+        bass_boost_percent: value.bass_boost_percent as u32,
+        treble_boost_percent: value.treble_boost_percent as u32,
     }
 }
 

@@ -101,7 +101,9 @@ exact-output settings. The native core under
 resolution precedence, Equalizer APO text import/export, and SQLite migration
 [`0010_equalizer.sql`](./src-tauri/migrations/0010_equalizer.sql) for clean
 server mirrors, local profiles/rules/preferences, per-account FIFO outbox, and
-dependency-group conflicts. Revisions serialize as decimal strings end to end.
+dependency-group conflicts, plus
+[`0011_equalizer_rule_tone.sql`](./src-tauri/migrations/0011_equalizer_rule_tone.sql)
+for the version-2 rule tone fields. Revisions serialize as decimal strings end to end.
 - Server access is gRPC-primary/REST-fallback at parity through
   `equalizer.proto`, `GrpcClient`, `RestClient`, `ServerClient`, and
   `AuthManager`; old servers downgrade explicitly to the local-only layer and
@@ -129,7 +131,9 @@ dependency-group conflicts. Revisions serialize as decimal strings end to end.
   resolved profile in the existing Web Audio graph without changing playback
   rate or the media transport path.
 - The playback graph mixes both gapless/crossfade decks before one dual-bank
-  peaking-filter cascade. Identical refreshed snapshots are audio-signature
+  filter cascade. Portable rules add 0–100% bass/treble dials on desktop and
+  mobile, resolved natively and rendered as bounded 120 Hz low-shelf / 8 kHz
+  high-shelf gain with mandatory modeled headroom. Identical refreshed snapshots are audio-signature
   deduplicated; real changes connect the standby bank muted and use a 40 ms
   fade-out/fade-in zero crossing so differently phased IIR banks never overlap
   or leak a full-scale WebKit render quantum. Rapid requests coalesce latest-wins,
@@ -137,16 +141,20 @@ dependency-group conflicts. Revisions serialize as decimal strings end to end.
   auto headroom, and invalid/future or above-Nyquist profiles fail closed to Flat.
   Settings provides 1–32-band
   editing, live A/B preview, response curve, local master/automation gates,
-  output-rule ordering, conflict state, native import/export, and audit UI.
+  output-rule ordering and tone dials, conflict state, native import/export,
+  and audit UI.
 - Platform support: Windows uses Core Audio endpoint/default callbacks with a
   slow polling fallback and persistent exact HMAC bindings; macOS uses CoreAudio
   default-output callbacks and persistent UID-derived HMAC bindings; Android
   uses `AudioDeviceCallback` plus API 33+ media-route prediction, reports older
   ambiguous routes as connected-only, and keeps route IDs session-only. No new
   Android permission is required.
-- Verification: frontend Vitest **15 passed**, production `npm run build`
-  passed, the full native Rust suite **112 passed**, and all-target Rust check
-  and clippy completed (repository baseline warnings remain). The Android Rust
+- Verification: frontend Vitest **16 passed**, production `npm run build`
+  passed, the native Rust library suite **84 passed** (including **29** focused
+  equalizer tests), and library check and clippy completed (repository baseline
+  warnings remain). A whole-package `cargo test` could not replace the running
+  `octave.exe` on this Windows host, so verification used `cargo test --lib`.
+  The Android Rust
   targets are installed, but this Windows workspace currently lacks the
   SDK/NDK compiler (`aarch64-linux-android-clang`), so this follow-up could not
   repeat the prior arm64/Kotlin checks. The macOS adapter could not be compiled

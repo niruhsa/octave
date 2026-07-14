@@ -54,6 +54,8 @@ const ruleInput = (rule: EqualizerDeviceRule): EqualizerDeviceRuleInput => ({
   action: rule.action,
   selectors: rule.selectors.map((selector) => ({ ...selector })),
   enabled: rule.enabled,
+  bass_boost_percent: rule.bass_boost_percent,
+  treble_boost_percent: rule.treble_boost_percent,
 });
 
 function errorMessage(error: unknown): string {

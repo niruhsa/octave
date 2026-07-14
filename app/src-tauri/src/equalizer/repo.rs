@@ -46,6 +46,8 @@ struct RuleRow {
     selectors_json: String,
     priority: i32,
     enabled: i64,
+    bass_boost_percent: i64,
+    treble_boost_percent: i64,
     revision: Option<String>,
 }
 
@@ -302,7 +304,8 @@ async fn load_rules(
         "NULL AS revision"
     };
     let sql = format!(
-        "SELECT id, label, action, profile_id, selectors_json, priority, enabled, {revision} \
+        "SELECT id, label, action, profile_id, selectors_json, priority, enabled, \
+         bass_boost_percent, treble_boost_percent, {revision} \
          FROM {table} WHERE account_scope = ?1 {} ORDER BY priority DESC, id",
         if synced { "AND supported_v1 = 1" } else { "" }
     );
@@ -395,11 +398,23 @@ async fn insert_synced_rule(
         .map_err(|e| AppError::Internal(format!("encode EQ selectors: {e}")))?;
     sqlx::query(
         "INSERT INTO equalizer_synced_device_rules \
-         (account_scope,id,label,action,profile_id,selectors_json,priority,enabled,revision,supported_v1) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1)",
-    ).bind(scope).bind(&rule.id).bind(&rule.label).bind(action).bind(profile_id)
-      .bind(selectors).bind(rule.priority).bind(i64::from(rule.enabled))
-      .bind(rule.revision.to_string()).execute(&mut **tx).await?;
+         (account_scope,id,label,action,profile_id,selectors_json,priority,enabled, \
+          bass_boost_percent,treble_boost_percent,revision,supported_v1) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1)",
+    )
+    .bind(scope)
+    .bind(&rule.id)
+    .bind(&rule.label)
+    .bind(action)
+    .bind(profile_id)
+    .bind(selectors)
+    .bind(rule.priority)
+    .bind(i64::from(rule.enabled))
+    .bind(i64::from(rule.bass_boost_percent))
+    .bind(i64::from(rule.treble_boost_percent))
+    .bind(rule.revision.to_string())
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -510,13 +525,16 @@ pub async fn upsert_local_rule(
     let now = now_string();
     sqlx::query(
         "INSERT INTO equalizer_local_device_rules \
-         (account_scope,id,label,action,profile_id,selectors_json,priority,enabled,created_at,updated_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9) ON CONFLICT(account_scope,id) DO UPDATE SET \
+         (account_scope,id,label,action,profile_id,selectors_json,priority,enabled, \
+          bass_boost_percent,treble_boost_percent,created_at,updated_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11) ON CONFLICT(account_scope,id) DO UPDATE SET \
          label=excluded.label,action=excluded.action,profile_id=excluded.profile_id, \
          selectors_json=excluded.selectors_json,priority=excluded.priority, \
-         enabled=excluded.enabled,updated_at=excluded.updated_at",
+         enabled=excluded.enabled,bass_boost_percent=excluded.bass_boost_percent, \
+         treble_boost_percent=excluded.treble_boost_percent,updated_at=excluded.updated_at",
     ).bind(scope).bind(&rule.id).bind(&rule.label).bind(action).bind(profile_id)
-      .bind(selectors).bind(rule.priority).bind(i64::from(rule.enabled)).bind(now)
+      .bind(selectors).bind(rule.priority).bind(i64::from(rule.enabled))
+      .bind(i64::from(rule.bass_boost_percent)).bind(i64::from(rule.treble_boost_percent)).bind(now)
       .execute(pool).await?;
     Ok(())
 }
@@ -688,8 +706,9 @@ pub async fn preserve_synced_state_as_local(
             .map_err(|error| AppError::Internal(format!("encode EQ selectors: {error}")))?;
         sqlx::query(
             "INSERT INTO equalizer_local_device_rules \
-             (account_scope,id,label,action,profile_id,selectors_json,priority,enabled,created_at,updated_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+             (account_scope,id,label,action,profile_id,selectors_json,priority,enabled, \
+              bass_boost_percent,treble_boost_percent,created_at,updated_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)",
         )
         .bind(scope)
         .bind(&rule.id)
@@ -699,6 +718,8 @@ pub async fn preserve_synced_state_as_local(
         .bind(selectors)
         .bind(rule.priority)
         .bind(i64::from(rule.enabled))
+        .bind(i64::from(rule.bass_boost_percent))
+        .bind(i64::from(rule.treble_boost_percent))
         .bind(&now)
         .execute(&mut *tx)
         .await?;
@@ -1197,6 +1218,8 @@ fn rule_payload_eq(left: &EqualizerDeviceRule, right: &EqualizerDeviceRule) -> b
         && left.action == right.action
         && left.selectors == right.selectors
         && left.enabled == right.enabled
+        && left.bass_boost_percent == right.bass_boost_percent
+        && left.treble_boost_percent == right.treble_boost_percent
 }
 
 fn unique_recovery_name(base: &str, used: &mut HashSet<String>) -> String {
@@ -1251,6 +1274,10 @@ fn rule_from_row(row: RuleRow) -> AppResult<EqualizerDeviceRule> {
             .map_err(|e| AppError::Database(format!("decode EQ selectors: {e}")))?,
         priority: row.priority,
         enabled: row.enabled != 0,
+        bass_boost_percent: u32::try_from(row.bass_boost_percent)
+            .map_err(|_| AppError::Database("invalid EQ bass boost percentage".into()))?,
+        treble_boost_percent: u32::try_from(row.treble_boost_percent)
+            .map_err(|_| AppError::Database("invalid EQ treble boost percentage".into()))?,
         revision: row
             .revision
             .as_deref()
@@ -1473,6 +1500,8 @@ mod tests {
                 trigger: TriggerKind::ActiveOutput,
             }],
             enabled: true,
+            bass_boost_percent: 0,
+            treble_boost_percent: 0,
         };
         enqueue_op(
             &pool,
@@ -1549,6 +1578,8 @@ mod tests {
             }],
             priority: 1,
             enabled: true,
+            bass_boost_percent: 35,
+            treble_boost_percent: 60,
             revision: Revision(2),
         };
         let synced = EqualizerState {

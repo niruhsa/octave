@@ -5,7 +5,7 @@
  */
 
 export const EQ_FORMAT_VERSION = 1 as const;
-export const EQ_STATE_FORMAT_VERSION = 1 as const;
+export const EQ_STATE_FORMAT_VERSION = 2 as const;
 
 export const EQ_LIMITS = {
   profiles: 64,
@@ -106,6 +106,10 @@ export type EqualizerDeviceRule = {
   /** Higher-precedence-first read order; writes use the dedicated reorder call. */
   priority: number;
   enabled: boolean;
+  /** Relative low-shelf amplitude increase, 0..100%. */
+  bass_boost_percent: number;
+  /** Relative high-shelf amplitude increase, 0..100%. */
+  treble_boost_percent: number;
   revision: string;
   source?: "synced" | "local_only";
   unsynced?: boolean;
@@ -114,7 +118,13 @@ export type EqualizerDeviceRule = {
 
 export type EqualizerDeviceRuleInput = Pick<
   EqualizerDeviceRule,
-  "id" | "label" | "action" | "selectors" | "enabled"
+  | "id"
+  | "label"
+  | "action"
+  | "selectors"
+  | "enabled"
+  | "bass_boost_percent"
+  | "treble_boost_percent"
 >;
 
 export type EqualizerState = {
@@ -167,6 +177,8 @@ export type ResolvedEqualizer = {
   layer: EqualizerProfileLayer | null;
   reason: EqualizerResolutionReason;
   output_summary: EqualizerOutputSummary | null;
+  bass_boost_percent: number;
+  treble_boost_percent: number;
   state_revision: string;
   scope_epoch: string;
   resolution_generation: string;

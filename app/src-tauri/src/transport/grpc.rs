@@ -2469,6 +2469,8 @@ fn rule_from_eqpb(value: eqpb::EqualizerDeviceRule) -> AppResult<EqualizerDevice
             .collect::<AppResult<_>>()?,
         priority: value.priority,
         enabled: value.enabled,
+        bass_boost_percent: value.bass_boost_percent,
+        treble_boost_percent: value.treble_boost_percent,
         revision: Revision(value.revision),
     })
 }
@@ -2480,6 +2482,8 @@ fn rule_input_to_eqpb(value: &EqualizerDeviceRuleInput) -> eqpb::EqualizerDevice
         action: Some(action_to_eqpb(&value.action)),
         selectors: value.selectors.iter().map(selector_to_eqpb).collect(),
         enabled: value.enabled,
+        bass_boost_percent: value.bass_boost_percent,
+        treble_boost_percent: value.treble_boost_percent,
     }
 }
 

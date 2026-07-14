@@ -470,6 +470,10 @@ pub struct EqualizerDeviceRule {
     pub selectors: Vec<PortableDeviceSelector>,
     pub priority: i32,
     pub enabled: bool,
+    #[serde(default)]
+    pub bass_boost_percent: i32,
+    #[serde(default)]
+    pub treble_boost_percent: i32,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -510,6 +514,8 @@ pub struct EqualizerDeviceRuleDraft {
     pub selector_json: String,
     pub selector_hash: String,
     pub enabled: bool,
+    pub bass_boost_percent: i32,
+    pub treble_boost_percent: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

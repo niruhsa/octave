@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 
-pub const EQ_STATE_FORMAT_VERSION: u32 = 1;
+pub const EQ_STATE_FORMAT_VERSION: u32 = 2;
 pub const EQ_PROFILE_FORMAT_VERSION: u32 = 1;
 pub const EQ_NORMALIZATION_VERSION: u32 = 1;
 pub const MAX_PROFILES: usize = 64;
@@ -285,6 +285,10 @@ pub struct EqualizerDeviceRule {
     pub selectors: Vec<PortableDeviceSelector>,
     pub priority: i32,
     pub enabled: bool,
+    #[serde(default)]
+    pub bass_boost_percent: u32,
+    #[serde(default)]
+    pub treble_boost_percent: u32,
     pub revision: Revision,
 }
 
@@ -295,6 +299,10 @@ pub struct EqualizerDeviceRuleInput {
     pub action: RuleAction,
     pub selectors: Vec<PortableDeviceSelector>,
     pub enabled: bool,
+    #[serde(default)]
+    pub bass_boost_percent: u32,
+    #[serde(default)]
+    pub treble_boost_percent: u32,
 }
 
 impl From<&EqualizerDeviceRule> for EqualizerDeviceRuleInput {
@@ -305,6 +313,8 @@ impl From<&EqualizerDeviceRule> for EqualizerDeviceRuleInput {
             action: value.action.clone(),
             selectors: value.selectors.clone(),
             enabled: value.enabled,
+            bass_boost_percent: value.bass_boost_percent,
+            treble_boost_percent: value.treble_boost_percent,
         }
     }
 }
@@ -517,6 +527,10 @@ pub struct ResolvedEqualizer {
     pub layer: Option<ProfileLayer>,
     pub reason: ResolveReason,
     pub output_summary: Option<AudioOutputSummary>,
+    #[serde(default)]
+    pub bass_boost_percent: u32,
+    #[serde(default)]
+    pub treble_boost_percent: u32,
     pub state_revision: Revision,
     /// Opaque local ordering tokens, serialized as decimal strings.
     pub scope_epoch: Revision,
@@ -619,6 +633,11 @@ pub fn validate_rule(rule: &EqualizerDeviceRule) -> Result<(), EqualizerValidati
     validate_name(&rule.label, "rule label")?;
     if uuid::Uuid::parse_str(&rule.id).is_err() {
         return Err(EqualizerValidationError::new("rule id must be a UUID"));
+    }
+    if rule.bass_boost_percent > 100 || rule.treble_boost_percent > 100 {
+        return Err(EqualizerValidationError::new(
+            "rule bass and treble boost percentages must be between 0 and 100",
+        ));
     }
     if rule.selectors.is_empty() || rule.selectors.len() > MAX_SELECTORS_PER_RULE {
         return Err(EqualizerValidationError::new(format!(

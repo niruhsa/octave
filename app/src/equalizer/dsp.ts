@@ -21,6 +21,12 @@ export const dbToLinear = (db: number): number => 10 ** (db / 20);
 export const linearToDb = (linear: number): number =>
   linear > 0 ? 20 * Math.log10(linear) : Number.NEGATIVE_INFINITY;
 
+/** 100% extra means twice the shelf range's linear amplitude (+6.02 dB). */
+export function extraPercentToDb(percent: number): number {
+  const bounded = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
+  return linearToDb(1 + bounded / 100);
+}
+
 /**
  * Stable identity for the values that can change audible EQ output.
  *
@@ -32,21 +38,31 @@ export const linearToDb = (linear: number): number =>
 export function equalizerProfileAudioSignature(
   profile: EqualizerProfile | null,
   bypassed: boolean,
+  bassBoostPercent = 0,
+  trebleBoostPercent = 0,
 ): string {
-  if (bypassed || profile == null) return "flat";
+  const bass = Math.round(Math.min(100, Math.max(0, bassBoostPercent)));
+  const treble = Math.round(Math.min(100, Math.max(0, trebleBoostPercent)));
+  if (bypassed || (profile == null && bass === 0 && treble === 0)) return "flat";
   return JSON.stringify([
-    profile.id,
-    profile.format_version,
-    profile.preamp_db,
-    profile.auto_headroom_enabled,
-    profile.bands.map((band) => [
-      band.position,
-      band.enabled,
-      band.filter_kind,
-      band.frequency_hz,
-      band.gain_db,
-      band.q,
-    ]),
+    profile == null
+      ? null
+      : [
+          profile.id,
+          profile.format_version,
+          profile.preamp_db,
+          profile.auto_headroom_enabled,
+          profile.bands.map((band) => [
+            band.position,
+            band.enabled,
+            band.filter_kind,
+            band.frequency_hz,
+            band.gain_db,
+            band.q,
+          ]),
+        ],
+    bass,
+    treble,
   ]);
 }
 

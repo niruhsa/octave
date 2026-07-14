@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { btnDangerSm, btnGhostSm, btnPrimary, card, input, label } from "../lib/ui";
 import { TrashIcon } from "../components/icons";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./store";
 import {
   createEqualizerId,
+  type EqualizerDeviceRule,
   type EqualizerDeviceRuleInput,
   type EqualizerOutputSummary,
   type EqualizerTriggerKind,
@@ -24,6 +25,115 @@ const accuracyLabel: Record<EqualizerOutputSummary["accuracy"], string> = {
 
 const normalizeMatcherPreview = (value: string) =>
   value.normalize("NFKC").toLocaleLowerCase("en-US").trim().replace(/\s+/gu, " ");
+
+function ToneDial({
+  label: dialLabel,
+  value,
+  disabled,
+  onChange,
+  onCommit,
+}: {
+  label: "Bass" | "Treble";
+  value: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+  onCommit: () => void;
+}) {
+  const angle = -135 + value * 2.7;
+  return (
+    <label className={`flex flex-col items-center gap-1 ${disabled ? "opacity-50" : ""}`}>
+      <span className="text-[10px] font-medium uppercase tracking-wide text-oct-faint">
+        {dialLabel}
+      </span>
+      <span className="relative h-[68px] w-[68px] rounded-full focus-within:ring-2 focus-within:ring-oct-accent/50">
+        <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full" aria-hidden="true">
+          <path
+            d="M 20 78 A 40 40 0 1 1 80 78"
+            pathLength="100"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="8"
+            strokeLinecap="round"
+            className="text-oct-border-strong"
+          />
+          <path
+            d="M 20 78 A 40 40 0 1 1 80 78"
+            pathLength="100"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={`${value} 100`}
+            className="text-oct-accent"
+          />
+          <circle cx="50" cy="50" r="28" className="fill-oct-card stroke-oct-border" />
+          <line
+            x1="50"
+            y1="50"
+            x2="50"
+            y2="29"
+            transform={`rotate(${angle} 50 50)`}
+            stroke="currentColor"
+            strokeWidth="5"
+            strokeLinecap="round"
+            className="text-oct-text"
+          />
+          <circle cx="50" cy="50" r="4" className="fill-oct-accent" />
+        </svg>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={value}
+          disabled={disabled}
+          aria-label={`${dialLabel} extra`}
+          aria-valuetext={`${value}% extra`}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          onChange={(event) => onChange(Number(event.target.value))}
+          onPointerUp={onCommit}
+          onKeyUp={onCommit}
+        />
+      </span>
+      <span className="font-mono text-[11px] text-oct-text">+{value}%</span>
+    </label>
+  );
+}
+
+function RuleToneControls({
+  rule,
+  disabled,
+  onCommit,
+}: {
+  rule: EqualizerDeviceRule;
+  disabled: boolean;
+  onCommit: (rule: EqualizerDeviceRule) => void;
+}) {
+  const [bass, setBass] = useState(rule.bass_boost_percent);
+  const [treble, setTreble] = useState(rule.treble_boost_percent);
+  useEffect(() => {
+    setBass(rule.bass_boost_percent);
+    setTreble(rule.treble_boost_percent);
+  }, [rule.bass_boost_percent, rule.treble_boost_percent]);
+
+  const save = () => {
+    if (bass === rule.bass_boost_percent && treble === rule.treble_boost_percent) return;
+    onCommit({ ...rule, bass_boost_percent: bass, treble_boost_percent: treble });
+  };
+
+  return (
+    <div className="flex shrink-0 items-center justify-center gap-5 self-center sm:gap-4">
+      <ToneDial label="Bass" value={bass} disabled={disabled} onChange={setBass} onCommit={save} />
+      <ToneDial
+        label="Treble"
+        value={treble}
+        disabled={disabled}
+        onChange={setTreble}
+        onCommit={save}
+      />
+    </div>
+  );
+}
 
 function sameOutput(a: EqualizerOutputSummary, b: EqualizerOutputSummary | null): boolean {
   return (
@@ -53,12 +163,16 @@ export function DeviceRules({ readOnly = false }: { readOnly?: boolean }) {
   const [matcher, setMatcher] = useState("");
   const [profileId, setProfileId] = useState<string>("");
   const [trigger, setTrigger] = useState<EqualizerTriggerKind>("active_output");
+  const [bassBoostPercent, setBassBoostPercent] = useState(0);
+  const [trebleBoostPercent, setTrebleBoostPercent] = useState(0);
 
   const beginCreate = () => {
     setLabelText(currentOutput?.display_name ?? "New output rule");
     setMatcher(normalizeMatcherPreview(currentOutput?.display_name ?? ""));
     setProfileId("");
     setTrigger(currentOutput?.accuracy === "connected_only" ? "connected" : "active_output");
+    setBassBoostPercent(0);
+    setTrebleBoostPercent(0);
     setShowCreate(true);
   };
 
@@ -69,6 +183,8 @@ export function DeviceRules({ readOnly = false }: { readOnly?: boolean }) {
       label: labelText.trim(),
       action: profileId ? { kind: "profile", profile_id: profileId } : { kind: "bypass" },
       enabled: true,
+      bass_boost_percent: bassBoostPercent,
+      treble_boost_percent: trebleBoostPercent,
       selectors: [
         {
           normalization_version: 1,
@@ -168,6 +284,27 @@ export function DeviceRules({ readOnly = false }: { readOnly?: boolean }) {
                 </select>
               </label>
             </div>
+            <div className="rounded-lg border border-oct-border bg-oct-bg/40 px-3 py-3">
+              <div className="mb-2 text-center text-[10.5px] text-oct-faint">
+                Extra tone for this output
+              </div>
+              <div className="flex items-center justify-center gap-8">
+                <ToneDial
+                  label="Bass"
+                  value={bassBoostPercent}
+                  disabled={readOnly || saving}
+                  onChange={setBassBoostPercent}
+                  onCommit={() => {}}
+                />
+                <ToneDial
+                  label="Treble"
+                  value={trebleBoostPercent}
+                  disabled={readOnly || saving}
+                  onChange={setTrebleBoostPercent}
+                  onCommit={() => {}}
+                />
+              </div>
+            </div>
             <div className="flex justify-end gap-2">
               <button type="button" className={btnGhostSm} onClick={() => setShowCreate(false)}>Cancel</button>
               <button type="button" className={btnPrimary} disabled={readOnly || saving || !labelText.trim() || !matcher.trim()} onClick={() => void submit()}>
@@ -186,58 +323,65 @@ export function DeviceRules({ readOnly = false }: { readOnly?: boolean }) {
                 : profiles.find((profile) => profile.id === actionProfileId)?.name ??
                   "Missing profile";
             return (
-              <div key={rule.id} className="flex items-center gap-3 px-4 py-3">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={rule.enabled}
-                  aria-label={`Enable ${rule.label}`}
+              <div key={rule.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
+                <div className="flex w-full min-w-0 items-center gap-3">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={rule.enabled}
+                    aria-label={`Enable ${rule.label}`}
                     disabled={readOnly || saving}
                     onClick={() => void updateRule({ ...rule, enabled: !rule.enabled })}
-                  className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${
-                    rule.enabled ? "bg-oct-accent" : "bg-oct-border-strong"
-                  }`}
-                >
-                  <span className={`h-4 w-4 rounded-full bg-white transition-transform ${rule.enabled ? "translate-x-4" : ""}`} />
-                </button>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] text-oct-text">{rule.label}</div>
-                  <div className="truncate text-[10.5px] text-oct-faint">
-                    {actionName} · {rule.selectors.map((selector) => selector.normalized_name).join(", ")}
+                    className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${
+                      rule.enabled ? "bg-oct-accent" : "bg-oct-border-strong"
+                    }`}
+                  >
+                    <span className={`h-4 w-4 rounded-full bg-white transition-transform ${rule.enabled ? "translate-x-4" : ""}`} />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] text-oct-text">{rule.label}</div>
+                    <div className="truncate text-[10.5px] text-oct-faint">
+                      {actionName} · {rule.selectors.map((selector) => selector.normalized_name).join(", ")}
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="mr-1 font-mono text-[10px] text-oct-faint">#{index + 1}</span>
-                  <button
-                    type="button"
-                    className={btnGhostSm}
-                    disabled={readOnly || saving || index === 0}
-                    onClick={() => {
-                      const ordered = [...rules];
-                      [ordered[index - 1], ordered[index]] = [ordered[index], ordered[index - 1]];
-                      void reorderRules(ordered);
-                    }}
-                    aria-label={`Move ${rule.label} up`}
-                  >
-                    ↑
+                  <div className="flex items-center gap-1">
+                    <span className="mr-1 font-mono text-[10px] text-oct-faint">#{index + 1}</span>
+                    <button
+                      type="button"
+                      className={btnGhostSm}
+                      disabled={readOnly || saving || index === 0}
+                      onClick={() => {
+                        const ordered = [...rules];
+                        [ordered[index - 1], ordered[index]] = [ordered[index], ordered[index - 1]];
+                        void reorderRules(ordered);
+                      }}
+                      aria-label={`Move ${rule.label} up`}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className={btnGhostSm}
+                      disabled={readOnly || saving || index === rules.length - 1}
+                      onClick={() => {
+                        const ordered = [...rules];
+                        [ordered[index], ordered[index + 1]] = [ordered[index + 1], ordered[index]];
+                        void reorderRules(ordered);
+                      }}
+                      aria-label={`Move ${rule.label} down`}
+                    >
+                      ↓
+                    </button>
+                  </div>
+                  <button type="button" className={btnDangerSm} disabled={readOnly || saving} onClick={() => void deleteRule(rule)} aria-label={`Delete ${rule.label}`}>
+                    <TrashIcon size={12} />
                   </button>
-                  <button
-                    type="button"
-                    className={btnGhostSm}
-                    disabled={readOnly || saving || index === rules.length - 1}
-                    onClick={() => {
-                      const ordered = [...rules];
-                      [ordered[index], ordered[index + 1]] = [ordered[index + 1], ordered[index]];
-                      void reorderRules(ordered);
-                    }}
-                    aria-label={`Move ${rule.label} down`}
-                  >
-                    ↓
-                  </button>
                 </div>
-                <button type="button" className={btnDangerSm} disabled={readOnly || saving} onClick={() => void deleteRule(rule)} aria-label={`Delete ${rule.label}`}>
-                  <TrashIcon size={12} />
-                </button>
+                <RuleToneControls
+                  rule={rule}
+                  disabled={readOnly || saving}
+                  onCommit={(next) => void updateRule(next)}
+                />
               </div>
             );
           })}

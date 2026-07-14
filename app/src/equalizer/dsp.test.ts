@@ -4,6 +4,7 @@ import {
   dbToLinear,
   EQ_HEADROOM_MARGIN_DB,
   equalizerProfileAudioSignature,
+  extraPercentToDb,
   peakingMagnitude,
 } from "./dsp";
 import type { EqualizerBand, EqualizerProfile } from "./types";
@@ -62,6 +63,16 @@ describe("parametric EQ response model", () => {
       equalizerProfileAudioSignature(refreshed, false),
     );
     expect(equalizerProfileAudioSignature(original, true)).toBe("flat");
+  });
+
+  it("maps output-rule tone percentages to bounded amplitude gain", () => {
+    expect(extraPercentToDb(0)).toBe(0);
+    expect(extraPercentToDb(100)).toBeCloseTo(20 * Math.log10(2), 10);
+    expect(extraPercentToDb(200)).toBeCloseTo(extraPercentToDb(100), 10);
+    expect(equalizerProfileAudioSignature(null, false, 25, 0)).not.toBe("flat");
+    expect(equalizerProfileAudioSignature(null, false, 25, 0)).not.toBe(
+      equalizerProfileAudioSignature(null, false, 50, 0),
+    );
   });
 
   it("keeps a flat cascade at exact unity with zero safety trim", () => {

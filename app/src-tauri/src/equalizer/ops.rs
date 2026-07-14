@@ -411,6 +411,8 @@ fn rule_to_overlay(
         selectors: input.selectors.clone(),
         priority,
         enabled: input.enabled,
+        bass_boost_percent: input.bass_boost_percent,
+        treble_boost_percent: input.treble_boost_percent,
         revision,
     }
 }
@@ -477,6 +479,8 @@ mod tests {
                 },
                 selectors: vec![],
                 enabled: true,
+                bass_boost_percent: 20,
+                treble_boost_percent: 40,
             },
         };
         op.remap_for_local_recovery(

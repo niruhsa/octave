@@ -66,6 +66,8 @@ pub struct EqualizerDeviceRuleInput {
     pub action: EqualizerRuleAction,
     pub selectors: Vec<PortableDeviceSelector>,
     pub enabled: bool,
+    pub bass_boost_percent: i32,
+    pub treble_boost_percent: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -531,6 +533,13 @@ fn validate_rule(input: EqualizerDeviceRuleInput) -> Result<EqualizerDeviceRuleD
         ));
     }
     let label = validate_visible(&input.label, "rule label", MAX_LABEL_SCALARS)?;
+    if !(0..=100).contains(&input.bass_boost_percent)
+        || !(0..=100).contains(&input.treble_boost_percent)
+    {
+        return Err(AppError::InvalidArgument(
+            "rule bass and treble boost percentages must be between 0 and 100".into(),
+        ));
+    }
     if input.selectors.is_empty() || input.selectors.len() > MAX_SELECTORS {
         return Err(AppError::InvalidArgument(format!(
             "rule must contain 1..={MAX_SELECTORS} selectors"
@@ -610,6 +619,8 @@ fn validate_rule(input: EqualizerDeviceRuleInput) -> Result<EqualizerDeviceRuleD
         selector_json,
         selector_hash,
         enabled: input.enabled,
+        bass_boost_percent: input.bass_boost_percent,
+        treble_boost_percent: input.treble_boost_percent,
     })
 }
 
@@ -842,12 +853,33 @@ mod tests {
             action: EqualizerRuleAction::Bypass,
             selectors: vec![selector("  ＳＯＮＹ\u{2003}XM5 ")],
             enabled: true,
+            bass_boost_percent: 25,
+            treble_boost_percent: 50,
         };
         let draft = validate_rule(rule).unwrap();
         assert_eq!(draft.label, "Headphones");
         assert_eq!(draft.selectors[0].normalized_name, "sony xm5");
         assert_eq!(draft.selectors[0].route_kind, "bluetooth");
         assert_eq!(draft.selector_hash.len(), 64);
+        assert_eq!(draft.bass_boost_percent, 25);
+        assert_eq!(draft.treble_boost_percent, 50);
+    }
+
+    #[test]
+    fn rule_tone_percentages_are_bounded() {
+        let mut rule = EqualizerDeviceRuleInput {
+            id: Uuid::new_v4(),
+            label: "Headphones".into(),
+            action: EqualizerRuleAction::Bypass,
+            selectors: vec![selector("headphones")],
+            enabled: true,
+            bass_boost_percent: 101,
+            treble_boost_percent: 0,
+        };
+        assert!(validate_rule(rule.clone()).is_err());
+        rule.bass_boost_percent = 0;
+        rule.treble_boost_percent = -1;
+        assert!(validate_rule(rule).is_err());
     }
 
     #[test]
@@ -859,6 +891,8 @@ mod tests {
                 action: EqualizerRuleAction::Bypass,
                 selectors: vec![selector(value)],
                 enabled: true,
+                bass_boost_percent: 0,
+                treble_boost_percent: 0,
             };
             assert!(validate_rule(rule).is_err());
         }
@@ -873,6 +907,8 @@ mod tests {
             action: EqualizerRuleAction::Bypass,
             selectors: vec![duplicate.clone(), duplicate],
             enabled: true,
+            bass_boost_percent: 0,
+            treble_boost_percent: 0,
         };
         assert!(validate_rule(rule).is_err());
 
@@ -884,6 +920,8 @@ mod tests {
             action: EqualizerRuleAction::Bypass,
             selectors: vec![bad],
             enabled: true,
+            bass_boost_percent: 0,
+            treble_boost_percent: 0,
         };
         assert!(validate_rule(rule).is_err());
     }

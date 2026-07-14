@@ -441,13 +441,25 @@ impl EqualizerService {
             Err(error) => return Err(error),
         };
         if let Some(state) = fetch.state {
-            if !state_is_supported_v1(&state) {
-                repo::set_support_state(&self.pool, &scope, SupportState::FutureFormat).await?;
-                return Err(AppError::Unsupported(
-                    "response_format: the server uses a newer equalizer format".into(),
-                ));
+            match state_compatibility(&state) {
+                StateCompatibility::Supported => {
+                    repo::replace_synced_state(&self.pool, &scope, &state, fetch.etag.as_deref())
+                        .await?;
+                }
+                StateCompatibility::Older => {
+                    self.adopt_older_server_state(&scope, state, fetch.etag.as_deref(), false)
+                        .await?;
+                    return Err(AppError::Unsupported(
+                        "the configured server uses an older equalizer format".into(),
+                    ));
+                }
+                StateCompatibility::Future => {
+                    repo::set_support_state(&self.pool, &scope, SupportState::FutureFormat).await?;
+                    return Err(AppError::Unsupported(
+                        "response_format: the server uses a newer equalizer format".into(),
+                    ));
+                }
             }
-            repo::replace_synced_state(&self.pool, &scope, &state, fetch.etag.as_deref()).await?;
         }
         let local = repo::load_local_state(&self.pool, &scope).await?;
         let source = local
@@ -486,7 +498,14 @@ impl EqualizerService {
                 .equalizer_create_profile(&credential, input)
                 .await?
         };
-        if !state_is_supported_v1(&response.state) {
+        if state_compatibility(&response.state) == StateCompatibility::Older {
+            self.adopt_older_server_state(&scope, response.state, None, false)
+                .await?;
+            return Err(AppError::Unsupported(
+                "the server committed the promotion using an older equalizer format".into(),
+            ));
+        }
+        if !state_is_supported(&response.state) {
             repo::set_support_state(&self.pool, &scope, SupportState::FutureFormat).await?;
             return Err(AppError::Unsupported(
                 "response_format: the server committed the promotion but returned a newer equalizer format"
@@ -505,7 +524,14 @@ impl EqualizerService {
                     Some(promoted_id.clone()),
                 )
                 .await?;
-            if !state_is_supported_v1(&response.state) {
+            if state_compatibility(&response.state) == StateCompatibility::Older {
+                self.adopt_older_server_state(&scope, response.state, None, false)
+                    .await?;
+                return Err(AppError::Unsupported(
+                    "the server committed the default using an older equalizer format".into(),
+                ));
+            }
+            if !state_is_supported(&response.state) {
                 repo::set_support_state(&self.pool, &scope, SupportState::FutureFormat).await?;
                 return Err(AppError::Unsupported(
                     "response_format: the server committed the default change but returned a newer equalizer format"
@@ -728,7 +754,7 @@ impl EqualizerService {
             };
             let op = PendingEqualizerOpKind::from_json(&pending.payload_json)?;
             match push_op(&auth, &credential, op).await {
-                Ok(response) if state_is_supported_v1(&response.state) => {
+                Ok(response) if state_is_supported(&response.state) => {
                     repo::replace_synced_state_and_acknowledge(
                         &self.pool,
                         &scope,
@@ -737,6 +763,13 @@ impl EqualizerService {
                         None,
                     )
                     .await?;
+                }
+                Ok(response)
+                    if state_compatibility(&response.state) == StateCompatibility::Older =>
+                {
+                    self.adopt_older_server_state(&scope, response.state, None, true)
+                        .await?;
+                    return self.snapshot().await;
                 }
                 Ok(_) => {
                     repo::set_support_state(&self.pool, &scope, SupportState::FutureFormat).await?;
@@ -810,17 +843,33 @@ impl EqualizerService {
             {
                 Ok(fetch) => {
                     if let Some(state) = fetch.state {
-                        if state_is_supported_v1(&state) {
-                            repo::replace_synced_state(
-                                &self.pool,
-                                &scope,
-                                &state,
-                                fetch.etag.as_deref(),
-                            )
-                            .await?;
-                        } else {
-                            repo::set_support_state(&self.pool, &scope, SupportState::FutureFormat)
+                        match state_compatibility(&state) {
+                            StateCompatibility::Supported => {
+                                repo::replace_synced_state(
+                                    &self.pool,
+                                    &scope,
+                                    &state,
+                                    fetch.etag.as_deref(),
+                                )
                                 .await?;
+                            }
+                            StateCompatibility::Older => {
+                                self.adopt_older_server_state(
+                                    &scope,
+                                    state,
+                                    fetch.etag.as_deref(),
+                                    true,
+                                )
+                                .await?;
+                            }
+                            StateCompatibility::Future => {
+                                repo::set_support_state(
+                                    &self.pool,
+                                    &scope,
+                                    SupportState::FutureFormat,
+                                )
+                                .await?;
+                            }
                         }
                     } else {
                         repo::set_support_state(&self.pool, &scope, SupportState::Supported)
@@ -897,10 +946,19 @@ impl EqualizerService {
             return Ok(None);
         };
         match push_op(&auth, &credential, op.clone()).await {
-            Ok(response) if state_is_supported_v1(&response.state) => {
+            Ok(response) if state_is_supported(&response.state) => {
                 repo::set_support_state(&self.pool, scope, SupportState::Supported).await?;
                 repo::replace_synced_state(&self.pool, scope, &response.state, None).await?;
                 Ok(Some(response))
+            }
+            Ok(response) if state_compatibility(&response.state) == StateCompatibility::Older => {
+                let recovery = self
+                    .adopt_older_server_state(scope, response.state, None, true)
+                    .await?;
+                let mut local_op = op;
+                local_op.remap_for_local_recovery(&recovery.profile_ids, &recovery.rule_ids);
+                apply_op_to_local(&self.pool, scope, local_op).await?;
+                Ok(None)
             }
             Ok(_) => {
                 repo::set_support_state(&self.pool, scope, SupportState::FutureFormat).await?;
@@ -962,13 +1020,32 @@ impl EqualizerService {
         match auth.server().equalizer_state(credential, None).await {
             Ok(fetch) => {
                 if let Some(state) = fetch.state {
-                    if !state_is_supported_v1(&state) {
-                        repo::set_support_state(&self.pool, scope, SupportState::FutureFormat)
+                    match state_compatibility(&state) {
+                        StateCompatibility::Supported => {
+                            repo::replace_synced_state(
+                                &self.pool,
+                                scope,
+                                &state,
+                                fetch.etag.as_deref(),
+                            )
                             .await?;
-                        return Ok(SupportState::FutureFormat);
+                        }
+                        StateCompatibility::Older => {
+                            self.adopt_older_server_state(
+                                scope,
+                                state,
+                                fetch.etag.as_deref(),
+                                true,
+                            )
+                            .await?;
+                            return Ok(SupportState::Unsupported);
+                        }
+                        StateCompatibility::Future => {
+                            repo::set_support_state(&self.pool, scope, SupportState::FutureFormat)
+                                .await?;
+                            return Ok(SupportState::FutureFormat);
+                        }
                     }
-                    repo::replace_synced_state(&self.pool, scope, &state, fetch.etag.as_deref())
-                        .await?;
                 } else {
                     repo::set_support_state(&self.pool, scope, SupportState::Supported).await?;
                 }
@@ -1006,6 +1083,27 @@ impl EqualizerService {
     async fn preserve_synced_as_local(&self, scope: &str) -> AppResult<repo::EqualizerRecoveryMap> {
         let synced = repo::load_synced_state(&self.pool, scope).await?;
         repo::preserve_synced_state_as_local(&self.pool, scope, &synced).await
+    }
+
+    async fn adopt_older_server_state(
+        &self,
+        scope: &str,
+        mut state: EqualizerState,
+        etag: Option<&str>,
+        preserve_pending: bool,
+    ) -> AppResult<repo::EqualizerRecoveryMap> {
+        // Older state lacks only fields that this client defaults safely. Keep
+        // its last snapshot playable in the local layer, but do not write back
+        // to a server that cannot round-trip the version-2 rule contract.
+        state.state_format_version = EQ_STATE_FORMAT_VERSION;
+        repo::replace_synced_state(&self.pool, scope, &state, etag).await?;
+        let recovery = self.preserve_synced_as_local(scope).await?;
+        if preserve_pending {
+            self.preserve_pending_as_local(scope, Some(&recovery))
+                .await?;
+        }
+        repo::set_support_state(&self.pool, scope, SupportState::Unsupported).await?;
+        Ok(recovery)
     }
 
     async fn authenticated_bearer_for_scope(
@@ -1163,12 +1261,35 @@ fn support_requires_probe(support: SupportState) -> bool {
     )
 }
 
-fn state_is_supported_v1(state: &EqualizerState) -> bool {
-    state.state_format_version == EQ_STATE_FORMAT_VERSION
-        && state
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StateCompatibility {
+    Supported,
+    Older,
+    Future,
+}
+
+fn state_compatibility(state: &EqualizerState) -> StateCompatibility {
+    if state.state_format_version > EQ_STATE_FORMAT_VERSION
+        || state
             .profiles
             .iter()
-            .all(|profile| profile.format_version == EQ_PROFILE_FORMAT_VERSION)
+            .any(|profile| profile.format_version > EQ_PROFILE_FORMAT_VERSION)
+    {
+        StateCompatibility::Future
+    } else if state.state_format_version < EQ_STATE_FORMAT_VERSION
+        || state
+            .profiles
+            .iter()
+            .any(|profile| profile.format_version != EQ_PROFILE_FORMAT_VERSION)
+    {
+        StateCompatibility::Older
+    } else {
+        StateCompatibility::Supported
+    }
+}
+
+fn state_is_supported(state: &EqualizerState) -> bool {
+    state_compatibility(state) == StateCompatibility::Supported
 }
 
 fn unique_promotion_name(base: &str, existing: &[EqualizerProfile]) -> String {
@@ -1376,6 +1497,8 @@ fn rule_from_input(
         selectors: input.selectors.clone(),
         priority,
         enabled: input.enabled,
+        bass_boost_percent: input.bass_boost_percent,
+        treble_boost_percent: input.treble_boost_percent,
         revision,
     }
 }
@@ -1474,6 +1597,22 @@ mod tests {
         assert!(support_requires_probe(SupportState::Unknown));
         assert!(support_requires_probe(SupportState::Unsupported));
         assert!(support_requires_probe(SupportState::FutureFormat));
+    }
+
+    #[test]
+    fn state_versions_distinguish_older_servers_from_future_clients() {
+        let mut state = EqualizerState::default();
+        assert!(state_is_supported(&state));
+        state.state_format_version = EQ_STATE_FORMAT_VERSION - 1;
+        assert!(matches!(
+            state_compatibility(&state),
+            StateCompatibility::Older
+        ));
+        state.state_format_version = EQ_STATE_FORMAT_VERSION + 1;
+        assert!(matches!(
+            state_compatibility(&state),
+            StateCompatibility::Future
+        ));
     }
 
     #[tokio::test]

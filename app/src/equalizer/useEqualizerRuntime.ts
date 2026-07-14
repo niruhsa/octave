@@ -62,6 +62,10 @@ export function useEqualizerRuntime(): void {
     latestPreview.current = previewProfile;
     const futureFormat = snapshot?.support_state === "future_format";
     const masterEnabled = (snapshot?.preferences.master_enabled ?? false) && !futureFormat;
+    const bassBoostPercent = resolved?.bass_boost_percent ?? 0;
+    const trebleBoostPercent = resolved?.treble_boost_percent ?? 0;
+    const resolvedIsFlat =
+      resolved?.profile == null && bassBoostPercent === 0 && trebleBoostPercent === 0;
 
     // An editor preview is never allowed to bypass the explicit local master
     // safety gate. Turning the master off immediately returns to Flat.
@@ -71,7 +75,9 @@ export function useEqualizerRuntime(): void {
         previewTimer.current = null;
       }
       audioGraph.setEqualizerProfile(masterEnabled ? resolved?.profile ?? null : null, {
-        bypassed: !masterEnabled || resolved?.profile == null,
+        bypassed: !masterEnabled || resolvedIsFlat,
+        bassBoostPercent: masterEnabled ? bassBoostPercent : 0,
+        trebleBoostPercent: masterEnabled ? trebleBoostPercent : 0,
       });
       return;
     }
@@ -81,6 +87,8 @@ export function useEqualizerRuntime(): void {
       lastPreviewAt.current = performance.now();
       audioGraph.setEqualizerProfile(latestPreview.current, {
         bypassed: previewBypassed || latestPreview.current == null,
+        bassBoostPercent,
+        trebleBoostPercent,
       });
     };
 

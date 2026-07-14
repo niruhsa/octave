@@ -42,6 +42,8 @@ pub fn resolve(input: ResolveInput<'_>) -> ResolvedEqualizer {
         layer: result.layer,
         reason: result.reason,
         output_summary: result.output_summary.or(summary),
+        bass_boost_percent: result.bass_boost_percent,
+        treble_boost_percent: result.treble_boost_percent,
         state_revision,
         scope_epoch: input.scope_epoch,
         resolution_generation: input.resolution_generation,
@@ -176,7 +178,7 @@ fn resolve_rule(
     local: &LocalEqualizerState,
     reason: ResolveReason,
 ) -> Resolution {
-    resolve_target(
+    let mut resolved = resolve_target(
         &ProfileTarget {
             layer,
             action: rule.action.clone(),
@@ -184,7 +186,19 @@ fn resolve_rule(
         synced,
         local,
         reason,
-    )
+    );
+    // A missing profile fails completely closed. A valid profile or an
+    // intentional bypass can still carry the rule's bounded output tone.
+    if resolved.reason == reason {
+        resolved.bass_boost_percent = rule.bass_boost_percent;
+        resolved.treble_boost_percent = rule.treble_boost_percent;
+        if (rule.bass_boost_percent > 0 || rule.treble_boost_percent > 0)
+            && resolved.layer.is_none()
+        {
+            resolved.layer = Some(layer);
+        }
+    }
+    resolved
 }
 
 fn resolve_target(
@@ -207,6 +221,8 @@ fn resolve_target(
             layer: Some(target.layer),
             reason,
             output_summary: None,
+            bass_boost_percent: 0,
+            treble_boost_percent: 0,
         },
     )
 }
@@ -314,6 +330,8 @@ struct Resolution {
     layer: Option<ProfileLayer>,
     reason: ResolveReason,
     output_summary: Option<AudioOutputSummary>,
+    bass_boost_percent: u32,
+    treble_boost_percent: u32,
 }
 
 impl Resolution {
@@ -323,6 +341,8 @@ impl Resolution {
             layer: None,
             reason,
             output_summary: None,
+            bass_boost_percent: 0,
+            treble_boost_percent: 0,
         }
     }
 }
@@ -374,6 +394,8 @@ mod tests {
             selectors,
             priority,
             enabled: true,
+            bass_boost_percent: 0,
+            treble_boost_percent: 0,
             revision: Revision(1),
         }
     }
@@ -520,11 +542,14 @@ mod tests {
         candidate.display_name = "Kitchen Speaker".into();
         candidate.accuracy = RouteAccuracy::ConnectedOnly;
         let mut synced = EqualizerState::default();
-        synced.device_rules.push(rule(
+        let mut speaker_rule = rule(
             "speaker",
             1,
             vec![selector(TriggerKind::Connected, "Kitchen Speaker")],
-        ));
+        );
+        speaker_rule.bass_boost_percent = 30;
+        speaker_rule.treble_boost_percent = 65;
+        synced.device_rules.push(speaker_rule);
         let outputs = vec![unavailable, candidate];
         let resolved = resolve(ResolveInput {
             preferences: &LocalPreferences {
@@ -541,6 +566,8 @@ mod tests {
             resolution_generation: Revision(1),
         });
         assert_eq!(resolved.reason, ResolveReason::ConnectedFallback);
+        assert_eq!(resolved.bass_boost_percent, 30);
+        assert_eq!(resolved.treble_boost_percent, 65);
         assert_eq!(
             resolved.output_summary.unwrap().display_name,
             "Kitchen Speaker"

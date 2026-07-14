@@ -13,6 +13,7 @@ import {
   dbToLinear,
   EQ_HEADROOM_MARGIN_DB,
   equalizerProfileAudioSignature,
+  extraPercentToDb,
 } from "../equalizer/dsp";
 import {
   cloneEqualizerProfile,
@@ -32,6 +33,8 @@ type Nodes = {
 type EqualizerRequest = {
   profile: EqualizerProfile | null;
   bypassed: boolean;
+  bassBoostPercent: number;
+  trebleBoostPercent: number;
 };
 
 export type EqualizerGraphCapability = "pending" | "supported" | "unsupported";
@@ -74,7 +77,12 @@ const graphs = new WeakMap<HTMLAudioElement, Nodes>();
 let attachedCount = 0;
 let attachmentFailed = false;
 
-let desiredEqualizer: EqualizerRequest = { profile: null, bypassed: true };
+let desiredEqualizer: EqualizerRequest = {
+  profile: null,
+  bypassed: true,
+  bassBoostPercent: 0,
+  trebleBoostPercent: 0,
+};
 let desiredEqualizerSignature = "flat";
 let activeBank: EqualizerBank | null = null;
 let transition: BankTransition | null = null;
@@ -107,7 +115,9 @@ function pendingDiagnostics(request: EqualizerRequest): EqualizerGraphDiagnostic
     requestedProfileId: request.profile?.id ?? null,
     appliedProfileId: null,
     appliedProfileName: "Flat",
-    bypassed: request.bypassed || request.profile == null,
+    bypassed:
+      request.bypassed ||
+      (request.profile == null && request.bassBoostPercent === 0 && request.trebleBoostPercent === 0),
     peakResponseDb: 0,
     safetyTrimDb: 0,
     effectivePreampDb: 0,
@@ -185,8 +195,11 @@ function buildBank(
   initialOutputGain = 1,
 ): EqualizerBank {
   const profile = request.profile;
-  if (request.bypassed || !profile) return flatBank(c, request, null, initialOutputGain);
-  if (!isSupportedProfile(profile)) {
+  const hasTone = request.bassBoostPercent > 0 || request.trebleBoostPercent > 0;
+  if (request.bypassed || (!profile && !hasTone)) {
+    return flatBank(c, request, null, initialOutputGain);
+  }
+  if (profile && !isSupportedProfile(profile)) {
     return flatBank(
       c,
       request,
@@ -195,7 +208,7 @@ function buildBank(
     );
   }
 
-  const incompatible = profile.bands.find(
+  const incompatible = profile?.bands.find(
     (band) => band.enabled && band.frequency_hz >= c.sampleRate / 2,
   );
   if (incompatible) {
@@ -212,7 +225,7 @@ function buildBank(
   const output = c.createGain();
   // Set before connecting for the same render-quantum safety as flatBank.
   output.gain.value = initialOutputGain;
-  const filters = profile.bands
+  const filters = (profile?.bands ?? [])
     .filter((band) => band.enabled)
     .map((band) => {
       const node = c.createBiquadFilter();
@@ -222,6 +235,20 @@ function buildBank(
       node.Q.value = band.q;
       return node;
     });
+  if (request.bassBoostPercent > 0) {
+    const bass = c.createBiquadFilter();
+    bass.type = "lowshelf";
+    bass.frequency.value = 120;
+    bass.gain.value = extraPercentToDb(request.bassBoostPercent);
+    filters.push(bass);
+  }
+  if (request.trebleBoostPercent > 0) {
+    const treble = c.createBiquadFilter();
+    treble.type = "highshelf";
+    treble.frequency.value = Math.min(8_000, c.sampleRate * 0.4);
+    treble.gain.value = extraPercentToDb(request.trebleBoostPercent);
+    filters.push(treble);
+  }
 
   let previous: AudioNode = input;
   for (const filter of filters) {
@@ -234,9 +261,10 @@ function buildBank(
 
   // Use the actual Web Audio nodes and sample rate for runtime headroom. The
   // editor's pure RBJ helper is only a pre-context approximation.
-  const frequencies = Float32Array.from(buildFrequencyGrid(profile.bands, c.sampleRate));
+  const frequencies = Float32Array.from(buildFrequencyGrid(profile?.bands ?? [], c.sampleRate));
   const aggregateDb = new Float64Array(frequencies.length);
-  aggregateDb.fill(profile.preamp_db);
+  const storedPreampDb = profile?.preamp_db ?? 0;
+  aggregateDb.fill(storedPreampDb);
   const magnitude = new Float32Array(frequencies.length);
   const phase = new Float32Array(frequencies.length);
   for (const filter of filters) {
@@ -245,12 +273,12 @@ function buildBank(
       aggregateDb[index] += 20 * Math.log10(Math.max(magnitude[index], Number.EPSILON));
     }
   }
-  const peakResponseDb = aggregateDb.length > 0 ? Math.max(...aggregateDb) : profile.preamp_db;
+  const peakResponseDb = aggregateDb.length > 0 ? Math.max(...aggregateDb) : storedPreampDb;
   const safetyTrimDb =
-    profile.auto_headroom_enabled && peakResponseDb > 0
+    (hasTone || profile?.auto_headroom_enabled) && peakResponseDb > 0
       ? -(peakResponseDb + EQ_HEADROOM_MARGIN_DB)
       : 0;
-  const effectivePreampDb = profile.preamp_db + safetyTrimDb;
+  const effectivePreampDb = storedPreampDb + safetyTrimDb;
   input.gain.value = dbToLinear(effectivePreampDb);
 
   return {
@@ -260,9 +288,9 @@ function buildBank(
     diagnostics: {
       capability: "supported",
       sampleRate: c.sampleRate,
-      requestedProfileId: profile.id,
-      appliedProfileId: profile.id,
-      appliedProfileName: profile.name,
+      requestedProfileId: profile?.id ?? null,
+      appliedProfileId: profile?.id ?? null,
+      appliedProfileName: profile ? profile.name : "Output tone",
       bypassed: false,
       peakResponseDb,
       safetyTrimDb,
@@ -389,7 +417,12 @@ function forceFlatUnsupported(): void {
     publishDiagnostics(pendingDiagnostics(desiredEqualizer));
     return;
   }
-  replaceBankImmediately({ profile: null, bypassed: true });
+  replaceBankImmediately({
+    profile: null,
+    bypassed: true,
+    bassBoostPercent: 0,
+    trebleBoostPercent: 0,
+  });
   publishDiagnostics({
     ...diagnostics,
     capability: "unsupported",
@@ -417,7 +450,12 @@ function ensureContext(): AudioContext | null {
     master.gain.value = masterValue;
     master.connect(ctx.destination);
     // Start Flat until both deck elements prove they can join this graph.
-    activeBank = flatBank(ctx, { profile: null, bypassed: true });
+    activeBank = flatBank(ctx, {
+      profile: null,
+      bypassed: true,
+      bassBoostPercent: 0,
+      trebleBoostPercent: 0,
+    });
     activeBank.output.gain.value = 1;
     return ctx;
   } catch {
@@ -483,18 +521,34 @@ export function setReplay(el: HTMLAudioElement, v: number): void {
 }
 
 /**
- * Select the shared correction. null or bypassed means Flat. The request is
- * retained before the deck/context exists and applied after both taps succeed.
+ * Select the shared profile plus the active output rule's bounded tone shelves.
+ * Bypassed means true Flat; a null profile can still carry output tone.
  */
 export function setEqualizerProfile(
   profile: EqualizerProfile | null,
-  options: { bypassed?: boolean } = {},
+  options: {
+    bypassed?: boolean;
+    bassBoostPercent?: number;
+    trebleBoostPercent?: number;
+  } = {},
 ): void {
+  const boundedPercent = (value: number | undefined) =>
+    Math.round(Math.min(100, Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)));
+  const bassBoostPercent = boundedPercent(options.bassBoostPercent);
+  const trebleBoostPercent = boundedPercent(options.trebleBoostPercent);
   const next = {
     profile: profile ? cloneEqualizerProfile(profile) : null,
-    bypassed: options.bypassed ?? profile == null,
+    bypassed:
+      options.bypassed ?? (profile == null && bassBoostPercent === 0 && trebleBoostPercent === 0),
+    bassBoostPercent,
+    trebleBoostPercent,
   };
-  const signature = equalizerProfileAudioSignature(next.profile, next.bypassed);
+  const signature = equalizerProfileAudioSignature(
+    next.profile,
+    next.bypassed,
+    next.bassBoostPercent,
+    next.trebleBoostPercent,
+  );
   // Snapshot polling returns fresh objects. Do not turn an identical profile
   // into a recurring live-bank transition every time account state refreshes.
   if (signature === desiredEqualizerSignature) {

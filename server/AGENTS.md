@@ -134,7 +134,11 @@ and exact hardware bindings remain client-only. Migration
 [`20271201000000_equalizer.sql`](./migrations/20271201000000_equalizer.sql)
 adds owner-scoped profiles/bands/settings/rules with composite ownership FKs,
 strict version/range checks, normalized uniqueness, and monotonic aggregate
-revisions. [`EqualizerService`](./src/services/equalizer.rs) implements bounded
+revisions. Migration
+[`20280101000000_equalizer_rule_tone.sql`](./migrations/20280101000000_equalizer_rule_tone.sql)
+adds audited 0–100 bass/treble percentages to each portable rule and advances
+the aggregate state contract to version 2 so older clients fail closed instead
+of erasing fields they cannot round-trip. [`EqualizerService`](./src/services/equalizer.rs) implements bounded
 validation, compare-and-swap/idempotent mutations, reference-safe delete and
 rule reorder, complete before/after audit snapshots, paginated history, and
 revision-safe rollback (including rollback-of-rollback). The
@@ -142,8 +146,8 @@ revision-safe rollback (including rollback-of-rollback). The
 REST state reads additionally support private ETags/`If-None-Match`. Ordinary
 state is bearer-owned (`SECRET_KEY` cannot own it); Managers receive redacted
 history, while Admins and the administrative `SECRET_KEY` can inspect full
-detail and rollback. Focused server EQ tests pass (14/14); all-target check and
-clippy complete. The full suite passes 249 tests; its two remaining failures
+detail and rollback. Focused server EQ tests pass (15/15); all-target check and
+clippy complete. The broad suite passes 250 tests; its two remaining failures
 are the REST/gRPC TLS integration tests because
 `tests/fixtures/tls/{cert,key}.pem` is absent. Live Postgres
 transport/migration rehearsal remains part of deployment verification.

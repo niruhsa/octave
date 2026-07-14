@@ -313,6 +313,10 @@ struct RuleInputDto {
     action: RuleActionDto,
     selectors: Vec<SelectorInputDto>,
     enabled: bool,
+    #[serde(default)]
+    bass_boost_percent: i32,
+    #[serde(default)]
+    treble_boost_percent: i32,
 }
 
 impl RuleInputDto {
@@ -336,6 +340,8 @@ impl RuleInputDto {
                 })
                 .collect(),
             enabled: self.enabled,
+            bass_boost_percent: self.bass_boost_percent,
+            treble_boost_percent: self.treble_boost_percent,
         })
     }
 }
@@ -571,6 +577,8 @@ struct RuleDto {
     selectors: Vec<SelectorDto>,
     priority: i32,
     enabled: bool,
+    bass_boost_percent: i32,
+    treble_boost_percent: i32,
     revision: String,
     created_at: String,
     updated_at: String,
@@ -688,6 +696,8 @@ fn rule_dto(value: m::EqualizerDeviceRule) -> RuleDto {
             .collect(),
         priority: value.priority,
         enabled: value.enabled,
+        bass_boost_percent: value.bass_boost_percent,
+        treble_boost_percent: value.treble_boost_percent,
         revision: value.revision.to_string(),
         created_at: rfc3339(value.created_at),
         updated_at: rfc3339(value.updated_at),
